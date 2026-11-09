@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Mirror PDF Translator",
+  "version": "0.1.0",
+  "description": "Automatically open a translated PDF mirror after opt-in. Keep the original tab untouched.",
+  "minimum_chrome_version": "120",
+  "permissions": ["storage", "tabs", "webRequest", "scripting", "activeTab", "nativeMessaging"],
+  "host_permissions": ["http://*/*", "https://*/*", "file:///*"],
+  "background": {"service_worker": "background.js", "type": "module"},
+  "action": {"default_title": "Mirror PDF · enable or capture", "default_popup": "popup.html"},
+  "content_scripts": [{"matches": ["http://*/*", "https://*/*", "file:///*"], "js": ["content.js"], "run_at": "document_idle", "all_frames": false}],
+  "content_security_policy": {"extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"}
+}

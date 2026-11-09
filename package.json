@@ -1,0 +1,27 @@
+{
+  "name": "mirror-pdf",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build && node scripts/build-extension.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^5.4.624",
+    "lucide": "^0.468.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.0",
+    "@types/chrome": "^0.1.32",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.0",
+    "vitest": "^4.0.0",
+    "pdf-lib": "^1.17.1"
+  }
+}
