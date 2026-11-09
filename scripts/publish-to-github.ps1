@@ -37,6 +37,7 @@ $product = @(
     @{ Path = 'native-shell\vendor';    Exclude = @() }
     @{ Path = 'desktop\src';            Exclude = @() }
     @{ Path = 'desktop\tests';          Exclude = @() }
+    @{ Path = 'desktop\scripts';        Exclude = @() }
     @{ Path = 'scripts';                Exclude = @('native-*.txt') }
 )
 # Single files: build configuration and licences.
@@ -45,7 +46,8 @@ $files = @(
     'playwright.config.ts', 'index.html', 'rust-toolchain.toml',
     'native-shell\Cargo.toml', 'native-shell\Cargo.lock', 'native-shell\build.rs',
     'native-shell\rust-toolchain.toml', 'native-shell\LICENSE', 'native-shell\THIRD_PARTY.md',
-    'native-shell\.gitattributes', 'desktop\Cargo.toml', 'desktop\Cargo.lock'
+    'native-shell\.gitattributes', 'desktop\Cargo.toml', 'desktop\Cargo.lock',
+    'desktop\runtime\LICENSE', 'desktop\runtime\VERSION'
 )
 
 $copied = 0
