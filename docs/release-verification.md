@@ -19,16 +19,18 @@ cargo build --release --manifest-path native-shell/Cargo.toml -p pdf_workspace -
 Result: exit 0, 36 pre-existing warnings, 6m 38s cold build (31.7s after the first-import fix).
 
 - Executable: `pdf_workspace.exe`, 21,628,416 bytes
-- SHA-256: `F4683905165A628226A2AB7DAF79E146D57127AE8C2A3F9819B1DC0CDFEED40F`
+- SHA-256: `6FCE99E53EBDAD67A2A3F4C434A8E3FEFA8B87C513D873EE504341AEF3818C6B`
 - Package: `dist/pdf-workspace-windows-x64-release-20261118-110746/`
 - Native-messaging host: `pdf-workspace-host.exe`, 478,208 bytes, SHA-256 `79713585756FC360B2CC9590C3FBE1B5769030DFDBAFBF4E841358BDC95AAF1C`
 - Zip: `dist/pdf-workspace-windows-x64-release-20261118-110746.zip`, 11.34 MB
-- Zip SHA-256: `1C46A4BA7786E5C7813AFC3031ECF99FC5342A76801E832A8F2BC7ADD4B37AC6`
+- Zip SHA-256: `FA759D26E8829E2F4E27C831ECBFDF8AE0B58D5BEA2F3D99DF8B59700EAFB782`
 
 Package contents: executable, `pdfium.dll`, `pdf-workspace-host.exe`, `install-native-host.ps1`,
-root and upstream licenses, Lucide license, PDFium version and component licenses. The package is
-**unsigned**; no code-signing certificate was used. The companion host answered a framed `hello`
-handshake with protocol 1 and `status: ready`.
+root and upstream licenses, Lucide license, PDFium version and component licenses. The executable is
+signed with a **self-signed preview certificate** (`CN=Mirror PDF Preview (self-signed)`, thumbprint
+`CB4361EDB01EC07A25F3EF5722831CCA12261FC3`); Windows reports an untrusted-root chain because that
+certificate is not issued by a public CA. The companion host answered a framed `hello` handshake with
+protocol 1 and `status: ready`.
 
 ## Runtime check
 
@@ -96,9 +98,18 @@ Still open: tool calls, selecting another page, and an agent/list picker; endpoi
 editable text fields rather than a catalogue. Without a configured provider the view shows the provider
 error inline.
 
+## Preview signature
+
+`scripts/sign-preview.ps1 -Exe <path> -Create` creates a CurrentUser code-signing certificate, exports
+the PFX under `artifacts/` (never committed), signs with SHA-256 and a timestamp, and prints the
+signature status. The packaged executable launched after signing and rendered a fresh library
+(`artifacts/desktop-signed-release.png`). `Get-AuthenticodeSignature` reports `UnknownError` with
+"terminated in a root certificate which is not trusted"; this is expected for a self-signed preview.
+A trusted release still needs a CA-issued certificate; the private key and PFX are not in Git.
+
 ## Limits
 
-- The release is portable, not an installer; it is unsigned.
+- The release is portable, not an installer; it is self-signed and not trusted by Windows until a CA certificate is used.
 - The Chrome native-messaging host is included, but Chrome registration is a separate user step (`install-native-host.ps1`).
 - Translation is off until a provider is configured; no live provider was called.
 - One fixture, one window size (1679x950), one DPI.

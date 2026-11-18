@@ -91,7 +91,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | C20 | OCR Tesseract dự phòng ngoài Windows OCR | [~] | Windows OCR đã verify trên PDF scan; chưa thêm Tesseract fallback native |
 | C21 | Xoay trang trong reader | [x] | Nút `Xoay trang` xoay ảnh + block theo 90°; unit test 2 case; ảnh `desktop-reader-vi-rotated.png` |
 | C22 | Xuất PDF/bản dịch | [x] | Native xuất trang hiện tại ra Markdown song ngữ cạnh bản gốc (đã chạy thật, toast + file UTF-8); web xuất .bilingual.txt; chưa xuất PDF/DOCX giữ layout |
-| C23 | Packaging + license bundle + ký số | [~] | portable release zip + PDFium/host/license bundle, chạy được first-import; chưa ký số |
+| C23 | Packaging + license bundle + ký số | [~] | zip + PDFium/host/license; exe ký self-signed preview (untrusted root); chưa có CA cert |
 | C24 | Auto-update | [ ] | bị tắt có chủ đích |
 | C25 | Build lại + test lại toàn bộ trong phiên này | [x] | `cargo test` 51 pass/1 ignored; release exe 21.4 MB; zip 11.28 MB; first-import fix chạy 15s |
 | C26 | OCR PDF scan native | [x] | Windows OCR trên `scanned-page.pdf`; text nhận đúng; paired text giữ raster gốc; ảnh `desktop-native-scan-ocr.png` |
