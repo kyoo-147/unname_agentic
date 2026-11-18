@@ -22,16 +22,16 @@ Mục tiêu: một workspace đọc và dịch PDF thật sự dùng được: C
 
 Mục tiêu: bản web/extension là sản phẩm độc lập dùng được, tiếng Việt mặc định, OCR capture hoạt động.
 
-- [ ] i18n Việt/Anh/Trung cho reader + popup, lưu lựa chọn.
-- [ ] Glossary UI + parser + áp dụng cho OpenAI/local; nói rõ giới hạn Google/DeepL.
-- [ ] Language detection + danh sách ngôn ngữ đích có tên bản địa.
-- [ ] Retry/backoff + phân loại lỗi provider; batch request cho tài liệu dài.
-- [ ] Mục lục, thumbnail, tìm kiếm, nhảy trang, fit width/page, xoay trang.
-- [ ] Lưu vị trí đọc/zoom/ngôn ngữ qua reload; thư viện qua IndexedDB.
-- [ ] OCR capture: `?capture=1` → OCR (Tesseract eng+vie) → PageModel → dịch.
-- [ ] Extension: context menu, Ctrl+Shift+M, badge, capture-ready, không trùng mirror.
-- [ ] Tích hợp toàn bộ vào `src/main.ts`, chạy e2e Chromium thật.
-- [ ] CI chạy unit + typecheck + build + e2e trên Windows.
+- [x] i18n Việt/Anh/Trung cho reader + popup, lưu lựa chọn.
+- [x] Glossary UI + parser + áp dụng cho OpenAI/local; nói rõ giới hạn Google/DeepL.
+- [x] Language detection + danh sách ngôn ngữ đích có tên bản địa.
+- [x] Retry/backoff + phân loại lỗi provider; chunk helper cho tài liệu dài.
+- [x] Mục lục, thumbnail, tìm kiếm, nhảy trang, fit width/page, xoay trang.
+- [x] Lưu vị trí đọc/zoom/ngôn ngữ qua reload (thư viện qua IndexedDB vẫn để sau).
+- [x] OCR capture: `?capture=1` → OCR (Tesseract eng+vie) → PageModel → dịch; chưa e2e trong Chrome.
+- [x] Extension: context menu, Ctrl+Shift+M, badge, capture-ready, không trùng mirror.
+- [x] Tích hợp toàn bộ vào `src/main.ts`, chạy 4 e2e Chromium thật.
+- [~] CI đã viết trong `.github/workflows/ci.yml`; chưa chạy trên GitHub.
 
 **Exit:** `pnpm test`, `pnpm typecheck`, `pnpm build`, `pnpm test:e2e` xanh; một PDF scan chụp màn hình được OCR và dịch trong Chromium thật; UI mặc định tiếng Việt.
 
@@ -39,9 +39,9 @@ Mục tiêu: bản web/extension là sản phẩm độc lập dùng được, t
 
 Điều kiện mở: giải phóng >= 15 GB đĩa hoặc build trên máy khác.
 
-- [ ] `cargo test --workspace` chạy lại; sửa lỗi i18n/compile còn treo.
-- [ ] Build release GPUI, mở app, chụp Home/Reader/Settings ở vi/en/zh.
-- [ ] i18n native: thay `tr(zh,en)` bằng `tr3` cho toàn bộ chuỗi hiển thị; test key.
+- [x] `cargo test --workspace` chạy lại: 45 pass, 1 ignored; `cargo check` sạch.
+- [~] Build debug GPUI + chụp Home/Reader vi; worker QA đang chụp en/zh.
+- [~] pass 1: 124 chuỗi `tr` → `tr3`; pass 2 đang dịch pdf_reader/shortcuts/time.
 - [ ] Windows OCR: scan thật, mixed-DPI, cửa sổ ngoài; ghi tỉ lệ nhận dạng.
 - [ ] Tesseract `vie+eng` dự phòng nếu Windows OCR dưới ngưỡng.
 - [ ] Đóng gói `scripts/package-native.ps1`, license bundle, chạy trên máy sạch.

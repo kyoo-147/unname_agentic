@@ -114,6 +114,14 @@ describe('per-block confidence', () => {
     const confidences = blockConfidences([first, second], words);
     expect([...confidences.entries()]).toEqual([['a', 60], ['b', 90]]);
   });
+
+  it('scores a block from the words that produced its text, not the dropped ones', () => {
+    const scored = block('a', 0, 0, 100, 20);
+    const kept = [word('kept', 0, 0, 100, 20, 90)];
+    const dropped = [word('noise', 0, 0, 100, 20, 20)];
+    expect(confidenceForBlock(scored, [...kept, ...dropped])).toBe(55);
+    expect(confidenceForBlock(scored, kept)).toBe(90);
+  });
 });
 
 describe('summary confidence', () => {

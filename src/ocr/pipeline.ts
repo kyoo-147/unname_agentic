@@ -22,6 +22,12 @@ export interface OcrRunInfo {
 
 export interface OcrPageModel extends PageModel {
   ocr: OcrRunInfo;
+  /**
+   * Words kept after the confidence filter, in source-image pixel coordinates.
+   * Readers use these for block confidence so low-confidence words that never
+   * became block text do not drag a block's score down.
+   */
+  words: OcrWord[];
 }
 
 export interface OcrRequest {
@@ -191,6 +197,7 @@ export async function runOcr(request: OcrRequest): Promise<OcrPageModel> {
   if (!page.blocks.length) warnings.push('Không nhận ra chữ nào trong ảnh chụp.');
   return {
     ...page,
+    words,
     ocr: {
       languages,
       sourceLanguage,

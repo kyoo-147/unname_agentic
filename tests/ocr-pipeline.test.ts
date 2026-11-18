@@ -38,6 +38,7 @@ describe('OCR pipeline', () => {
     const engine = new FakeEngine(result([word('tốt', 90, 10, 10), word('mờ', 20, 45, 10), word('rõ', 80, 70, 10)]));
     const page = await runOcr({ image: image(), engine, minConfidence: 35, preprocess: false });
     expect(page.blocks.map(block => block.text)).toEqual(['tốt rõ']);
+    expect(page.words.map(word => word.text)).toEqual(['tốt', 'rõ']);
     expect(page.ocr.droppedWords).toBe(1);
     expect(page.ocr.warningCount).toBe(1);
     expect(page.ocr.warnings[0]).toContain('1');
@@ -47,6 +48,7 @@ describe('OCR pipeline', () => {
     const engine = new FakeEngine(result([word('mờ', 12, 10, 10)]));
     const page = await runOcr({ image: image(), engine, minConfidence: 35, preprocess: false });
     expect(page.blocks).toEqual([]);
+    expect(page.words).toEqual([]);
     expect(page.ocr.warningCount).toBe(2);
     expect(page.width).toBe(800);
   });

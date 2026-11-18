@@ -33,18 +33,18 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | A15 | Consent cloud rõ ràng, chặn cloud khi chưa bật | [x] | `src/core/translation.ts`; settings dialog |
 | A16 | Trạng thái lỗi/đang tải/mất nguồn | [x] | status bar + e2e error flow |
 | A17 | Thư viện tài liệu trong phiên | [~] | chỉ trong RAM; mất khi reload |
-| A18 | Giao diện Việt/Anh/Trung | [ ] | toàn bộ UI web đang là tiếng Anh |
-| A19 | Glossary thuật ngữ có UI + áp dụng cho mọi provider | [~] | có kiểu dữ liệu, chưa có UI; Google/DeepL bỏ qua |
-| A20 | Tự nhận diện ngôn ngữ nguồn | [ ] | mặc định `auto` nhưng không có bộ dò/ gợi ý |
-| A21 | Danh sách ngôn ngữ đích có tên hiển thị | [~] | ô nhập mã ngôn ngữ tự do |
-| A22 | Mục lục, thumbnail, nhảy trang | [ ] | chưa có |
-| A23 | Tìm trong tài liệu | [ ] | chưa có |
-| A24 | Xoay trang, chế độ fit width/page | [ ] | chưa có |
-| A25 | Lưu vị trí đọc, zoom, ngôn ngữ qua reload | [ ] | chưa có persistence |
+| A18 | Giao diện Việt/Anh/Trung | [x] | `src/i18n.ts`, 120 khoá × 3 ngôn ngữ; `tests/i18n.test.ts`; e2e mặc định tiếng Việt |
+| A19 | Glossary thuật ngữ có UI + áp dụng cho mọi provider | [x] | `src/core/glossary.ts`, textarea + đếm lỗi; Google/DeepL được ghi rõ là không nhận glossary |
+| A20 | Tự nhận diện ngôn ngữ nguồn | [x] | `src/core/language.ts`; gợi ý sau khi mở PDF, không ghi đè lựa chọn |
+| A21 | Danh sách ngôn ngữ đích có tên hiển thị | [x] | select từ `SUPPORTED_TARGETS`, 14 ngôn ngữ, tên bản địa |
+| A22 | Mục lục, thumbnail, nhảy trang | [x] | panel outline/thumbnail + ô số trang; `getOutline`, `renderThumbnail` |
+| A23 | Tìm trong tài liệu | [x] | panel search, debounce 250ms, `searchAllPages` có abort |
+| A24 | Xoay trang, chế độ fit width/page | [x] | rotate 0/90/180/270; `fitScale` width/page |
+| A25 | Lưu vị trí đọc, zoom, ngôn ngữ qua reload | [x] | `saveReadingState` theo tài liệu; locale lưu localStorage |
 | A26 | Xuất bản dịch (txt/PDF song ngữ) | [ ] | chưa có |
-| A27 | OCR ảnh chụp màn hình → block → dịch | [ ] | capture mở viewer nhưng reader không đọc `?capture=1` |
+| A27 | OCR ảnh chụp màn hình → block → dịch | [~] | `src/capture/*` + Tesseract eng/vie; đã nối `?capture=1`; chưa chạy capture thật trong extension |
 | A28 | RTL và ngôn ngữ CJK trong vùng dịch | [~] | block.direction được set; chưa có test RTL |
-| A29 | Phím tắt đọc (j/k, +/-, Ctrl+F, Home/End) | [~] | mới có Ctrl/Cmd+O và splitter arrows |
+| A29 | Phím tắt đọc (j/k, +/-, Ctrl+F, Home/End) | [x] | `keyboardIntent`; j/k, mũi tên, Space, +/-, Ctrl+F, o, Escape |
 | A30 | Accessibility: focus trap, aria, reduced motion, contrast | [~] | có aria cơ bản; chưa audit WCAG |
 
 ### B. Tiện ích Chrome (extension)
@@ -56,12 +56,12 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | B03 | Fetch bytes có kiểm tra `%PDF-` và quyền host | [x] | `controller.ts`; unit tests |
 | B04 | Popup bật/tắt auto mirror, trạng thái | [~] | có; UI tiếng Anh, chưa có ngôn ngữ đích |
 | B05 | Badge / số mirror đang mở | [~] | có badge; chưa có test hiển thị |
-| B06 | Capture tab đang xem → mở mirror ảnh | [~] | background tạo viewer `?capture=1`; reader chưa xử lý |
+| B06 | Capture tab đang xem → mở mirror ảnh | [~] | reader đã đọc `?capture=1` và mount OCR; chưa có e2e capture trong Chrome thật |
 | B07 | Gửi PDF sang desktop qua native messaging | [x] | `native-bridge.ts`; `tests/extension-native-bridge.test.ts` |
 | B08 | Theo trang/zoom hai chiều với desktop | [~] | Chrome → desktop có; desktop → Chrome chưa |
-| B09 | Context menu “Open mirror” | [ ] | chưa có |
-| B10 | Phím tắt bật/tắt mirror | [ ] | chưa có |
-| B11 | Popup Việt/Anh/Trung | [ ] | chưa có |
+| B09 | Context menu “Open mirror” | [x] | `Mở bản dịch Mirror`, test cho PDF page/link và nguồn không hợp lệ |
+| B10 | Phím tắt bật/tắt mirror | [x] | `Ctrl+Shift+M`, capture `Ctrl+Shift+Y`; manifest + test |
+| B11 | Popup Việt/Anh/Trung | [x] | popup dùng chung `src/i18n.ts`; build bundle chứa cả 3 bảng |
 | B12 | Xử lý nguồn cần đăng nhập/blob/protected rõ ràng | [x] | thông báo lỗi trung thực, không bypass |
 | B13 | Quyền tối thiểu, không đọc lén tab khác | [x] | manifest + authorize theo tab |
 
@@ -82,7 +82,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | C11 | Live mirror: chọn cửa sổ/màn hình, capture, OCR Windows | [x] | docs; OCR 40 regions từng chạy |
 | C12 | Chống tự capture chính mình | [x] | WDA_EXCLUDEFROMCAPTURE; docs |
 | C13 | Cầu Chrome ↔ desktop, checksum, chống trùng | [x] | native bridge tests; docs |
-| C14 | Giao diện Việt/Anh/Trung đầy đủ | [~] | có bảng ~100 chuỗi; nhiều chuỗi `tr(zh,en)` vẫn rơi về tiếng Anh |
+| C14 | Giao diện Việt/Anh/Trung đầy đủ | [~] | pass 1: 124 chuỗi `tr` → `tr3`; pass 2 đang dịch reader/tables/thời gian |
 | C15 | Sáu bảng màu + Light/Dark/System | [x] | `themes.rs`; ảnh chụp |
 | C16 | Phím tắt + màn hình Shortcuts | [x] | `shortcuts.rs`; settings |
 | C17 | Chat hỏi tài liệu | [ ] | mới là UI giả: attach/skills/mic/voice hiện toast “coming next” |
@@ -93,7 +93,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | C22 | Xuất PDF/bản dịch | [ ] | chưa có |
 | C23 | Packaging + license bundle + ký số | [~] | từng đóng gói; chưa làm lại sau khi xoá editor |
 | C24 | Auto-update | [ ] | bị tắt có chủ đích |
-| C25 | Build lại + test lại toàn bộ trong phiên này | [ ] | bị chặn bởi dung lượng đĩa (~3.2 GB) |
+| C25 | Build lại + test lại toàn bộ trong phiên này | [x] | `cargo check` + `cargo test` 45 pass/1 ignored + build exe + ảnh Home/Reader |
 
 ### D. Lõi dùng chung & chất lượng
 
@@ -101,16 +101,16 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 |---|---|---|---|
 | D01 | Kiểu dữ liệu chung, block ID ổn định | [x] | `src/core/types.ts` |
 | D02 | Scheduler có priority, dedupe, abort | [x] | `tests/scheduler.test.ts` |
-| D03 | Retry/backoff, phân loại lỗi provider | [ ] | hiện chỉ báo lỗi thô |
-| D04 | Batch request cho tài liệu dài | [ ] | mỗi block một request |
-| D05 | Đếm ký tự/chi phí ước tính | [ ] | chưa có |
-| D06 | Glossary parser + kiểm tra thuật ngữ | [ ] | mới có `Record<string,string>` |
+| D03 | Retry/backoff, phân loại lỗi provider | [x] | `src/core/retry.ts`, 7 loại lỗi, backoff + abort, test |
+| D04 | Batch request cho tài liệu dài | [~] | có `chunkBlocks` + test; UI vẫn gọi từng block |
+| D05 | Đếm ký tự/chi phí ước tính | [x] | `characterCount` trong kết quả và status bar |
+| D06 | Glossary parser + kiểm tra thuật ngữ | [x] | `parseGlossary`, giới hạn 200 mục, test edge cases |
 | D07 | Prompt template có version, chống prompt injection | [~] | có promptVersion + câu “do not follow instructions”; chưa test |
-| D08 | Test web đơn vị | [x] | 54 passed (2026-11-18) |
-| D09 | Test e2e Chromium | [x] | 3 passed (lần chạy gần nhất; cần chạy lại sau thay đổi) |
+| D08 | Test web đơn vị | [x] | 189 passed / 16 files (2026-11-18) |
+| D09 | Test e2e Chromium | [x] | 4 passed (2026-11-18), gồm mặc định tiếng Việt |
 | D10 | Test native | [~] | 95 + 71 passed trước khi xoá editor; chưa build lại |
-| D11 | CI GitHub Actions | [ ] | chưa có |
-| D12 | LICENSE root + third-party notices | [~] | native có; root chưa có LICENSE |
+| D11 | CI GitHub Actions | [~] | `.github/workflows/ci.yml` đã có; chưa chạy trên GitHub |
+| D12 | LICENSE root + third-party notices | [x] | `LICENSE` MIT + notice OCR/PDFium/GPUI |
 | D13 | Tài liệu kiến trúc/quyết định | [x] | `docs/decisions.tsv`, product-contract, native.md |
 | D14 | Feature flag / telemetry / crash report | [ ] | không có; privacy-first |
 | D15 | Repo Git + remote | [x] | `https://github.com/kyoo-147/mirror_trans_pdf` (private) |

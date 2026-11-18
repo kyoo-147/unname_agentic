@@ -1,7 +1,7 @@
 import './capture.css';
 import type { TextBlock } from '../core/types';
 import { CaptureError, decodeDataUrl, readCaptureParams, requestCaptureImage } from '../ui/capture';
-import type { OcrEngine, OcrWord } from '../ocr/engine';
+import type { OcrEngine } from '../ocr/engine';
 import type { OcrPageModel } from '../ocr/pipeline';
 import {
   blockConfidences,
@@ -197,6 +197,7 @@ export async function mountCaptureReader(options: CaptureReaderOptions): Promise
 
   let page: OcrPageModel | undefined;
   let imageUrl: string | undefined;
+  let captureImage: string | undefined;
   let destroyed = false;
   let loadGeneration = 0;
   let translationGeneration = 0;
@@ -512,7 +513,9 @@ export async function mountCaptureReader(options: CaptureReaderOptions): Promise
 
     let dataUrl: string;
     try {
-      dataUrl = await requestCaptureImage();
+      // The extension hands a capture out once, so a retry re-reads the screenshot
+      // this reader already received instead of asking the background again.
+      dataUrl = captureImage ?? await requestCaptureImage();
     } catch (error) {
       if (generation !== loadGeneration || destroyed || isAbortError(error)) return;
       showFailure(failureFor(error));
@@ -524,10 +527,12 @@ export async function mountCaptureReader(options: CaptureReaderOptions): Promise
     try {
       decoded = decodeDataUrl(dataUrl);
     } catch (error) {
+      captureImage = undefined;
       if (generation !== loadGeneration || destroyed) return;
       showFailure(failureFor(error));
       return;
     }
+    captureImage = dataUrl;
 
     let imageForOcr: Blob | string = dataUrl;
     let nextImageUrl: string | undefined;
@@ -549,7 +554,6 @@ export async function mountCaptureReader(options: CaptureReaderOptions): Promise
     const onLifecycleAbort = () => controller.abort();
     lifecycle.signal.addEventListener('abort', onLifecycleAbort, { once: true });
     if (lifecycle.signal.aborted) controller.abort();
-    let words: OcrWord[] = [];
 
     try {
       const [{ runOcr }, { createTesseractEngine }] = await Promise.all([
@@ -557,14 +561,7 @@ export async function mountCaptureReader(options: CaptureReaderOptions): Promise
         import('../ocr/engine'),
       ]);
       if (generation !== loadGeneration || destroyed || controller.signal.aborted) return;
-      const baseEngine = options.engine ?? createTesseractEngine({ languages });
-      const engine: OcrEngine = {
-        async recognize(ocrImage, recognizeOptions = {}) {
-          const result = await baseEngine.recognize(ocrImage, recognizeOptions);
-          words = result.words;
-          return result;
-        },
-      };
+      const engine: OcrEngine = options.engine ?? createTesseractEngine({ languages });
       const model = await runOcr({
         image: imageForOcr,
         engine,
@@ -585,7 +582,7 @@ export async function mountCaptureReader(options: CaptureReaderOptions): Promise
       nextImageUrl = undefined;
       page = model;
       confidences.clear();
-      for (const [id, value] of blockConfidences(model.blocks, words)) confidences.set(id, value);
+      for (const [id, value] of blockConfidences(model.blocks, model.words)) confidences.set(id, value);
       renderPage(model);
     } catch (error) {
       if (generation !== loadGeneration || destroyed || controller.signal.aborted || isAbortError(error)) return;
@@ -615,6 +612,7 @@ export async function mountCaptureReader(options: CaptureReaderOptions): Promise
     options.signal?.removeEventListener('abort', abortFromOutside);
     lifecycle.abort();
     releaseImage();
+    captureImage = undefined;
     section.remove();
   }
 

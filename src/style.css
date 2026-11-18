@@ -29,3 +29,53 @@ form>.glossary-field textarea{min-height:104px;padding:10px;border:1px solid #d5
 .glossary-status:empty{display:none}
 @media(max-width:1100px){.document-heading{max-width:100%;width:100%}.reader-toolbar{gap:6px 8px}.toolbar-group button{padding:5px 7px}}
 @media(max-width:760px){.reader-body .reader-panel--overlay{top:8px;right:8px;width:calc(100% - 16px);max-height:calc(100% - 16px)}.reader-thumbstrip--overlay{max-height:128px}.page-input{width:46px}}
+
+/* ── A30 accessibility pass: skip link, focus visibility, muted-text contrast, reduced motion ── */
+.skip-link{position:fixed;top:14px;left:14px;z-index:100;padding:10px 16px;border-radius:6px;background:#24402b;color:#fff;font-size:13px;line-height:1.2;text-decoration:none;box-shadow:0 8px 24px #1d2a1f4d;transform:translateY(calc(-100% - 32px));transition:transform .15s ease}
+.skip-link:focus-visible{transform:translateY(0);outline:2px solid #24402b;outline-offset:3px;background:#1b3321;color:#fff}
+#app:focus{outline:none}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible,[tabindex]:focus-visible,[role="button"]:focus-visible{outline:2px solid #3d5f45;outline-offset:3px}
+#reader .reader-search input:focus-visible{outline:2px solid #3d5f45;outline-offset:2px}
+@media (prefers-color-scheme: dark){#reader .reader-search input:focus-visible{outline-color:#adc9b2}}
+
+.splitter::after{transition:background-color .15s ease}
+
+/* Muted/secondary text previously below 4.5:1 on its real light background (ratios measured in tests/e2e/a11y.spec.ts). */
+.nav-label{color:#5a6858}
+.privacy-note{color:#5a6858}
+.open-button kbd{color:#5a6858}
+.brand-dot{color:#54735b}
+.local-badge{color:#5a6858}
+.local-badge i{background:#5c7a50}
+.breadcrumb>span{color:#5f6d5f}
+.library-heading p{color:#5f6d5f}
+.eyebrow{color:#5a6858}
+.library-section-heading h2 span{color:#5f6d5f}
+.library-section-heading>span{color:#5f6d5f}
+.document-preview{color:#576553}
+.document-card-content>span{color:#5f6d5f}
+.drop-zone{color:#5a6858}
+.drop-zone small{color:#5f6d5f}
+.library-footnote{color:#5a6858}
+.status-bar{color:#5a6858}
+.status-bar.is-error{color:#8a4f2c}
+.locale-switch button{color:#5f6d5f}
+.detected-language{color:#5f6d5f}
+.page-total{color:#5a6858}
+.language-label{color:#5f6d5f}
+.toolbar-actions output{color:#5a6858}
+.pane-headings{color:#576553}
+.pane-headings small{color:#5f6d5f}
+.page-loading{color:#5f6d5f}
+.page-number{color:#576553}
+.reader-bottom{color:#5a6858}
+.dialog-heading button{color:#5a6858}
+.dialog-description{color:#5f6d5f}
+form>label,.form-row label{color:#576553}
+.settings-help{color:#5f6d5f}
+.selection-columns h3{color:#5f6d58}
+
+/* Splitter and scroll cues keep their motion by default, and stop moving when the reader asks for reduced motion. */
+@media (prefers-reduced-motion: reduce){
+  .splitter,.splitter::after,.reading-scroll,.page-pair,.status-bar,.skip-link,button,a{transition:none!important;animation:none!important;scroll-behavior:auto!important}
+}

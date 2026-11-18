@@ -50,8 +50,7 @@ test('imports a real PDF, translates anchored regions and keeps vector artwork',
   await expect(page.locator('#selected-translation')).toHaveText('Đọc không còn rào cản');
   await page.locator('#selection-close').click();
   const separator = page.getByRole('separator').first();
-  await separator.focus();
-  await page.keyboard.press('ArrowRight');
+  await separator.press('ArrowRight');
   await expect(separator).toHaveAttribute('aria-valuenow', '52');
   await page.screenshot({ path: 'artifacts/reader-verified.png', fullPage: true });
   expect(errors).toEqual([]);

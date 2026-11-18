@@ -1,3 +1,4 @@
+import { resolveBlockDirection } from '../core/text-direction';
 import type { TextBlock } from '../core/types';
 
 export interface PdfTextItem { str: string; transform: number[]; width: number; height: number; dir?: string; fontName?: string }
@@ -24,7 +25,7 @@ export function groupTextItems(items: PdfTextItem[], viewport: number[], page: n
       previous.text += (sameLine ? ' ' : '\n') + item.str;
       previous.rect.width = Math.max(previous.rect.x+previous.rect.width,x+width)-previous.rect.x;
       previous.rect.height = Math.max(previous.rect.y+previous.rect.height,y+height)-previous.rect.y;
-    } else blocks.push({ id:`p${page}-r${blocks.length}`, page, text:item.str, rect:{x,y,width,height}, fontSize:size, fontFamily:'sans-serif', color:'#202724', direction:item.dir==='rtl'?'rtl':'ltr', rotation });
+    } else blocks.push({ id:`p${page}-r${blocks.length}`, page, text:item.str, rect:{x,y,width,height}, fontSize:size, fontFamily:'sans-serif', color:'#202724', direction:resolveBlockDirection(item.dir,item.str), rotation });
   }
   return blocks;
 }

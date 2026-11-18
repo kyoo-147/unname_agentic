@@ -8,6 +8,7 @@ export const LOCALE_STORAGE_KEY = 'mirror.locale';
 
 const en = {
   appTitle: 'Mirror — a little closer to understanding',
+  skipToContent: 'Skip to main content',
   libraryAria: 'Mirror library',
   openPdf: 'Open PDF',
   workspaceLabel: 'YOUR WORKSPACE',
@@ -173,6 +174,7 @@ type TranslationVars = Record<string, string | number>;
 
 const vi: Dictionary = {
   appTitle: 'Mirror — hiểu thêm một chút',
+  skipToContent: 'Chuyển đến nội dung chính',
   libraryAria: 'Thư viện Mirror',
   openPdf: 'Mở PDF',
   workspaceLabel: 'GÓC ĐỌC CỦA BẠN',
@@ -333,6 +335,7 @@ const vi: Dictionary = {
 
 const zh: Dictionary = {
   appTitle: 'Mirror — 更靠近一点理解',
+  skipToContent: '跳至主要内容',
   libraryAria: 'Mirror 书库',
   openPdf: '打开 PDF',
   workspaceLabel: '你的阅读空间',
