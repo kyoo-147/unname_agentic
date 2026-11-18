@@ -459,9 +459,9 @@ async function printBilingual(): Promise<void> {
   if(!pages.length){status('exportEmpty',true);return;}
   const title=documentTitle(activeTitle);
   document.title=title;
+  status('exportPrintOpened');
   try {
     await printHtml(toBilingualHtml(pages,{title,lang:settings.targetLanguage,pageLabel}));
-    status('exportPrintOpened');
   } catch(error) {
     status(error instanceof PrintTimeoutError?'exportPrintTimeout':error instanceof PrintUnavailableError?'exportPrintUnavailable':'exportPrintBlocked',true);
   }
@@ -681,12 +681,15 @@ $('settings-close').addEventListener('click',()=>dialog.close());
 form.addEventListener('submit',event=>{
   event.preventDefault(); const data=new FormData(form);
   const parsed=parseGlossary(String(data.get('glossary')??'')); glossaryResult=parsed; renderGlossaryStatus();
-  const glossary=Object.fromEntries(parsed.entries.map(entry=>[entry.source,entry.target]));
-  if(parsed.issues.length) { settings={...settings,glossary}; return; }
+  const issues=parsed.issues.length;
+  // A broken glossary line must never swallow the other settings: persist provider,
+  // endpoint, model and languages, keep the previous glossary, and say what failed.
+  const glossary=issues?settings.glossary:Object.fromEntries(parsed.entries.map(entry=>[entry.source,entry.target]));
   settings={...settings,provider:data.get('provider') as TranslationSettings['provider'],endpoint:String(data.get('endpoint')),model:String(data.get('model')),apiKey:String(data.get('apiKey')),sourceLanguage:normalizeLanguageCode(String(data.get('sourceLanguage')??'auto')),targetLanguage:normalizeLanguageCode(String(data.get('targetLanguage')??'vi')),glossary,allowCloud:data.has('allowCloud')};
-  syncToolbarTarget(); updateProvider(); dialog.close(); changeProfile();
-  if(parsed.entries.length&&canTranslate()) status('statusGlossaryApplied',false,{count:parsed.entries.length});
-});
+  syncToolbarTarget(); updateProvider(); changeProfile();
+  if(issues){ status('settingsSavedGlossarySkipped',true,{count:issues}); return; }
+  dialog.close();
+  if(parsed.entries.length&&canTranslate()) status('statusGlossaryApplied',false,{count:parsed.entries.length});});
 syncToolbarTarget();
 // The extension popup can choose the target language before this reader opens; honour it
 // only when it is a supported code. Outside the extension host chrome.storage is absent
@@ -743,6 +746,8 @@ function handleIntent(event: KeyboardEvent) {
   switch(intent) {
     case 'next-page': scrollToPage(pageNumber+1); break;
     case 'prev-page': scrollToPage(pageNumber-1); break;
+    case 'first-page': scrollToPage(1); break;
+    case 'last-page': if(pdf) scrollToPage(pdf.numPages); break;
     case 'zoom-in': fit='actual'; zoom=Math.min(3,zoom+.1); applyScale(); break;
     case 'zoom-out': fit='actual'; zoom=Math.max(.55,zoom-.1); applyScale(); break;
     case 'fit-width': applyFit('width'); break;

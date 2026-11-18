@@ -2,7 +2,7 @@ import type { OutlineEntry, PageTextItem, PdfDocumentLike, SearchMatch } from '.
 import { readPageTextItems, searchTextPage } from '../pdf/layout';
 
 export type FitMode = 'width' | 'page' | 'actual';
-export type ReaderIntent = 'next-page' | 'prev-page' | 'zoom-in' | 'zoom-out' | 'fit-width' | 'fit-page' | 'search' | 'escape' | 'outline' | 'none';
+export type ReaderIntent = 'next-page' | 'prev-page' | 'first-page' | 'last-page' | 'zoom-in' | 'zoom-out' | 'fit-width' | 'fit-page' | 'search' | 'escape' | 'outline' | 'none';
 export type { OutlineEntry, PageTextItem, PdfDocumentLike, SearchMatch };
 
 export interface Size { width: number; height: number }
@@ -88,6 +88,8 @@ export function keyboardIntent(event: KeyboardEventLike): ReaderIntent {
   switch (key) {
     case 'PageDown': case 'ArrowDown': case 'j': case 'J': return 'next-page';
     case 'PageUp': case 'ArrowUp': case 'k': case 'K': return 'prev-page';
+    case 'Home': return 'first-page';
+    case 'End': return 'last-page';
     case '+': case '=': case 'Add': return 'zoom-in';
     case '-': case '_': case 'Subtract': return 'zoom-out';
     case 'w': case 'W': return 'fit-width';
