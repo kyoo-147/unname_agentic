@@ -456,7 +456,6 @@ function exportedPages(): ExportedPage[] {
 function pageLabel(page: number) { return t('pageStatus',{page,total:pageTotal}); }
 async function printBilingual(): Promise<void> {
   const pages=exportedPages();
-  console.log('PRINT_CLICK', pages.length);
   if(!pages.length){status('exportEmpty',true);return;}
   const title=documentTitle(activeTitle);
   document.title=title;

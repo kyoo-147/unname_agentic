@@ -27,6 +27,7 @@ test('opens the bilingual print sheet for a translated document', async ({ page 
   await expect(page.locator('.painted-region').first()).toBeVisible({ timeout: 20_000 });
 
   await expect(page.locator('#export-print')).toBeVisible();
+  await page.locator('#pause').click();
   await page.locator('#export-print').click();
 
   await expect(page.locator('#status')).toContainText(/bảng in|print sheet/i, { timeout: 20_000 });
