@@ -18,12 +18,12 @@ cargo build --release --manifest-path native-shell/Cargo.toml -p pdf_workspace -
 
 Result: exit 0, 36 pre-existing warnings, 6m 38s cold build (31.7s after the first-import fix).
 
-- Executable: `pdf_workspace.exe`, 21,576,192 bytes
-- SHA-256: `31A0177E5D27C5F262603E12A68251A8258DBDDEF83673CA58AE99AF649884C3`
+- Executable: `pdf_workspace.exe`, 21,731,328 bytes
+- SHA-256: `92AEF0B3093C6A156A65D0EC04F40496AD833813D3660176BC25F69E774A53B8`
 - Package: `dist/pdf-workspace-windows-x64-release-20261118-110746/`
 - Native-messaging host: `pdf-workspace-host.exe`, 478,208 bytes, SHA-256 `79713585756FC360B2CC9590C3FBE1B5769030DFDBAFBF4E841358BDC95AAF1C`
-- Zip: `dist/pdf-workspace-windows-x64-release-20261118-110746.zip`, 11.33 MB
-- Zip SHA-256: `A2C572E5DCD31792129AA188766CD3CACED4E00C9CE81089A2852D1DE84805C1`
+- Zip: `dist/pdf-workspace-windows-x64-release-20261118-110746.zip`, 11.34 MB
+- Zip SHA-256: `1F26FF10A7B5AA46A669DFE74F20383B2A0D8517D8746E85BAFAA7A01CA66`
 
 Package contents: executable, `pdfium.dll`, `pdf-workspace-host.exe`, `install-native-host.ps1`,
 root and upstream licenses, Lucide license, PDFium version and component licenses. The package is
@@ -49,7 +49,8 @@ Fix: `Store::reload()` clears and re-reads `index.json`; `SharedStore::reload()`
 workspace calls it after file import and after browser-companion updates, then rebuilds the entry list.
 
 Regression evidence: fresh packaged launch renders at 15 s; native workspace tests remain
-**51 passed, 0 failed, 1 ignored**; release build succeeds. Destructive dialogs (delete/rename/move/trash) now pick a Vietnamese format string through `localized_format!`; a unit test pins the Vietnamese branch.
+**51 passed, 0 failed, 1 ignored** in the native workspace plus **22 passed** in the desktop crate
+(2 new chat-context tests); release build succeeds. Destructive dialogs (delete/rename/move/trash) now pick a Vietnamese format string through `localized_format!`; a unit test pins the Vietnamese branch.
 
 ## Native scanned PDF OCR
 
@@ -71,12 +72,17 @@ The packaged executable was started on the chat view against a local OpenAI-comp
 (`http://127.0.0.1:4319/v1`, model `deterministic-test-only`). A submitted message returned an assistant
 bubble through the real request path:
 
-- user: `Xin chào từ bản đóng gói`
-- assistant: `Bản dịch kiểm thử: Xin chào từ bản đóng gói`
+- user: `Tóm tắt nội dung chính`
+- assistant: `Bản dịch kiểm thử: Tóm tắt nội dung chính`
 
-Screenshot: `artifacts/desktop-packaged-chat.png`. This is a real chat request, not a canned UI message.
-The assistant currently has no document context, tool calls, history persistence or streaming; those
-remain open. Without a configured provider the view shows the provider error inline.
+With a PDF open, the chat shows `Đang hỏi về: mirror-field-notes` and sends the current page's extracted
+source text (up to 6,000 characters) as fenced document context. The context fence and the no-context
+fallback are covered by two provider unit tests (`chat_system`). The fixture provider ignores context and
+returns a canned translation, so the screenshot proves the UI and request path, not summary quality.
+Screenshot: `artifacts/desktop-chat-context5.png`.
+
+Still open: conversation history persistence, streaming, tool calls, selecting another page, and
+provider/model picker inside chat. Without a configured provider the view shows the provider error inline.
 
 ## Limits
 

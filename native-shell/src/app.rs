@@ -444,10 +444,16 @@ impl Workspace {
             Some(id) => ws.open(&id, window, cx),
             None => ws.view = View::Home,
         }
-        if std::env::var_os("PDF_WORKSPACE_START_CHAT").is_some() { ws.home.chat = true; ws.view = View::Chat; }
-        if let Some(prompt) = std::env::var_os("PDF_WORKSPACE_CHAT_PROMPT") {
-            let prompt = prompt.to_string_lossy().to_string();
-            ws.chat.update(cx, |chat, cx| chat.ask(prompt, cx));
+        if std::env::var_os("PDF_WORKSPACE_START_CHAT").is_some() {
+            let prompt = std::env::var_os("PDF_WORKSPACE_CHAT_PROMPT").map(|prompt| prompt.to_string_lossy().to_string());
+            ws.show_chat(cx);
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(std::time::Duration::from_millis(2500)).await;
+                let _ = this.update(cx, |ws, cx| {
+                    ws.show_chat(cx);
+                    if let Some(prompt) = prompt { ws.chat.update(cx, |chat, cx| chat.ask(prompt, cx)); }
+                });
+            }).detach();
         }
         // Kept in the top bar (not just a toast): the user should notice.
         let warnings = ws.store.take_warnings();
@@ -723,6 +729,11 @@ impl Workspace {
 
     /// Switch the main pane to 主页 or 回收站 (or back to the document).
     pub fn show_chat(&mut self, cx: &mut Context<Self>) {
+        let context = self.pdf_reader.as_ref().and_then(|reader| reader.read(cx).document_context()).map(|(fallback, text)| {
+            let title = self.current.as_ref().and_then(|id| self.entries.iter().find(|entry| &entry.id == id)).map(|entry| entry.title.clone()).unwrap_or(fallback);
+            (title, text)
+        });
+        self.chat.update(cx, |chat, cx| chat.set_context(context, cx));
         self.home.chat = true;
         self.home.recent_view = false;
         self.show_view(View::Chat, cx);

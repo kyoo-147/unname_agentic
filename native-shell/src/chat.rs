@@ -16,6 +16,7 @@ pub struct Chat {
     messages: Vec<ChatMessage>,
     busy: bool,
     error: Option<String>,
+    context: Option<(String, String)>,
     _submit: Subscription,
 }
 
@@ -29,11 +30,20 @@ impl Chat {
         let submit = cx.subscribe(&input, |this, _, event: &TextFieldEvent, cx| {
             if matches!(event, TextFieldEvent::Submit) { this.send(cx); }
         });
-        Self { input, messages: Vec::new(), busy: false, error: None, _submit: submit }
+        Self { input, messages: Vec::new(), busy: false, error: None, context: None, _submit: submit }
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.input.read(cx).focus_handle(cx));
+    }
+
+    pub fn set_context(&mut self, context: Option<(String, String)>, cx: &mut Context<Self>) {
+        if self.context != context {
+            self.messages.clear();
+            self.error = None;
+            self.context = context;
+            cx.notify();
+        }
     }
 
     pub fn ask(&mut self, prompt: String, cx: &mut Context<Self>) {
@@ -51,10 +61,12 @@ impl Chat {
         cx.notify();
 
         let history: Vec<(bool, String)> = self.messages.iter().map(|message| (message.user, message.text.clone())).collect();
+        let context = self.context.clone();
         let task = cx.background_executor().spawn(async move {
             let mut settings = model::load_settings();
             settings.provider.api_key = provider::load_key(settings.provider.kind).unwrap_or_default();
-            provider::chat(&settings.provider, &history).map_err(|error| format!("{error:#}"))
+            let context = context.as_ref().map(|(title, text)| (title.as_str(), text.as_str()));
+            provider::chat(&settings.provider, &history, context).map_err(|error| format!("{error:#}"))
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -104,6 +116,11 @@ impl Render for Chat {
                     "The assistant uses the provider configured in the reader. Without one it reports a clear error.",
                     "Trợ lý dùng nhà cung cấp đã cấu hình trong trình đọc. Chưa cấu hình thì sẽ báo lỗi rõ ràng.",
                 ))))
+                .when_some(self.context.as_ref().map(|(title, _)| title.clone()), |element, title| element.child(
+                    div().mt(px(8.)).flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::text_caption())
+                        .child(format!("{} {title}", tr3("Đang hỏi về:", "Asking about:", "Đang hỏi về:")))
+                        .child(div().id("chat-clear-context").size(px(18.)).flex().items_center().justify_center().rounded(px(4.)).cursor_pointer().hover(|s| s.bg(Theme::fill_hover())).child("×")
+                            .on_click(cx.listener(|chat, _, _, cx| chat.set_context(None, cx))))))
             .child(div().id("chat-messages").flex_1().min_h_0().overflow_y_scroll().px(px(24.)).py(px(20.))
                 .flex().flex_col().gap(px(10.))
                 .when(messages.is_empty(), |element| element.child(div().text_color(Theme::text_caption()).text_size(px(13.)).child(tr3(

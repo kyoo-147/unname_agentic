@@ -109,6 +109,18 @@ pub struct PdfReader {
 impl EventEmitter<PdfReaderEvent> for PdfReader {}
 
 impl PdfReader {
+    /// The current page's source text, bounded for a chat prompt.
+    pub fn document_context(&self) -> Option<(String, String)> {
+        let prepared_text = self.prepared.as_ref().map(|page| page.frame.blocks.iter().map(|block| block.source.trim()).filter(|text| !text.is_empty()).collect::<Vec<_>>().join("\n")).unwrap_or_default();
+        let text = if prepared_text.trim().is_empty() { self.source_full.clone() } else { prepared_text };
+        let text = text.trim();
+        if text.is_empty() { return None; }
+        let title = self.prepared.as_ref().map(|page| page.frame.title.clone()).filter(|title| !title.trim().is_empty())
+            .or_else(|| match &self.source { Source::Pdf(path) => path.file_stem().and_then(|stem| stem.to_str()).map(str::to_string), Source::Capture(_) => None })
+            .unwrap_or_else(|| "PDF".to_string());
+        Some((title, text.chars().take(6000).collect()))
+    }
+
     pub fn new(path: PathBuf, initial_page: u16, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self::build(Source::Pdf(path), initial_page, window, cx)
     }
