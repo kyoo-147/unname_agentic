@@ -55,6 +55,11 @@ pub fn tr3(zh: &'static str, en: &'static str, vi: &'static str) -> &'static str
     match lang() { Lang::Zh => zh, Lang::En => en, Lang::Vi => vi }
 }
 
+/// `tr3` with the first `{}` replaced by `value`, for one-argument labels.
+pub fn tr3_fill(zh: &'static str, en: &'static str, vi: &'static str, value: impl std::fmt::Display) -> String {
+    tr3(zh, en, vi).replacen("{}", &value.to_string(), 1)
+}
+
 /// The old two-language form; kept so existing `tr(zh, en)` calls compile.
 /// Vietnamese looks the English form up in the shell table below, so the many
 /// two-language call sites translate without being edited one by one.
@@ -77,7 +82,7 @@ static VI: &[(&str, &str)] = &[
     ("New chat", "Trò chuyện mới"),
     ("Recent", "Gần đây"),
     ("Favorites", "Yêu thích"),
-    ("Live mirror", "Live mirror"),
+    ("Live mirror", "Phản chiếu trực tiếp"),
     ("Translate", "Dịch thuật"),
     ("Settings", "Cài đặt"),
     ("My documents", "Tài liệu của tôi"),
@@ -154,6 +159,23 @@ static VI: &[(&str, &str)] = &[
     ("Word count", "Số từ"),
     ("Keyboard shortcuts", "Phím tắt"),
     ("Trash is empty", "Thùng rác trống"),
+    ("Pinned", "Đã ghim"),
+    ("Exit", "Thoát"),
+    ("Exit selection mode", "Thoát chế độ chọn"),
+    ("Click to expand", "Nhấn để mở rộng"),
+    ("Click to collapse", "Nhấn để thu gọn"),
+    ("Select documents", "Chọn tài liệu"),
+    ("Selection limit reached", "Đã đạt giới hạn chọn"),
+    ("Move to", "Di chuyển đến"),
+    ("Download", "Tải xuống"),
+    ("Switch to grid view", "Chuyển sang dạng lưới"),
+    ("Switch to list view", "Chuyển sang dạng danh sách"),
+    ("Untitled", "Chưa đặt tên"),
+    ("just now", "vừa xong"),
+    ("a few seconds ago", "vài giây trước"),
+    ("Today", "Hôm nay"),
+    ("Yesterday", "Hôm qua"),
+    ("Two days ago", "Hôm kia"),
     ("Local PDF library", "Thư viện PDF cục bộ"),
     ("Imported PDFs and thumbnails stay in this workspace. Open a document to choose a translation provider. Cloud text transfer is opt-in.", "PDF và ảnh thu nhỏ được giữ trong không gian này. Mở một tài liệu để chọn nhà cung cấp dịch. Gửi văn bản lên đám mây là tuỳ chọn."),
 ];
@@ -197,6 +219,13 @@ mod tests {
         assert_eq!(with_lang(Lang::Zh, || tr3(zh, en, vi)), zh);
         assert_eq!(with_lang(Lang::En, || tr3(zh, en, vi)), en);
         assert_eq!(with_lang(Lang::Vi, || tr3(zh, en, vi)), vi);
+    }
+
+    #[test]
+    fn tr3_fill_substitutes_in_each_language() {
+        assert_eq!(with_lang(Lang::Zh, || tr3_fill("共 {} 项", "{} items", "{} mục", 3)), "共 3 项");
+        assert_eq!(with_lang(Lang::En, || tr3_fill("共 {} 项", "{} items", "{} mục", 3)), "3 items");
+        assert_eq!(with_lang(Lang::Vi, || tr3_fill("共 {} 项", "{} items", "{} mục", 3)), "3 mục");
     }
 
     #[test]

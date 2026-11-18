@@ -237,7 +237,7 @@ impl Workspace {
             )
             .when(!crate::layout_preview(), |d| {
                 d.child(
-                    nav_row("nav-live", "eye", "eye", "Live mirror", self.live_source.is_some() && self.view == View::Doc)
+                    nav_row("nav-live", "eye", "eye", crate::i18n::tr3("实时镜像", "Live mirror", "Phản chiếu trực tiếp"), self.live_source.is_some() && self.view == View::Doc)
                         .on_click(cx.listener(|w, _, window, cx| w.open_capture_picker(window, cx))),
                 )
             })
@@ -453,7 +453,7 @@ impl Workspace {
                             cx.notify();
                         })),
                 )
-                .child(div().flex_1().min_w_0().ml(px(8.)).text_size(px(13.)).line_height(px(20.)).text_color(Theme::text()).child(crate::localized_format!("已选 {n} 项", "Selected: {n}")))
+                .child(div().flex_1().min_w_0().ml(px(8.)).text_size(px(13.)).line_height(px(20.)).text_color(Theme::text()).child(crate::i18n::tr3_fill("已选 {} 项", "Selected: {}", "Đã chọn: {}", n)))
                 .child(
                     div()
                         .id("batch-exit")
@@ -817,7 +817,7 @@ impl Workspace {
                     w.row_menu = None;
                     cx.notify();
                 }))
-                .child(div().h(px(ROW_ITEM)).px(px(8.)).flex().items_center().text_size(px(12.)).text_color(Theme::text_placeholder()).child(crate::localized_format!("已选 {n} 项", "Selected: {n}")))
+                .child(div().h(px(ROW_ITEM)).px(px(8.)).flex().items_center().text_size(px(12.)).text_color(Theme::text_placeholder()).child(crate::i18n::tr3_fill("已选 {} 项", "Selected: {}", "Đã chọn: {}", n)))
                 .child(item("bm-copy", "copy", crate::settings::text("创建副本")).on_click(cx.listener(|w, _, _, cx| w.batch_copy(cx))))
                 .child(item("bm-move", "folder-input", crate::settings::text("移动到")).on_click(cx.listener(|w, _, window, cx| w.batch_move(window, cx))))
                 .child(item("bm-delete", "bin", crate::settings::text("删除")).on_click(cx.listener(|w, _, _, cx| w.ask_batch_delete(cx))));

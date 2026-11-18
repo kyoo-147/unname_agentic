@@ -480,13 +480,13 @@ pub fn format_time(secs: u64) -> String {
     let (ny, nmo, nd, _, _) = civil(now);
     let (yy, ymo, yd, _, _) = civil(now.saturating_sub(86_400));
     if (y, mo, d) == (ny, nmo, nd) {
-        crate::localized_format!("今天 {h:02}:{mi:02}", "Today {h:02}:{mi:02}")
+        format!("{} {h:02}:{mi:02}", crate::i18n::tr3("今天", "Today", "Hôm nay"))
     } else if (y, mo, d) == (yy, ymo, yd) {
-        crate::localized_format!("昨天 {h:02}:{mi:02}", "Yesterday {h:02}:{mi:02}")
+        format!("{} {h:02}:{mi:02}", crate::i18n::tr3("昨天", "Yesterday", "Hôm qua"))
     } else if y == ny {
-        crate::localized_format!("{mo}月{d}日", "{mo:02}-{d:02}")
+        short_date(mo, d)
     } else {
-        if crate::settings::english() { format!("{y}-{mo:02}-{d:02}") } else { format!("{y}年{mo}月{d}日") }
+        full_date(y, mo, d)
     }
 }
 
@@ -494,9 +494,9 @@ pub fn format_time(secs: u64) -> String {
 pub fn format_ago(secs: u64) -> String {
     let ago = crate::time::now().saturating_sub(secs);
     if ago < 60 {
-        crate::settings::text("刚刚").into()
+        crate::i18n::tr3("刚刚", "just now", "vừa xong").into()
     } else if ago < 3600 {
-        crate::localized_format!("{} 分钟前", "{} min ago", ago / 60)
+        format!("{} {}", ago / 60, crate::i18n::tr3("分钟前", "min ago", "phút trước"))
     } else {
         format_time(secs)
     }
@@ -505,16 +505,32 @@ pub fn format_ago(secs: u64) -> String {
 /// Full date ("2025年12月2日"), as in 文档信息.
 pub fn format_date(secs: u64) -> String {
     let (y, mo, d, _, _) = civil(secs);
-    if crate::settings::english() { format!("{y}-{mo:02}-{d:02}") } else { format!("{y}年{mo}月{d}日") }
+    full_date(y, mo, d)
+}
+
+fn short_date(mo: u32, d: u32) -> String {
+    match crate::i18n::lang() {
+        crate::i18n::Lang::Zh => format!("{mo}月{d}日"),
+        crate::i18n::Lang::En => format!("{mo:02}-{d:02}"),
+        crate::i18n::Lang::Vi => format!("{d:02}/{mo:02}"),
+    }
+}
+
+fn full_date(y: i64, mo: u32, d: u32) -> String {
+    match crate::i18n::lang() {
+        crate::i18n::Lang::Zh => format!("{y}年{mo}月{d}日"),
+        crate::i18n::Lang::En => format!("{y}-{mo:02}-{d:02}"),
+        crate::i18n::Lang::Vi => format!("{d:02}/{mo:02}/{y}"),
+    }
 }
 
 /// Relative time for 文档信息 ("几秒前", "3 分钟前", "2 小时前", then the date).
 pub fn format_relative(secs: u64) -> String {
     let ago = crate::time::now().saturating_sub(secs);
     match ago {
-        0..60 => crate::settings::text("几秒前").into(),
-        60..3600 => crate::localized_format!("{} 分钟前", "{} min ago", ago / 60),
-        3600..86_400 => crate::localized_format!("{} 小时前", "{} hours ago", ago / 3600),
+        0..60 => crate::i18n::tr3("几秒前", "a few seconds ago", "vài giây trước").into(),
+        60..3600 => format!("{} {}", ago / 60, crate::i18n::tr3("分钟前", "min ago", "phút trước")),
+        3600..86_400 => format!("{} {}", ago / 3600, crate::i18n::tr3("小时前", "hours ago", "giờ trước")),
         _ => format_date(secs),
     }
 }
@@ -528,20 +544,20 @@ pub fn format_visit(secs: u64) -> String {
         return crate::i18n::tr3("刚刚", "just now", "vừa xong").into();
     }
     if ago < 3600 {
-        return if crate::settings::english() { format!("{} min ago", ago / 60) } else { format!("{} 分钟前", ago / 60) };
+        return format!("{} {}", ago / 60, crate::i18n::tr3("分钟前", "min ago", "phút trước"));
     }
     let (y, mo, d, h, mi) = civil(secs);
     let day = |back: u64| {
         let (y, mo, d, _, _) = civil(now.saturating_sub(back * 86_400));
         (y, mo, d)
     };
-    let names = if crate::settings::english() { ["Today", "Yesterday", "Two days ago"] } else { ["今天", "昨天", "前天"] };
+    let names = [crate::i18n::tr3("今天", "Today", "Hôm nay"), crate::i18n::tr3("昨天", "Yesterday", "Hôm qua"), crate::i18n::tr3("前天", "Two days ago", "Hôm kia")];
     if let Some(name) = (0..3).find(|&b| day(b) == (y, mo, d)).map(|b| names[b as usize]) {
         format!("{name} {h:02}:{mi:02}")
     } else if y == civil(now).0 {
-        if crate::settings::english() { format!("{mo:02}-{d:02} {h:02}:{mi:02}") } else { format!("{mo}月{d}日 {h:02}:{mi:02}") }
+        format!("{} {h:02}:{mi:02}", short_date(mo, d))
     } else {
-        if crate::settings::english() { format!("{y}-{mo:02}-{d:02}") } else { format!("{y}年{mo}月{d}日") }
+        full_date(y, mo, d)
     }
 }
 

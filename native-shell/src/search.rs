@@ -157,9 +157,9 @@ fn extra_segment(glyph: Option<&'static str>, text: String) -> Div {
 pub(crate) fn extra_line(e: &Entry) -> Div {
     let mut extra = vec![extra_segment(None, crate::i18n::tr3("所有者：我", "Owner: me", "Chủ sở hữu: tôi").into())];
     if e.meta.opened > 0 {
-        extra.push(extra_segment(Some("eye"), if crate::settings::english() { format!("Opened {}", format_visit(e.meta.opened)) } else { format!("你在 {}打开过", format_visit(e.meta.opened)) }));
+        extra.push(extra_segment(Some("eye"), crate::i18n::tr3_fill("你在 {}打开过", "Opened {}", "Đã mở {}", format_visit(e.meta.opened))));
     }
-    extra.push(extra_segment(Some("pen-line"), if crate::settings::english() { format!("Modified {}", format_visit(e.meta.modified)) } else { format!("我在 {}修改过", format_visit(e.meta.modified)) }));
+    extra.push(extra_segment(Some("pen-line"), crate::i18n::tr3_fill("我在 {}修改过", "Modified {}", "Đã sửa {}", format_visit(e.meta.modified))));
     let last = extra.len() - 1;
     let extra = extra.into_iter().enumerate().flat_map(|(i, seg)| {
         let seg = if i == last { seg.flex_shrink().min_w_0().overflow_hidden() } else { seg };

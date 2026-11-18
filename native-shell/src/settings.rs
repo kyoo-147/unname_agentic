@@ -323,7 +323,7 @@ fn sample_page(t: &themes::Theme, s: f32) -> Div {
         .child(crate::i18n::tr3("，", ", ", ", "))
         .child(crate::i18n::tr3("用来说明正文、强调与链接的观感。", "shown for body text, emphasis and links. ", "dùng để minh hoạ văn bản thường, phần nhấn mạnh và liên kết. "))
         .child(crate::i18n::tr3("界面设置见 ", "Interface settings are under ", "Cài đặt giao diện nằm trong "))
-        .child(chip("Settings"))
+        .child(chip(crate::i18n::en_or_vi("Settings")))
         .child(crate::i18n::tr3("，", ", ", ", "))
         .child(crate::i18n::tr3("主题细节以当前代码为准。", "theme details follow the current code.", "chi tiết chủ đề theo mã hiện tại."));
     let indent = sc(st.num("list.indent")).max(px(10.));
@@ -724,7 +724,7 @@ impl Workspace {
             .child(group(None, vec![
                 row(crate::i18n::tr3("文档库文件夹", "Documents folder", "Thư mục tài liệu"), Some(location.into()),
                     button("reveal-library", reveal).on_click(|_, _, cx| cx.reveal_path(&crate::store::Store::root_dir()))).into_any_element(),
-                row(crate::i18n::tr3("回收站", "Trash", "Thùng rác"), Some(if english() { format!("Deleted documents are kept for {} days.", crate::store::TRASH_DAYS) } else { format!("删除的文档保留 {} 天后自动清除。", crate::store::TRASH_DAYS) }.into()),
+                row(crate::i18n::tr3("回收站", "Trash", "Thùng rác"), Some(crate::i18n::tr3_fill("删除的文档保留 {} 天后自动清除。", "Deleted documents are kept for {} days.", "Tài liệu đã xoá được giữ trong {} ngày.", crate::store::TRASH_DAYS).into()),
                     button("open-trash", crate::i18n::tr3("打开", "Open", "Mở")).on_click(cx.listener(|w, _, _, cx| w.show_view(View::Trash, cx)))).into_any_element(),
             ]))
             .into_any_element()

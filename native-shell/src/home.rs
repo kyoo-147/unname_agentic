@@ -184,7 +184,7 @@ impl Workspace {
     fn home_click(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.batch.is_none() { return self.open(id, window, cx) }
         if !self.toggle_check(id) {
-            self.show_toast_kind(crate::ui::ToastKind::Error, &crate::localized_format!("一次最多选择 {} 项", "Select up to {} items at a time", crate::sidebar::BATCH_LIMIT), cx);
+            self.show_toast_kind(crate::ui::ToastKind::Error, &crate::i18n::tr3_fill("一次最多选择 {} 项", "Select up to {} items at a time", "Chỉ chọn tối đa {} mục mỗi lần", crate::sidebar::BATCH_LIMIT), cx);
         }
         cx.notify();
     }
@@ -349,7 +349,7 @@ impl Workspace {
                     .child(checkbox(if all { Check::On } else if n > 0 { Check::Partial } else { Check::Off }, false, "home-batch-all"))
                     .tip(crate::settings::text("全选"), None)
                     .on_click(cx.listener(move |w, _, _, cx| { w.batch = Some(if all { vec![] } else { ids.clone() }); cx.notify(); })))
-                .child(div().ml(px(10.)).text_size(px(13.)).line_height(px(20.)).text_color(Theme::text()).child(crate::localized_format!("已选 {n} 项", "Selected: {n}")))
+                .child(div().ml(px(10.)).text_size(px(13.)).line_height(px(20.)).text_color(Theme::text()).child(crate::i18n::tr3_fill("已选 {} 项", "Selected: {}", "Đã chọn: {}", n)))
                 .child(div().flex_1())
                 // The sidebar's 批量操作 actions: 创建副本 | 移动到 | 删除.
                 .when(crate::layout_preview(), |d| d
@@ -481,7 +481,7 @@ impl Workspace {
                 .on_click(cx.listener(|w, _, _, cx| w.show_toast_kind(crate::ui::ToastKind::Info, crate::i18n::tr3("打开一份 PDF 即可使用翻译。", "Open a PDF to use translation.", "Mở một PDF để dùng tính năng chuyển ngữ."), cx))))
             .child(greeting_chip("home-greeting-find", "search", crate::i18n::tr3("在文档中查找", "Find in documents", "Tìm trong tài liệu"))
                 .on_click(cx.listener(|w, _, window, cx| w.open_search(window, cx))))
-            .child(greeting_chip("home-greeting-live", "eye", crate::i18n::tr3("实时镜像", "Live mirror", "Live mirror"))
+            .child(greeting_chip("home-greeting-live", "eye", crate::i18n::tr3("实时镜像", "Live mirror", "Phản chiếu trực tiếp"))
                 .on_click(cx.listener(|w, _, window, cx| w.open_capture_picker(window, cx))));
         let import = div()
             .id("home-greeting-import")

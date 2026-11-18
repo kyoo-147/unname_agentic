@@ -3,7 +3,7 @@ mod scrollbar;
 mod state;
 mod view;
 
-use crate::{input::{TextField, TextFieldEvent}, theme::{self, Theme}, ui};
+use crate::{i18n::{tr3, tr3_fill}, input::{TextField, TextFieldEvent}, theme::{self, Theme}, ui};
 use gpui::{prelude::FluentBuilder, *};
 use mirror_pdf_desktop::{capture, model::{self, CaptureSource, PageFrame, ProviderKind, ProviderSettings, TextBlock}, pdf, provider};
 use state::{Epoch, Stamp};
@@ -146,16 +146,16 @@ impl PdfReader {
     fn build(source: Source, page: u16, _: &mut Window, cx: &mut Context<Self>) -> Self {
         let profile = ProviderSettings::default();
         let fields = ProfileFields {
-            endpoint: Self::field("Provider base URL", &profile.endpoint, false, cx),
-            model: Self::field("Model", &profile.model, false, cx),
-            source: Self::field("auto", &profile.source_language, false, cx),
-            target: Self::field("Target language code", &profile.target_language, false, cx),
-            glossary: Self::field("term = preferred translation", "", true, cx),
-            key: Self::field("Paste API key (hidden; saved only in vault)", "", false, cx),
+            endpoint: Self::field(tr3("提供方基础 URL", "Provider base URL", "URL gốc nhà cung cấp"), &profile.endpoint, false, cx),
+            model: Self::field(tr3("模型", "Model", "Mô hình"), &profile.model, false, cx),
+            source: Self::field(tr3("自动", "auto", "tự động"), &profile.source_language, false, cx),
+            target: Self::field(tr3("目标语言代码", "Target language code", "Mã ngôn ngữ đích"), &profile.target_language, false, cx),
+            glossary: Self::field(tr3("术语 = 首选译法", "term = preferred translation", "thuật ngữ = bản dịch ưu tiên"), "", true, cx),
+            key: Self::field(tr3("粘贴 API 密钥（隐藏；仅保存在凭据库）", "Paste API key (hidden; saved only in vault)", "Dán khoá API (ẩn; chỉ lưu trong kho bảo mật trên máy)"), "", false, cx),
         };
         fields.key.update(cx, |f, _| f.secret = true);
-        let source_text = Self::field("Select a region", "", true, cx);
-        let target_text = Self::field("Translation appears here when ready", "", true, cx);
+        let source_text = Self::field(tr3("选择区域", "Select a region", "Chọn một vùng"), "", true, cx);
+        let target_text = Self::field(tr3("翻译就绪后显示在这里", "Translation appears here when ready", "Bản dịch sẽ hiện ở đây khi sẵn sàng"), "", true, cx);
         let mut subscriptions = Vec::new();
         for field in [&fields.endpoint, &fields.model, &fields.source, &fields.target, &fields.glossary, &fields.key] {
             subscriptions.push(cx.subscribe(field, |this, _, event, cx| {
@@ -177,7 +177,7 @@ impl PdfReader {
             viewport: Rc::new(Cell::new(Bounds::new(point(px(0.), px(0.)), size(px(800.), px(650.))))),
             panes: [geometry::Pane::default(); 2], layout_split: true, reflow_frames: 0, linked_scroll: geometry::LinkedScroll::default(), last_input: Rc::new(Cell::new(1)), native_scroll_input: Rc::new(Cell::new(false)),
             external_position: None, selected: None, source_text, target_text, source_full: String::new(), target_full: String::new(),
-            status: "Opening original pixels…".into(), error: None, last_digest: String::new(), tick: None, _subscriptions: subscriptions,
+            status: tr3("正在打开原始像素…", "Opening original pixels…", "Đang mở ảnh gốc…").into(), error: None, last_digest: String::new(), tick: None, _subscriptions: subscriptions,
         };
         let task = cx.background_executor().spawn(async {
             let mut settings = model::load_settings();
@@ -205,7 +205,7 @@ impl PdfReader {
         }
     }
     fn fail(&mut self, error: String, cx: &mut Context<Self>) {
-        self.status = "Original retained · retry available".into(); self.error = Some(error.clone()); self.failed = true;
+        self.status = tr3("已保留原始文件 · 可重试", "Original retained · retry available", "Đã giữ bản gốc · có thể thử lại").into(); self.error = Some(error.clone()); self.failed = true;
         cx.emit(PdfReaderEvent::Toast(error)); cx.notify();
     }
     fn pump(&mut self, cx: &mut Context<Self>) {
@@ -253,7 +253,7 @@ impl PdfReader {
                         reader.epoch.source(); reader.prepared = Some(prepared); reader.selected = None; reader.translate_all = false; reader.selected_request = false;
                         reader.source_full.clear(); reader.target_full.clear();
                         reader.source_text.update(cx, |f, cx| f.set_text("", cx)); reader.target_text.update(cx, |f, cx| f.set_text("", cx));
-                        reader.status = if reader.failed { "Original refreshed · translation needs Retry" } else if reader.paused { "Translation paused · original refreshed" } else { "Original ready · translating visible regions" }.into();
+                        reader.status = if reader.failed { tr3("原始文件已刷新 · 翻译需要重试", "Original refreshed · translation needs Retry", "Đã làm mới bản gốc · bản dịch cần thử lại") } else if reader.paused { tr3("翻译已暂停 · 原始文件已刷新", "Translation paused · original refreshed", "Đã tạm dừng dịch · bản gốc đã làm mới") } else { tr3("原始文件已就绪 · 正在翻译可见区域", "Original ready · translating visible regions", "Bản gốc đã sẵn sàng · đang dịch các vùng hiển thị") }.into();
                         if !reader.failed { reader.error = None; }
                         if let Some(error) = ocr_error { if matches!(reader.source, Source::Capture(_)) { reader.capture_live = false; } reader.fail(error, cx); }
                         cx.emit(PdfReaderEvent::Location(reader.page));
@@ -305,7 +305,7 @@ impl PdfReader {
     }
     fn translate_visible(&mut self, cx: &mut Context<Self>) {
         if self.profile.kind != ProviderKind::Local && (!self.profile.cloud_consent || self.profile.api_key.trim().is_empty()) {
-            let status = "Translation is off · choose Language / provider to configure a local engine or enable cloud translation";
+            let status = tr3("翻译已关闭 · 选择“语言 / 提供方”以配置本地引擎或启用云端翻译", "Translation is off · choose Language / provider to configure a local engine or enable cloud translation", "Dịch đang tắt · chọn “Ngôn ngữ / nhà cung cấp” để cấu hình công cụ cục bộ hoặc bật dịch đám mây");
             if self.status != status { self.status = status.into(); cx.notify(); }
             return;
         }
@@ -318,7 +318,7 @@ impl PdfReader {
         if indices.is_empty() { return; }
         let blocks: Vec<TextBlock> = indices.iter().map(|i| prepared.frame.blocks[*i].clone()).collect();
         let settings = self.profile.clone(); let stamp = self.epoch.stamp(); self.provider_busy = Some(stamp);
-        self.status = format!("Translating {} visible regions…", blocks.len());
+        self.status = tr3_fill("正在翻译 {} 个可见区域…", "Translating {} visible regions…", "Đang dịch {} vùng hiển thị…", blocks.len());
         let task = cx.background_executor().spawn(async move { provider::translate_blocks(&settings, &blocks).map_err(|e| format!("{e:#}")) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -328,10 +328,10 @@ impl PdfReader {
                 match result {
                     Ok(values) => {
                         if let Some(prepared) = &mut reader.prepared {
-                            if values.len() != indices.len() { reader.fail("Provider returned an incorrect block count".into(), cx); return; }
+                            if values.len() != indices.len() { reader.fail(tr3("提供方返回的块数不正确", "Provider returned an incorrect block count", "Nhà cung cấp trả về sai số khối").into(), cx); return; }
                             for (index, text) in indices.into_iter().zip(values) { prepared.frame.blocks[index].translated = Some(text); }
                         }
-                        reader.status = "Visible regions ready · full paired text below".into(); reader.refresh_selection(cx);
+                        reader.status = tr3("可见区域已就绪 · 完整对照文本见下方", "Visible regions ready · full paired text below", "Các vùng hiển thị đã sẵn sàng · văn bản song song đầy đủ ở bên dưới").into(); reader.refresh_selection(cx);
                     }
                     Err(error) => reader.fail(error, cx),
                 }
@@ -359,17 +359,17 @@ impl PdfReader {
         self.page = next; self.epoch.source(); self.prepared = None; self.last_digest.clear(); self.selected = None;
         self.load_needed = true; self.failed = false; self.error = None; self.external_position = None; self.linked_scroll = geometry::LinkedScroll::default();
         for scroll in &self.scrolls { scroll.set_offset(point(px(0.), px(0.))); }
-        self.status = "Opening original pixels…".into(); self.pump(cx); cx.notify();
+        self.status = tr3("正在打开原始像素…", "Opening original pixels…", "Đang mở ảnh gốc…").into(); self.pump(cx); cx.notify();
     }
     fn toggle_pause(&mut self, cx: &mut Context<Self>) {
         self.paused = !self.paused; self.epoch.cancel();
-        self.status = if self.paused { "Translation paused · original remains available" } else { "Translation resumed" }.into(); cx.notify();
+        self.status = if self.paused { tr3("翻译已暂停 · 仍可查看原文", "Translation paused · original remains available", "Đã tạm dừng dịch · bản gốc vẫn có sẵn") } else { tr3("翻译已继续", "Translation resumed", "Đã tiếp tục dịch") }.into(); cx.notify();
     }
     fn retry(&mut self, cx: &mut Context<Self>) {
         self.error = None; self.failed = false; self.paused = false;
         if matches!(self.source, Source::Capture(_)) { self.capture_live = true; self.load_needed = true; }
         if self.prepared.as_ref().is_none_or(|p| p.frame.quality.contains("OCR unavailable")) { self.load_needed = true; self.last_digest.clear(); }
-        self.epoch.cancel(); self.status = "Retrying…".into(); self.pump(cx); cx.notify();
+        self.epoch.cancel(); self.status = tr3("正在重试…", "Retrying…", "Đang thử lại…").into(); self.pump(cx); cx.notify();
     }
     fn select(&mut self, index: usize, cx: &mut Context<Self>) {
         self.selected = Some(index); self.refresh_selection(cx); cx.notify();
@@ -377,7 +377,7 @@ impl PdfReader {
     fn refresh_selection(&mut self, cx: &mut Context<Self>) {
         let Some(block) = self.selected.and_then(|i| self.prepared.as_ref()?.frame.blocks.get(i)) else { return; };
         self.source_full = block.source.clone();
-        self.target_full = block.translated.clone().unwrap_or_else(|| if state::preserve_formula(&block.source) { "Formula preserved in original pixels".into() } else { "Not translated yet. Scroll the region into view or choose Translate selected.".into() });
+        self.target_full = block.translated.clone().unwrap_or_else(|| if state::preserve_formula(&block.source) { tr3("公式保留在原始像素中", "Formula preserved in original pixels", "Công thức được giữ trong ảnh gốc").into() } else { tr3("尚未翻译。将区域滚动到可视范围，或选择“翻译所选区域”。", "Not translated yet. Scroll the region into view or choose Translate selected.", "Chưa dịch. Cuộn vùng vào tầm nhìn hoặc chọn “Dịch vùng đã chọn”.").into() });
         self.source_text.update(cx, |f, cx| f.set_text(&self.source_full, cx));
         self.target_text.update(cx, |f, cx| f.set_text(&self.target_full, cx));
     }
@@ -416,8 +416,8 @@ impl PdfReader {
                 match result {
                     Ok(profile) => {
                         reader.profile = profile; reader.profile_dirty = false; reader.failed = false; reader.error = None;
-                        reader.fields.key.update(cx, |f, cx| f.set_text("", cx)); reader.status = "Provider saved · credential stays in native vault".into();
-                        reader.refresh_selection(cx); cx.emit(PdfReaderEvent::Toast("Provider settings saved".into()));
+                        reader.fields.key.update(cx, |f, cx| f.set_text("", cx)); reader.status = tr3("提供方已保存 · 凭据保存在本机凭据库", "Provider saved · credential stays in native vault", "Đã lưu nhà cung cấp · thông tin đăng nhập ở trong kho bảo mật trên máy").into();
+                        reader.refresh_selection(cx); cx.emit(PdfReaderEvent::Toast(tr3("提供方设置已保存", "Provider settings saved", "Đã lưu cài đặt nhà cung cấp").into()));
                     }
                     Err(error) => reader.fail(error, cx),
                 }

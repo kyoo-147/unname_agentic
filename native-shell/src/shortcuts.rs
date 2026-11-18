@@ -1,7 +1,7 @@
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use std::collections::BTreeMap;
-use crate::{app::Workspace, settings::english, theme::Theme};
+use crate::{app::Workspace, theme::Theme};
 
 pub struct Shortcuts { base: Vec<KeyBinding>, custom: BTreeMap<String, String> }
 impl Global for Shortcuts {}
@@ -133,6 +133,7 @@ pub fn rebuild(cx: &mut App) {
 
 /// Settings groups, in order.
 const GROUPS: [(&str, &str); 5] = [("应用与窗口", "App & windows"), ("文档", "Documents"), ("编辑", "Editing"), ("文字样式", "Text styles"), ("段落与块", "Paragraphs & blocks")];
+const GROUPS_VI: [&str; 5] = ["Ứng dụng & cửa sổ", "Tài liệu", "Chỉnh sửa", "Kiểu chữ", "Đoạn & khối"];
 
 /// (group, 中文, English) of the actions shown in Settings.
 fn info(name: &str) -> Option<(usize, &'static str, &'static str)> {
@@ -194,7 +195,70 @@ fn info(name: &str) -> Option<(usize, &'static str, &'static str)> {
         _ => return None,
     })
 }
-pub fn label(name: &str) -> Option<&'static str> { info(name).map(|(_, zh, en)| if english() { en } else { zh }) }
+pub fn label(name: &str) -> Option<&'static str> {
+    let (_, zh, en) = info(name)?;
+    Some(crate::i18n::tr3(zh, en, vi_label(name).unwrap_or(en)))
+}
+
+fn vi_label(name: &str) -> Option<&'static str> {
+    Some(match name.rsplit("::").next().unwrap_or(name) {
+        "NewDoc" => "Tài liệu mới",
+        "CloseWindow" => "Đóng cửa sổ",
+        "HideApp" => "Ẩn Workspace",
+        "Minimize" => "Thu nhỏ cửa sổ",
+        "ToggleFullScreen" => "Vào / thoát toàn màn hình",
+        "OpenSettings" => "Mở cài đặt",
+        "GoHome" => "Về trang chủ",
+        "ToggleSidebar" => "Hiện / ẩn thanh bên",
+        "FocusSearch" => "Tìm tài liệu",
+        "ToggleShortcuts" => "Xem phím tắt",
+        "ImportDoc" => "Nhập tài liệu",
+        "Save" => "Lưu tài liệu",
+        "EditMode" => "Chế độ chỉnh sửa",
+        "ReadMode" => "Chế độ đọc",
+        "FindInDoc" => "Tìm trong tài liệu",
+        "ReplaceInDoc" => "Tìm và thay thế",
+        "Undo" => "Hoàn tác",
+        "Redo" => "Làm lại",
+        "Copy" => "Sao chép",
+        "Cut" => "Cắt",
+        "Paste" => "Dán",
+        "SelectAll" => "Chọn tất cả",
+        "PastePlain" => "Dán dưới dạng văn bản thường",
+        "Link" => "Chèn liên kết",
+        "InsertReminder" => "Chèn nhắc nhở",
+        "MoveBlockUp" => "Di chuyển khối lên",
+        "MoveBlockDown" => "Di chuyển khối xuống",
+        "ToggleTodo" => "Đánh / bỏ dấu việc cần làm",
+        "Bold" => "In đậm",
+        "Italic" => "In nghiêng",
+        "Underline" => "Gạch chân",
+        "Strike" => "Gạch ngang",
+        "InlineCode" => "Mã trong dòng",
+        "ApplyLastColor" => "Áp dụng màu gần nhất",
+        "TurnText" => "Văn bản",
+        "TurnH1" => "Tiêu đề 1",
+        "TurnH2" => "Tiêu đề 2",
+        "TurnH3" => "Tiêu đề 3",
+        "TurnH4" => "Tiêu đề 4",
+        "TurnH5" => "Tiêu đề 5",
+        "TurnH6" => "Tiêu đề 6",
+        "TurnH7" => "Tiêu đề 7",
+        "TurnH8" => "Tiêu đề 8",
+        "TurnH9" => "Tiêu đề 9",
+        "TurnOrdered" => "Danh sách đánh số",
+        "TurnBullet" => "Danh sách gạch đầu dòng",
+        "TurnTodo" => "Danh sách việc cần làm",
+        "TurnCode" => "Khối mã",
+        "TurnQuote" => "Trích dẫn",
+        "InsertDivider" => "Đường phân cách",
+        "InsertTable" => "Chèn bảng",
+        "AlignLeft" => "Căn trái",
+        "AlignCenter" => "Căn giữa",
+        "AlignRight" => "Căn phải",
+        _ => return None,
+    })
+}
 fn default_key(s: &Shortcuts, id: &str) -> String {
     if id.ends_with("::NewDoc") { return if cfg!(not(target_os = "macos")) { "ctrl-n" } else { "cmd-n" }.into(); }
     s.base.iter().find(|b| b.action().name() == id).map(|b| b.keystrokes().iter().map(|k| k.unparse()).collect::<Vec<_>>().join(" ")).unwrap_or_default()
@@ -386,7 +450,8 @@ impl Workspace {
         let mut groups: Vec<Vec<AnyElement>> = (0..GROUPS.len()).map(|_| vec![]).collect();
         for (id, title, key) in rows(cx) {
             let Some((g, zh, en)) = info(&id) else { continue };
-            if !q.is_empty() && ![zh.to_lowercase(), en.to_lowercase(), pretty(&key).to_lowercase(), key.to_lowercase()].iter().any(|s| s.contains(&q)) { continue; }
+            let vi = vi_label(&id).unwrap_or(en);
+            if !q.is_empty() && ![zh.to_lowercase(), en.to_lowercase(), vi.to_lowercase(), pretty(&key).to_lowercase(), key.to_lowercase()].iter().any(|s| s.contains(&q)) { continue; }
             let recording = self.shortcut_recording.as_ref() == Some(&id);
             let error = self.shortcut_error.as_ref().filter(|(e, _)| *e == id).map(|(_, m)| m.clone());
             let is_custom = customized.contains(&id);
@@ -413,7 +478,7 @@ impl Workspace {
             .children(groups.into_iter().enumerate().filter(|(_, rows)| !rows.is_empty()).map(|(g, rows)| {
                 let n = rows.len();
                 div().w_full().flex().flex_col().gap(px(8.))
-                    .child(div().px(px(4.)).text_size(px(13.)).line_height(px(18.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::sidebar_section()).child(if english() { GROUPS[g].1 } else { GROUPS[g].0 }))
+                    .child(div().px(px(4.)).text_size(px(13.)).line_height(px(18.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::sidebar_section()).child(crate::i18n::tr3(GROUPS[g].0, GROUPS[g].1, GROUPS_VI[g])))
                     .child(div().w_full().flex().flex_col().rounded(px(12.)).border_1().border_color(Theme::line_border()).overflow_hidden()
                         .children(rows.into_iter().enumerate().map(move |(i, r)| div().w_full().flex().flex_col().when(i + 1 < n, |d| d.border_b_1().border_color(crate::ui::list_line())).child(r))))
             }))
