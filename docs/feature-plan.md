@@ -32,7 +32,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | A14 | Bốn nhà cung cấp: Google, DeepL, OpenAI-compatible, local | [x] | `src/core/translation.ts`; `tests/translation.test.ts` |
 | A15 | Consent cloud rõ ràng, chặn cloud khi chưa bật | [x] | `src/core/translation.ts`; settings dialog |
 | A16 | Trạng thái lỗi/đang tải/mất nguồn | [x] | status bar + e2e error flow |
-| A17 | Thư viện tài liệu trong phiên | [~] | chỉ trong RAM; mất khi reload |
+| A17 | Thư viện tài liệu trong phiên | [x] | `src/core/library-store.ts` IndexedDB; e2e reload vẫn còn card và mở lại được |
 | A18 | Giao diện Việt/Anh/Trung | [x] | `src/i18n.ts`, 120 khoá × 3 ngôn ngữ; `tests/i18n.test.ts`; e2e mặc định tiếng Việt |
 | A19 | Glossary thuật ngữ có UI + áp dụng cho mọi provider | [x] | `src/core/glossary.ts`, textarea + đếm lỗi; Google/DeepL được ghi rõ là không nhận glossary |
 | A20 | Tự nhận diện ngôn ngữ nguồn | [x] | `src/core/language.ts`; gợi ý sau khi mở PDF, không ghi đè lựa chọn |
@@ -41,11 +41,11 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | A23 | Tìm trong tài liệu | [x] | panel search, debounce 250ms, `searchAllPages` có abort |
 | A24 | Xoay trang, chế độ fit width/page | [x] | rotate 0/90/180/270; `fitScale` width/page |
 | A25 | Lưu vị trí đọc, zoom, ngôn ngữ qua reload | [x] | `saveReadingState` theo tài liệu; locale lưu localStorage |
-| A26 | Xuất bản dịch (txt/PDF song ngữ) | [ ] | chưa có |
+| A26 | Xuất bản dịch (txt/PDF song ngữ) | [x] | `src/export/bilingual.ts` + nút Xuất; e2e tải file `.bilingual.txt` có cả nguồn và bản dịch |
 | A27 | OCR ảnh chụp màn hình → block → dịch | [~] | `src/capture/*` + Tesseract eng/vie; đã nối `?capture=1`; chưa chạy capture thật trong extension |
-| A28 | RTL và ngôn ngữ CJK trong vùng dịch | [~] | block.direction được set; chưa có test RTL |
+| A28 | RTL và ngôn ngữ CJK trong vùng dịch | [x] | `src/core/text-direction.ts` + `resolveBlockDirection`; test RTL/CJK |
 | A29 | Phím tắt đọc (j/k, +/-, Ctrl+F, Home/End) | [x] | `keyboardIntent`; j/k, mũi tên, Space, +/-, Ctrl+F, o, Escape |
-| A30 | Accessibility: focus trap, aria, reduced motion, contrast | [~] | có aria cơ bản; chưa audit WCAG |
+| A30 | Accessibility: focus trap, aria, reduced motion, contrast | [x] | 8 e2e a11y, contrast >= 4.5:1, skip link, dialog focus trap |
 
 ### B. Tiện ích Chrome (extension)
 
@@ -144,6 +144,15 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 13. Tesseract dự phòng + benchmark OCR.
 14. Auto-update có ký.
 15. Đa ngôn ngữ đích mở rộng + RTL.
+
+
+## 5. Desktop verification 2026-11-18
+
+- Build: `cargo check` sạch; `cargo test --workspace` 46 pass / 1 ignored; `cargo build -p pdf_workspace` OK.
+- Desktop backend: `cargo test --manifest-path desktop/Cargo.toml` 20 pass / 0 failed.
+- Ảnh: `artifacts/desktop-verify/desktop-{home,reader}-{vi,en,zh}.png`; chi tiết và hash trong [docs/desktop-verification.md](desktop-verification.md).
+- Web flow: 11 ảnh trong `artifacts/ui-flows/`; e2e 15 test (14 cũ + export/library).
+- Defect còn mở: lần import đầu blank ở 18s (25s thì render); footer reader còn câu chẩn đoán tiếng Anh; chưa test ở 980px.
 
 ## 4. Cách chia việc song song
 
