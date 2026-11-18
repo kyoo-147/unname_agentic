@@ -1,5 +1,6 @@
 mod export;
 mod geometry;
+mod rotate;
 mod scrollbar;
 mod state;
 mod view;
@@ -56,6 +57,7 @@ pub struct PdfReader {
     epoch: Epoch,
     page: u16,
     page_count: u16,
+    rotation: u16,
     prepared: Option<PreparedPage>,
     loading: bool,
     load_needed: bool,
@@ -114,6 +116,11 @@ impl PdfReader {
         Self::build(Source::Capture(source), 0, window, cx)
     }
     pub fn open_settings(&mut self, cx: &mut Context<Self>) { self.show_settings = true; cx.notify(); }
+    fn rotate_page(&mut self, cx: &mut Context<Self>) {
+        self.rotation = (self.rotation + 90) % 360;
+        self.load_needed = true;
+        cx.notify();
+    }
     fn export_page(&mut self, cx: &mut Context<Self>) {
         let Source::Pdf(path) = self.source.clone() else {
             cx.emit(PdfReaderEvent::Toast(tr3("只有本地 PDF 可以导出", "Only a local PDF can be exported", "Chỉ PDF cục bộ mới xuất được").into()));
@@ -192,7 +199,7 @@ impl PdfReader {
             if matches!(event, TextFieldEvent::Changed) { field.update(cx, |f, cx| f.set_text(&this.target_full, cx)); }
         }));
         let mut reader = Self {
-            source, epoch: Epoch::default(), page, page_count: 0, prepared: None, loading: false, load_needed: true,
+            source, epoch: Epoch::default(), page, page_count: 0, rotation: 0, prepared: None, loading: false, load_needed: true,
             profile_loading: true, provider_busy: None, failed: false, paused: false, active: true, browser_linked: false, pending_external: None, capture_live: true,
             capture_due: Instant::now(), draft_kind: profile.kind, draft_consent: profile.cloud_consent, profile, fields, selected_request: false, translate_all: false, profile_dirty: false, profile_saving: false, show_settings: false,
             split: true, zoom: 1., split_ratio: 0.5, divider_drag: false, show_paired: false,
@@ -243,7 +250,7 @@ impl PdfReader {
     fn start_load(&mut self, cx: &mut Context<Self>) {
         if self.loading { return; }
         self.loading = true; self.load_needed = false;
-        let source = self.source.clone(); let page = self.page; let stamp = self.epoch.stamp(); let digest = self.last_digest.clone();
+        let source = self.source.clone(); let page = self.page; let rotation = self.rotation; let stamp = self.epoch.stamp(); let digest = self.last_digest.clone();
         let task = cx.background_executor().spawn(async move {
             let result: anyhow::Result<Option<PreparedPage>> = (|| {
                 let (frame, raw_digest) = match source {
@@ -257,6 +264,7 @@ impl PdfReader {
                         (frame, raw_digest)
                     }
                 };
+                let frame = rotate::rotate_frame(frame, rotation);
                 let mut prepared = prepare(frame); prepared.raw_digest = raw_digest;
                 Ok(Some(prepared))
             })();

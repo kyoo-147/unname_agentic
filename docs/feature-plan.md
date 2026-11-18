@@ -89,11 +89,11 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | C18 | Chọn model/agent cho chat | [ ] | nhãn “Model · Auto” tĩnh |
 | C19 | Voice input / voice mode | [ ] | nút có, chưa nối |
 | C20 | OCR Tesseract dự phòng ngoài Windows OCR | [ ] | máy chưa cài; Windows OCR là engine duy nhất |
-| C21 | Xoay trang trong reader | [ ] | tài liệu ghi rõ là gap |
+| C21 | Xoay trang trong reader | [x] | Nút `Xoay trang` xoay ảnh + block theo 90°; unit test 2 case; ảnh `desktop-reader-vi-rotated.png` |
 | C22 | Xuất PDF/bản dịch | [x] | Native xuất trang hiện tại ra Markdown song ngữ cạnh bản gốc (đã chạy thật, toast + file UTF-8); web xuất .bilingual.txt; chưa xuất PDF/DOCX giữ layout |
 | C23 | Packaging + license bundle + ký số | [~] | từng đóng gói; chưa làm lại sau khi xoá editor |
 | C24 | Auto-update | [ ] | bị tắt có chủ đích |
-| C25 | Build lại + test lại toàn bộ trong phiên này | [x] | `cargo check` + `cargo test` 48 pass/1 ignored + build exe + ảnh Home/Reader, kể cả nút Xuất trang |
+| C25 | Build lại + test lại toàn bộ trong phiên này | [x] | `cargo check` + `cargo test` 50 pass/1 ignored + build exe + ảnh Home/Reader, Xuất trang, Xoay trang |
 
 ### D. Lõi dùng chung & chất lượng
 
@@ -150,9 +150,9 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 
 ## 5. Desktop verification 2026-11-18
 
-- Build: `cargo check` sạch; `cargo test --workspace` 48 pass / 1 ignored; `cargo build -p pdf_workspace` OK.
+- Build: `cargo check` sạch; `cargo test --workspace` 50 pass / 1 ignored; `cargo build -p pdf_workspace` OK.
 - Desktop backend: `cargo test --manifest-path desktop/Cargo.toml` 20 pass / 0 failed.
-- Ảnh: `artifacts/desktop-verify/desktop-{home,reader}-{vi,en,zh}.png` + `desktop-reader-vi-export.png`; chi tiết và hash trong [docs/desktop-verification.md](desktop-verification.md).
+- Ảnh: `artifacts/desktop-verify/desktop-{home,reader}-{vi,en,zh}.png` + `desktop-reader-vi-export.png` + `desktop-reader-vi-rotated.png`; chi tiết và hash trong [docs/desktop-verification.md](desktop-verification.md).
 - Export native: bấm `Xuất trang này` ghi file `*-page-1.bilingual.md` UTF-8 cạnh bản gốc trong thư viện; đã kiểm tra nội dung thật.
 - Web flow: 11 ảnh trong `artifacts/ui-flows/` + video `artifacts/ui-flows/demo-flow.webm`; e2e 16 test.
 - Defect còn mở: lần import đầu blank ở 18s (25s thì render); footer reader còn câu chẩn đoán tiếng Anh; chưa test ở 980px.

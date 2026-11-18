@@ -52,6 +52,7 @@ impl PdfReader {
             .child(div().text_color(Theme::text_caption()).child(format!("{:.0}%", self.zoom * 100.)))
             .child(ui::secondary_button("pdf-zoom-in", "+").on_click(cx.listener(|reader, _, _, cx| { reader.zoom = (reader.zoom + 0.15).min(3.); cx.notify(); })))
             .child(ui::secondary_button("pdf-split", if self.split { tr3("仅译文", "Translation only", "Chỉ bản dịch") } else { tr3("分栏视图", "Split view", "Chia đôi") }).on_click(cx.listener(|reader, _, _, cx| { reader.split = !reader.split; cx.notify(); })))
+            .child(ui::secondary_button("pdf-rotate", tr3("旋转页面", "Rotate page", "Xoay trang")).on_click(cx.listener(|reader, _, _, cx| reader.rotate_page(cx))))
             .child(ui::secondary_button("pdf-target", tr3("语言 / 提供方", "Language / provider", "Ngôn ngữ / nhà cung cấp")).on_click(cx.listener(|reader, _, _, cx| { reader.show_settings = !reader.show_settings; cx.notify(); })))
             .child(div().text_color(Theme::text_caption()).child(format!("→ {}", self.profile.target_language)))
             .child(ui::secondary_button("pdf-pause", if self.paused { tr3("继续", "Resume", "Tiếp tục") } else { tr3("暂停", "Pause", "Tạm dừng") }).on_click(cx.listener(|reader, _, _, cx| reader.toggle_pause(cx))))
