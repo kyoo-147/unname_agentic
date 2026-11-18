@@ -1219,27 +1219,26 @@ pub fn display_title(title: &str) -> String {
 
 /// Core diagnostics stay independent of UI language. Only known message templates
 /// are translated here; captured paths, document IDs and OS errors are preserved.
-pub fn diagnostic(message: &str) -> String { diagnostic_for(message, english()) }
+pub fn diagnostic(message: &str) -> String { diagnostic_for(message, crate::i18n::lang()) }
 
-fn diagnostic_for(message: &str, english: bool) -> String {
-    if !english { return message.to_string(); }
-    const TEMPLATES: &[(&str, &str)] = &[
-        ("无法读取文档索引：{}", "Could not read document index: {}"),
-        ("无法读取回收站索引：{}", "Could not read Trash index: {}"),
-        ("文档索引已损坏，已从备份恢复（原文件保留为 {}）", "Document index was damaged and restored from backup (original retained as {})."),
-        ("回收站索引已损坏，已从备份恢复（原文件保留为 {}）", "Trash index was damaged and restored from backup (original retained as {})."),
-        ("文档索引已损坏且没有可用备份，部分文档的置顶、层级等信息已重置（原文件保留为 {}）", "Document index was damaged with no usable backup. Some pins and document hierarchy were reset (original retained as {})."),
-        ("回收站索引已损坏且没有可用备份，部分文档的置顶、层级等信息已重置（原文件保留为 {}）", "Trash index was damaged with no usable backup. Some metadata was reset (original retained as {})."),
-        ("回收站已存在同名文档，未覆盖：{}", "A document with this ID already exists in Trash and was not overwritten: {}"),
-        ("文档库已存在同名文档，未覆盖：{}", "A document with this ID already exists in Documents and was not overwritten: {}"),
-        ("文档已移入回收站，文档索引清理失败：{}", "Document moved to Trash, but the document index could not be cleaned up: {}"),
-        ("回收站目录读取不完整：{}", "Could not fully read the Trash directory: {}"),
-        ("无法清理过期回收站文档 {}：{}", "Could not remove expired Trash document {}: {}"),
-        ("回收站索引保存失败：{}", "Could not save Trash index: {}"),
-        ("恢复文档 {} 失败，已恢复的文档保留在文档库", "Could not restore document {}. Documents already restored remain in Documents."),
-        ("文档已恢复，回收站索引清理失败：{}", "Document restored, but the Trash index could not be cleaned up: {}"),
+fn diagnostic_for(message: &str, lang: crate::i18n::Lang) -> String {
+    const TEMPLATES: &[(&str, &str, &str)] = &[
+        ("无法读取文档索引：{}", "Could not read document index: {}", "Không đọc được chỉ mục tài liệu: {}"),
+        ("无法读取回收站索引：{}", "Could not read Trash index: {}", "Không đọc được chỉ mục Thùng rác: {}"),
+        ("文档索引已损坏，已从备份恢复（原文件保留为 {}）", "Document index was damaged and restored from backup (original retained as {}).", "Chỉ mục tài liệu bị hỏng và đã khôi phục từ bản sao lưu (bản gốc giữ lại tại {})."),
+        ("回收站索引已损坏，已从备份恢复（原文件保留为 {}）", "Trash index was damaged and restored from backup (original retained as {}).", "Chỉ mục Thùng rác bị hỏng và đã khôi phục từ bản sao lưu (bản gốc giữ lại tại {})."),
+        ("文档索引已损坏且没有可用备份，部分文档的置顶、层级等信息已重置（原文件保留为 {}）", "Document index was damaged with no usable backup. Some pins and document hierarchy were reset (original retained as {}).", "Chỉ mục tài liệu bị hỏng và không có bản sao lưu dùng được; một số thông tin ghim/phân cấp đã được đặt lại (bản gốc giữ lại tại {})."),
+        ("回收站索引已损坏且没有可用备份，部分文档的置顶、层级等信息已重置（原文件保留为 {}）", "Trash index was damaged with no usable backup. Some metadata was reset (original retained as {}).", "Chỉ mục Thùng rác bị hỏng và không có bản sao lưu dùng được; một số siêu dữ liệu đã được đặt lại (bản gốc giữ lại tại {})."),
+        ("回收站已存在同名文档，未覆盖：{}", "A document with this ID already exists in Trash and was not overwritten: {}", "Đã có tài liệu cùng mã trong Thùng rác, không ghi đè: {}"),
+        ("文档库已存在同名文档，未覆盖：{}", "A document with this ID already exists in Documents and was not overwritten: {}", "Đã có tài liệu cùng mã trong Tài liệu, không ghi đè: {}"),
+        ("文档已移入回收站，文档索引清理失败：{}", "Document moved to Trash, but the document index could not be cleaned up: {}", "Đã chuyển tài liệu vào Thùng rác nhưng không dọn được chỉ mục tài liệu: {}"),
+        ("回收站目录读取不完整：{}", "Could not fully read the Trash directory: {}", "Không đọc đầy đủ thư mục Thùng rác: {}"),
+        ("无法清理过期回收站文档 {}：{}", "Could not remove expired Trash document {}: {}", "Không xoá được tài liệu Thùng rác quá hạn {}: {}"),
+        ("回收站索引保存失败：{}", "Could not save Trash index: {}", "Không lưu được chỉ mục Thùng rác: {}"),
+        ("恢复文档 {} 失败，已恢复的文档保留在文档库", "Could not restore document {}. Documents already restored remain in Documents.", "Không khôi phục được tài liệu {}; các tài liệu đã khôi phục vẫn còn trong Tài liệu"),
+        ("文档已恢复，回收站索引清理失败：{}", "Document restored, but the Trash index could not be cleaned up: {}", "Đã khôi phục tài liệu nhưng không dọn được chỉ mục Thùng rác: {}"),
     ];
-    for (source, target) in TEMPLATES {
+    for (source, english, vietnamese) in TEMPLATES {
         let parts: Vec<_> = source.split("{}").collect();
         let Some(mut rest) = message.strip_prefix(parts[0]) else { continue };
         let mut values = Vec::new();
@@ -1251,14 +1250,15 @@ fn diagnostic_for(message: &str, english: bool) -> String {
             rest = next;
         }
         if matched && rest.is_empty() {
+            let template = match lang { crate::i18n::Lang::Zh => source, crate::i18n::Lang::En => english, crate::i18n::Lang::Vi => vietnamese };
             let mut result = String::new();
-            let mut fragments = target.split("{}");
+            let mut fragments = template.split("{}");
             result.push_str(fragments.next().unwrap_or_default());
             for (value, fragment) in values.iter().zip(fragments) { result.push_str(value); result.push_str(fragment); }
             return result;
         }
     }
-    localize(message, true).to_string()
+    match lang { crate::i18n::Lang::Zh => message.to_string(), crate::i18n::Lang::En => localize(message, true).to_string(), crate::i18n::Lang::Vi => message.to_string() }
 }
 
 #[cfg(test)]
@@ -1298,10 +1298,12 @@ mod localization_tests {
     #[test]
     fn diagnostics_preserve_paths_and_identifiers() {
         let source = "无法清理过期回收站文档 我的笔记.xml：Permission denied";
-        assert_eq!(diagnostic_for(source, false), source);
-        assert_eq!(diagnostic_for(source, true), "Could not remove expired Trash document 我的笔记.xml: Permission denied");
-        assert_eq!(diagnostic_for("文档索引已损坏，已从备份恢复（原文件保留为 index.json.bad）", true), "Document index was damaged and restored from backup (original retained as index.json.bad).");
-        assert_eq!(diagnostic_for("unknown OS error", true), "unknown OS error");
+        assert_eq!(diagnostic_for(source, crate::i18n::Lang::Zh), source);
+        assert_eq!(diagnostic_for(source, crate::i18n::Lang::En), "Could not remove expired Trash document 我的笔记.xml: Permission denied");
+        assert_eq!(diagnostic_for(source, crate::i18n::Lang::Vi), "Không xoá được tài liệu Thùng rác quá hạn 我的笔记.xml: Permission denied");
+        assert_eq!(diagnostic_for("文档索引已损坏，已从备份恢复（原文件保留为 index.json.bad）", crate::i18n::Lang::En), "Document index was damaged and restored from backup (original retained as index.json.bad).");
+        assert_eq!(diagnostic_for("文档索引已损坏，已从备份恢复（原文件保留为 index.json.bad）", crate::i18n::Lang::Vi), "Chỉ mục tài liệu bị hỏng và đã khôi phục từ bản sao lưu (bản gốc giữ lại tại index.json.bad).");
+        assert_eq!(diagnostic_for("unknown OS error", crate::i18n::Lang::En), "unknown OS error");
     }
 
     #[test]

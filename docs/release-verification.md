@@ -19,11 +19,11 @@ cargo build --release --manifest-path native-shell/Cargo.toml -p pdf_workspace -
 Result: exit 0, 36 pre-existing warnings, 6m 38s cold build (31.7s after the first-import fix).
 
 - Executable: `pdf_workspace.exe`, 21,405,696 bytes
-- SHA-256: `8C1000D6CCBC43690751B5EB155A51247C95023124CBCE421606F90DF55C97DF`
+- SHA-256: `5205A16DCD9853EC5B07F8708FC70E77C20998EC8F43C6A11D7CFE8049696311`
 - Package: `dist/pdf-workspace-windows-x64-release-20261118-110746/`
 - Native-messaging host: `pdf-workspace-host.exe`, 478,208 bytes, SHA-256 `79713585756FC360B2CC9590C3FBE1B5769030DFDBAFBF4E841358BDC95AAF1C`
 - Zip: `dist/pdf-workspace-windows-x64-release-20261118-110746.zip`, 11.28 MB
-- Zip SHA-256: `718C60611DEEA1DB09C56FF19B1E5ECAB8A7CE98AA2B34320F4E6B92E2451227`
+- Zip SHA-256: `5C3D763FA81055E8D97E78E50E2189CF1A47AE81225461695B3268E5CA039C81`
 
 Package contents: executable, `pdfium.dll`, `pdf-workspace-host.exe`, `install-native-host.ps1`,
 root and upstream licenses, Lucide license, PDFium version and component licenses. The package is

@@ -82,7 +82,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | C11 | Live mirror: chọn cửa sổ/màn hình, capture, OCR Windows | [x] | docs; OCR 40 regions từng chạy |
 | C12 | Chống tự capture chính mình | [x] | WDA_EXCLUDEFROMCAPTURE; docs |
 | C13 | Cầu Chrome ↔ desktop, checksum, chống trùng | [x] | native bridge tests; docs |
-| C14 | Giao diện Việt/Anh/Trung đầy đủ | [~] | pass 1: 124 chuỗi `tr` → `tr3`; pass 2 đang dịch reader/tables/thời gian |
+| C14 | Giao diện Việt/Anh/Trung đầy đủ | [x] | 124 chuỗi `tr`, reader, shortcuts, thời gian, dialog phá huỷ, diagnostics đều 3 ngôn ngữ; brand/OS/provider error giữ nguyên |
 | C15 | Sáu bảng màu + Light/Dark/System | [x] | `themes.rs`; ảnh chụp |
 | C16 | Phím tắt + màn hình Shortcuts | [x] | `shortcuts.rs`; settings |
 | C17 | Chat hỏi tài liệu | [ ] | mới là UI giả: attach/skills/mic/voice hiện toast “coming next” |
