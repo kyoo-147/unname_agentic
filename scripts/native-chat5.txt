@@ -1,0 +1,5 @@
+wait 3200
+click 110 72
+wait 1300
+shot chat-compact
+quit

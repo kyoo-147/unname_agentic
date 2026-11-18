@@ -1,0 +1,5 @@
+wait 3000
+click 90 915
+wait 1200
+shot vi3-settings
+quit

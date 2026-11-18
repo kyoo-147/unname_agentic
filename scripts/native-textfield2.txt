@@ -1,0 +1,7 @@
+wait 3200
+click 950 26
+wait 800
+type openstax
+wait 900
+shot textfield-typed2
+quit

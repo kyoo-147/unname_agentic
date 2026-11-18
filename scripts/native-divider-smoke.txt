@@ -1,0 +1,26 @@
+resize 1440 940
+wait 3500
+reader-snapshot divider-initial
+assert-reader-ratio 0.5
+reader-divider 0.68
+wait 500
+assert-reader-ratio 0.68
+reader-snapshot divider-wide-source
+shot native-divider-wide-source
+wheel 1220 410 260
+wait 600
+assert-reader-ratio 0.68
+reader-snapshot divider-scrolled
+reader-divider 0.32
+wait 500
+assert-reader-ratio 0.32
+reader-snapshot divider-wide-target
+shot native-divider-wide-target
+click 590 75
+wait 500
+assert-reader-ratio 0.32
+reader-snapshot divider-zoomed
+click 160 70
+wait 300
+assert-reader-active false
+quit

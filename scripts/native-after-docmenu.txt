@@ -1,0 +1,6 @@
+wait 3200
+shot after-docmenu-home
+click 380 300
+wait 2500
+shot after-docmenu-reader
+quit

@@ -1,0 +1,12 @@
+wait 3200
+shot vi-home
+click 110 72
+wait 1200
+shot vi-chat
+click 110 168
+wait 1200
+shot vi-favorites
+click 90 915
+wait 1200
+shot vi-settings
+quit

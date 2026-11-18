@@ -1,0 +1,6 @@
+wait 3200
+shot after-branch-home
+click 110 168
+wait 1000
+shot after-branch-fav
+quit

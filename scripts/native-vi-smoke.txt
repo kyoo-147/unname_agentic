@@ -1,0 +1,5 @@
+wait 3200
+click 110 72
+wait 1400
+shot chat-vi
+quit

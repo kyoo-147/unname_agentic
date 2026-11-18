@@ -1,0 +1,12 @@
+wait 3500
+click 90 915
+wait 1200
+click 90 139
+wait 1200
+click 697 231
+wait 1500
+shot corpus-sage
+click 1127 131
+wait 1500
+shot corpus-dark
+quit

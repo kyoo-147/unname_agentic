@@ -1,0 +1,10 @@
+wait 3200
+key ctrl-j
+wait 900
+type openstax
+wait 900
+shot kb-search
+key ctrl-comma
+wait 1200
+shot kb-settings
+quit

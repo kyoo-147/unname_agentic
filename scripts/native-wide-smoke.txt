@@ -1,0 +1,5 @@
+wait 3200
+click 100 70
+wait 1500
+shot corpus-wide
+quit

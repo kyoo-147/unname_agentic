@@ -1,0 +1,5 @@
+wait 3200
+click 380 300
+wait 3000
+shot after-editor-open
+quit

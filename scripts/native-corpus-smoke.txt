@@ -1,0 +1,10 @@
+resize 1440 940
+wait 3000
+click 100 70
+wait 1200
+shot corpus-home
+click 90 915
+wait 1200
+shot corpus-settings
+quit
+

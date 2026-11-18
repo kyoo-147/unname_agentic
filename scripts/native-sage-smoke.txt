@@ -1,0 +1,5 @@
+wait 3200
+click 100 70
+wait 1400
+shot corpus-sage
+quit

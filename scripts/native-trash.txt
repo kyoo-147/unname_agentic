@@ -1,0 +1,5 @@
+wait 3200
+click 90 889
+wait 1200
+shot dest-trash2
+quit

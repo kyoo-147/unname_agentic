@@ -1,0 +1,17 @@
+resize 1440 940
+move 1415 920
+wait 4000
+assert-reader-active true
+shot product-reader-original
+click 159 70
+wait 800
+assert-reader-active false
+shot product-library
+click 411 210
+wait 3000
+assert-reader-active true
+shot product-reader
+click 830 75
+wait 500
+shot product-reader-settings
+quit

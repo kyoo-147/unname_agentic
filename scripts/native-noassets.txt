@@ -1,0 +1,6 @@
+wait 3500
+shot noassets-home
+click 110 72
+wait 1200
+shot noassets-chat
+quit

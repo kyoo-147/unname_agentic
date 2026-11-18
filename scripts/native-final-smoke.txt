@@ -1,0 +1,8 @@
+wait 3200
+click 110 72
+wait 1300
+shot final-chat
+click 110 104
+wait 1300
+shot final-home
+quit

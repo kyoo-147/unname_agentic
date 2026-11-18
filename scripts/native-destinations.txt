@@ -1,0 +1,11 @@
+wait 3200
+click 110 136
+wait 1000
+shot dest-recent
+click 110 232
+wait 1000
+shot dest-translate
+click 90 888
+wait 1000
+shot dest-trash
+quit

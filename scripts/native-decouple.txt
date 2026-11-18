@@ -1,0 +1,6 @@
+wait 3200
+shot decouple-home
+click 90 915
+wait 1200
+shot decouple-settings
+quit

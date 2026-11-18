@@ -1,0 +1,7 @@
+wait 3200
+key cmd-j
+wait 900
+type hello world
+wait 900
+shot textfield-typed
+quit

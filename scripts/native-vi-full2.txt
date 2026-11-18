@@ -1,0 +1,8 @@
+wait 3200
+click 110 168
+wait 1200
+shot vi2-favorites
+click 90 915
+wait 1200
+shot vi2-settings
+quit

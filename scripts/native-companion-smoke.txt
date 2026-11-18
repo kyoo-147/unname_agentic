@@ -1,0 +1,18 @@
+resize 1440 940
+wait 4200
+reader-snapshot companion-initial
+click 590 75
+click 590 75
+wait 600
+reader-snapshot companion-ready
+wait 3500
+reader-snapshot companion-followed
+shot native-companion-followed
+click 450 75
+wait 1500
+wheel 1220 410 150
+wait 1000
+reader-snapshot companion-native-edited
+wait 3000
+reader-snapshot companion-ended
+quit

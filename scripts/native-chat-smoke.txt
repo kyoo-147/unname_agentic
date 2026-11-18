@@ -1,0 +1,8 @@
+wait 3200
+click 110 70
+wait 1400
+shot chat-tab
+click 110 104
+wait 1200
+shot home-tab
+quit

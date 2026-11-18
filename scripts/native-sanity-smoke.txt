@@ -1,0 +1,3 @@
+wait 1600
+shot native-sanity
+quit
