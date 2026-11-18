@@ -739,6 +739,11 @@ impl Workspace {
         self.show_view(View::Chat, cx);
     }
 
+    pub fn show_chat_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_chat(cx);
+        self.chat.update(cx, |chat, cx| chat.focus(window, cx));
+    }
+
     pub fn show_view(&mut self, view: View, cx: &mut Context<Self>) {        self.cancel_shortcut_recording(cx);
         if view == View::Trash {
             self.trash = self.store.list_trash();

@@ -18,12 +18,12 @@ cargo build --release --manifest-path native-shell/Cargo.toml -p pdf_workspace -
 
 Result: exit 0, 36 pre-existing warnings, 6m 38s cold build (31.7s after the first-import fix).
 
-- Executable: `pdf_workspace.exe`, 21,731,328 bytes
-- SHA-256: `92AEF0B3093C6A156A65D0EC04F40496AD833813D3660176BC25F69E774A53B8`
+- Executable: `pdf_workspace.exe`, 21,613,568 bytes
+- SHA-256: `370792D4BD75C30F3446E3745FD81EBED69402185043E321305B98CB43A6B49C`
 - Package: `dist/pdf-workspace-windows-x64-release-20261118-110746/`
 - Native-messaging host: `pdf-workspace-host.exe`, 478,208 bytes, SHA-256 `79713585756FC360B2CC9590C3FBE1B5769030DFDBAFBF4E841358BDC95AAF1C`
 - Zip: `dist/pdf-workspace-windows-x64-release-20261118-110746.zip`, 11.34 MB
-- Zip SHA-256: `1F26FF10A7B5AA46A669DFE74F20383B2A0D8517D8746E85BAFAA7A01CA66`
+- Zip SHA-256: `6DEC726DE7D4EF8AF95ECF4ACADCA14BA7168A42CCCCD63E03ED6F97B6578765`
 
 Package contents: executable, `pdfium.dll`, `pdf-workspace-host.exe`, `install-native-host.ps1`,
 root and upstream licenses, Lucide license, PDFium version and component licenses. The package is
@@ -81,8 +81,10 @@ fallback are covered by two provider unit tests (`chat_system`). The fixture pro
 returns a canned translation, so the screenshot proves the UI and request path, not summary quality.
 Screenshot: `artifacts/desktop-chat-context5.png`.
 
-Still open: conversation history persistence, streaming, tool calls, selecting another page, and
-provider/model picker inside chat. Without a configured provider the view shows the provider error inline.
+Conversation history is persisted to `chat.json` (last 100 messages) and reloaded on the next launch;
+the restart was verified with the same two-message exchange and screenshot `artifacts/desktop-chat-history.png`.
+Still open: streaming, tool calls, selecting another page, and a provider/model picker inside chat.
+Without a configured provider the view shows the provider error inline.
 
 ## Limits
 

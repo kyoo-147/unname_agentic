@@ -4,11 +4,26 @@ use crate::theme::{self, Theme};
 use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use mirror_pdf_desktop::{model, provider};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub user: bool,
     pub text: String,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct StoredChat {
+    messages: Vec<ChatMessage>,
+}
+
+fn history_path() -> std::path::PathBuf { model::data_directory().join("chat.json") }
+
+fn load_history() -> Vec<ChatMessage> {
+    std::fs::read(history_path()).ok()
+        .and_then(|bytes| serde_json::from_slice::<StoredChat>(&bytes).ok())
+        .map(|stored| stored.messages.into_iter().rev().take(100).rev().collect())
+        .unwrap_or_default()
 }
 
 pub struct Chat {
@@ -30,11 +45,17 @@ impl Chat {
         let submit = cx.subscribe(&input, |this, _, event: &TextFieldEvent, cx| {
             if matches!(event, TextFieldEvent::Submit) { this.send(cx); }
         });
-        Self { input, messages: Vec::new(), busy: false, error: None, context: None, _submit: submit }
+        Self { input, messages: load_history(), busy: false, error: None, context: None, _submit: submit }
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.input.read(cx).focus_handle(cx));
+    }
+
+    fn persist(&self) {
+        let stored = StoredChat { messages: self.messages.iter().rev().take(100).rev().cloned().collect() };
+        if let Some(directory) = history_path().parent() { let _ = std::fs::create_dir_all(directory); }
+        if let Ok(json) = serde_json::to_vec_pretty(&stored) { let _ = std::fs::write(history_path(), json); }
     }
 
     pub fn set_context(&mut self, context: Option<(String, String)>, cx: &mut Context<Self>) {
@@ -42,6 +63,7 @@ impl Chat {
             self.messages.clear();
             self.error = None;
             self.context = context;
+            self.persist();
             cx.notify();
         }
     }
@@ -55,6 +77,7 @@ impl Chat {
         let question = self.input.read(cx).text.trim().to_string();
         if question.is_empty() || self.busy { return; }
         self.messages.push(ChatMessage { user: true, text: question });
+        self.persist();
         self.input.update(cx, |field, cx| field.set_text("", cx));
         self.busy = true;
         self.error = None;
@@ -76,6 +99,7 @@ impl Chat {
                     Ok(answer) => chat.messages.push(ChatMessage { user: false, text: answer }),
                     Err(error) => chat.error = Some(error),
                 }
+                chat.persist();
                 cx.notify();
             });
         }).detach();

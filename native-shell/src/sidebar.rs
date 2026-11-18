@@ -196,7 +196,7 @@ impl Workspace {
             div().flex().flex_col().gap(px(ROW_GAP))
             .child(
                 nav_row("nav-chat", "plus", "plus", crate::i18n::tr3("新对话", "New chat", "Trò chuyện mới"), chat_on)
-                    .on_click(cx.listener(|w, _, _, cx| w.show_chat(cx))),
+                    .on_click(cx.listener(|w, _, window, cx| w.show_chat_in(window, cx))),
             )
             .child(
                 nav_row("nav-home", "home", "home-filled", crate::i18n::tr3("主页", "Home", "Trang chủ"), home_on)
