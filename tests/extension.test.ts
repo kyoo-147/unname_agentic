@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MirrorController, type MirrorSession } from '../extension/controller';
+import { MirrorController, pdfPath, type MirrorSession } from '../extension/controller';
 
-function harness(enabled = true) {
+function harness(enabled = true, extra: { isOpen?: (id: number) => Promise<boolean>; close?: (id: number) => Promise<void> } = {}) {
   const sessions = new Map<number, MirrorSession>();
   const open = vi.fn(async (_url: string, _tab: number) => 90);
   const fetcher = vi.fn(async () => new Response('%PDF-1.7\nhello', { headers: { 'Content-Type': 'application/pdf' } }));
@@ -12,6 +12,7 @@ function harness(enabled = true) {
     open,
     viewerUrl: 'chrome-extension://test/index.html',
     fetcher,
+    ...extra,
   });
   return { controller, sessions, open, fetcher };
 }
@@ -60,5 +61,36 @@ describe('automatic PDF mirror', () => {
     const h = harness();
     for (const url of ['chrome://settings', 'data:application/pdf;base64,abc', 'blob:https://example.com/id']) await h.controller.detect(3, url, url);
     expect(h.open).not.toHaveBeenCalled();
+  });
+  it('opens an explicit context-menu request even when automatic mirrors are off', async () => {
+    const h = harness(false);
+    await h.controller.detect(3, 'https://example.com/a.pdf', 'https://example.com/a.pdf', { force: true });
+    expect(h.open).toHaveBeenCalledTimes(1);
+    expect(h.sessions.get(3)?.viewerTabId).toBe(90);
+  });
+  it('reopens a mirror whose viewer tab disappeared instead of trusting a stale session', async () => {
+    const alive = new Set([90]);
+    const h = harness(true, { isOpen: async id => alive.has(id) });
+    await h.controller.detect(3, 'https://example.com/a.pdf', 'https://example.com/a.pdf');
+    await h.controller.detect(3, 'https://example.com/a.pdf', 'https://example.com/a.pdf');
+    expect(h.open).toHaveBeenCalledTimes(1);
+    alive.clear();
+    await h.controller.detect(3, 'https://example.com/a.pdf', 'https://example.com/a.pdf');
+    expect(h.open).toHaveBeenCalledTimes(2);
+  });
+  it('closes the old viewer when the source navigates to a different document', async () => {
+    const close = vi.fn(async () => {});
+    const h = harness(true, { close });
+    await h.controller.detect(3, 'https://example.com/a.pdf', 'https://example.com/a.pdf');
+    await h.controller.navigate(3, 'https://example.com/other');
+    expect(close).toHaveBeenCalledWith(90);
+    expect(h.sessions.has(3)).toBe(false);
+  });
+  it('accepts only http, https and file PDF paths for context-menu validation', () => {
+    expect(pdfPath('https://example.com/report.pdf?token=1')).toBe(true);
+    expect(pdfPath('file:///C:/docs/report.PDF')).toBe(true);
+    expect(pdfPath('https://example.com/article')).toBe(false);
+    expect(pdfPath('chrome-extension://test/index.html?file=https://example.com/a.pdf')).toBe(false);
+    expect(pdfPath('data:application/pdf;base64,abc')).toBe(false);
   });
 });

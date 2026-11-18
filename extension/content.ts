@@ -1,6 +1,25 @@
 const seen = new Set<string>();
 let lastState = '';
 let applying = false;
+function showNotice(message: unknown): void {
+  if (typeof message !== 'string' || !message) return;
+  document.getElementById('mirror-notice')?.remove();
+  const notice = document.createElement('aside');
+  notice.id = 'mirror-notice';
+  notice.setAttribute('role', 'status');
+  notice.style.cssText = 'position:fixed;bottom:18px;right:18px;z-index:2147483647;max-width:340px;background:#102a24;color:#fff;padding:14px 16px;border:1px solid #73988b;border-radius:8px;font:13px/1.5 system-ui;box-shadow:0 4px 24px #0004';
+  const text = document.createElement('span');
+  text.textContent = message;
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.textContent = 'Đóng';
+  close.setAttribute('aria-label', 'Đóng thông báo');
+  close.style.cssText = 'display:block;margin-top:8px;cursor:pointer';
+  close.addEventListener('click', () => notice.remove());
+  notice.append(text, close);
+  document.documentElement.append(notice);
+  setTimeout(() => notice.remove(), 7000);
+}
 function scan(): void {
   void chrome.storage.local.get('mirror:enabled').then(config => {
     if (config['mirror:enabled'] !== true) return;
@@ -21,9 +40,10 @@ function scan(): void {
       hint.setAttribute('role', 'status');
       hint.style.cssText = 'position:fixed;bottom:18px;right:18px;z-index:2147483647;max-width:320px;background:#102a24;color:white;padding:14px;border:1px solid #73988b;border-radius:8px;font:13px/1.5 system-ui;box-shadow:0 4px 24px #0004';
       const text = document.createElement('span');
-      text.textContent = 'Canvas document detected. If no PDF mirror opens, use Mirror PDF’s extension action to capture the visible page. Capture does not unlock protected content.';
+      text.textContent = 'Trang này có thể đang tự vẽ tài liệu. Nếu không thấy bản dịch tự mở, hãy dùng biểu tượng Mirror PDF để chụp trang đang xem. Ảnh chụp không mở khoá được nội dung cần đăng nhập.';
       const close = document.createElement('button');
-      close.textContent = 'Dismiss';
+      close.type = 'button';
+      close.textContent = 'Đóng';
       close.style.cssText = 'display:block;margin-top:8px;cursor:pointer';
       close.addEventListener('click', () => hint.remove());
       hint.append(text, close);
@@ -35,6 +55,7 @@ let scanTimer: ReturnType<typeof setTimeout> | undefined;
 new MutationObserver(() => { clearTimeout(scanTimer); scanTimer = setTimeout(scan, 300); }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'data', 'type'] });
 chrome.runtime.onMessage.addListener(message => {
   if (message.type === 'mirror:rescan') { seen.clear(); scan(); }
+  if (message.type === 'mirror:notice') showNotice(message.message);
   if (message.type === 'mirror:view-state' && message.state) {
     const { page, fraction } = message.state as { page: number; fraction: number };
     const target = document.querySelector(`[data-page-number="${Number(page)}"]`);

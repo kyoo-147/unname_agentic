@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupTextItems, fitText } from '../src/pdf/layout';
+import { groupTextItems, fitText, nextRotation, normalizeRotation, rotatePageSize } from '../src/pdf/layout';
 
 describe('PDF geometry', () => {
   it('keeps columns separate and joins adjacent lines', () => {
@@ -31,5 +31,25 @@ describe('PDF geometry', () => {
     const result = fitText('中文測試中文測試', 30, 100, 12, text => text.length * 10);
     expect(result.overflow).toBe(false);
     expect(result.lines.join('')).toBe('中文測試中文測試');
+  });
+});
+
+describe('page rotation', () => {
+  it('normalizes rotation to quarter turns', () => {
+    expect(normalizeRotation(0)).toBe(0);
+    expect(normalizeRotation(90)).toBe(90);
+    expect(normalizeRotation(450)).toBe(90);
+    expect(normalizeRotation(-90)).toBe(270);
+    expect(normalizeRotation(44)).toBe(0);
+    expect(normalizeRotation(46)).toBe(90);
+    expect(normalizeRotation(Number.NaN)).toBe(0);
+  });
+  it('advances rotation and swaps page dimensions for quarter turns', () => {
+    expect(nextRotation(0)).toBe(90);
+    expect(nextRotation(270)).toBe(0);
+    expect(nextRotation(0,-90)).toBe(270);
+    expect(rotatePageSize({ width:600, height:800 },90)).toEqual({ width:800, height:600 });
+    expect(rotatePageSize({ width:600, height:800 },180)).toEqual({ width:600, height:800 });
+    expect(rotatePageSize({ width:600, height:800 },270)).toEqual({ width:800, height:600 });
   });
 });

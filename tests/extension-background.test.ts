@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import manifest from '../extension/manifest.json';
 
 type Listener = (...args: any[]) => any;
 function event() {
@@ -19,13 +20,18 @@ async function install() {
     runtime: { id: 'test', getURL: (path: string) => `chrome-extension://test/${path}`, onMessage: event(), onInstalled: event(), onStartup: event(), connectNative: vi.fn<() => any>(() => { throw new Error('Host not registered'); }), sendMessage: vi.fn(async () => ({})) },
     storage: { local: storage(local), session: storage(session), onChanged: event() },
     tabs: {
-      get: vi.fn(async (id: number) => ({ id, url: 'https://example.com/download', index: 0 })),
+      get: vi.fn(async (id: number) => ({ id, url: 'https://example.com/download', index: 0, active: true, windowId: 1 })),
       create: vi.fn(async () => ({ id: 90 })),
+      update: vi.fn(async () => ({})),
+      remove: vi.fn(async () => {}),
+      captureVisibleTab: vi.fn(async () => 'data:image/png;base64,' + 'A'.repeat(64)),
       query: vi.fn(async (): Promise<Array<{ id: number; url: string; index: number }>> => []), sendMessage: vi.fn(async () => ({})), onUpdated: event(), onRemoved: event(),
     },
     webRequest: { onHeadersReceived: event() },
     scripting: { executeScript: vi.fn(async () => [{ result: ['https://example.com/embedded.pdf'] }]) },
     action: { setBadgeText: vi.fn(async () => {}), setBadgeBackgroundColor: vi.fn(async () => {}) },
+    commands: { onCommand: event() },
+    contextMenus: { create: vi.fn(), removeAll: vi.fn((callback?: () => void) => callback?.()), onClicked: event() },
   };
   vi.stubGlobal('chrome', chrome);
   await import('../extension/background');
@@ -123,7 +129,7 @@ describe('Chrome extension event and message boundaries', () => {
     const h = await install(); const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
     h.session['mirror:session:3'] = { sourceTabId: 3, viewerTabId: 90, documentUrl: 'https://example.com/download', pdfUrl: 'https://example.com/download' };
     h.chrome.tabs.query.mockResolvedValue([{ id: 3, url: 'https://example.com/download', index: 0 }]);
-    h.chrome.tabs.get.mockImplementation(async id => ({ id, index: 0, url: id === 90 ? 'chrome-extension://test/index.html?sourceTab=3' : 'https://example.com/download' }));
+    h.chrome.tabs.get.mockImplementation(async id => ({ id, index: 0, active: true, windowId: 1, url: id === 90 ? 'chrome-extension://test/index.html?sourceTab=3' : 'https://example.com/download' }));
     const result = await h.message({ type: 'mirror:desktop-open', url: 'https://unrelated.test/private' }, { id: 'test', tab: { id: 91 }, url: 'chrome-extension://test/popup.html', frameId: 0 });
     expect(result.ok).toBe(false); expect(result.error).toContain('unavailable');
     expect(h.chrome.runtime.connectNative).toHaveBeenCalledOnce(); expect(fetcher).not.toHaveBeenCalled();
@@ -149,7 +155,7 @@ describe('Chrome extension event and message boundaries', () => {
       vi.stubGlobal('fetch', vi.fn(async () => new Response('%PDF-1.7\nsynthetic')));
       h.session['mirror:session:3'] = { sourceTabId: 3, viewerTabId: 90, documentUrl: 'https://example.com/download', pdfUrl: 'https://example.com/download' };
       h.chrome.tabs.query.mockResolvedValue([{ id: 3, url: 'https://example.com/download', index: 0 }]);
-      h.chrome.tabs.get.mockImplementation(async id => ({ id, index: 0, url: id === 90 ? 'chrome-extension://test/index.html?sourceTab=3' : 'https://example.com/download' }));
+      h.chrome.tabs.get.mockImplementation(async id => ({ id, index: 0, active: true, windowId: 1, url: id === 90 ? 'chrome-extension://test/index.html?sourceTab=3' : 'https://example.com/download' }));
       const popup = { id: 'test', tab: { id: 91 }, url: 'chrome-extension://test/popup.html', frameId: 0 };
       expect((await h.message({ type: 'mirror:desktop-open' }, popup)).ok).toBe(true);
       await vi.advanceTimersByTimeAsync(1000);
@@ -168,6 +174,100 @@ describe('Chrome extension event and message boundaries', () => {
     const h = await install();
     const result = await h.message({ type: 'mirror:open-capture', image: 'data:image/png;base64,abc', sourceTabId: 3 });
     expect(result.ok).toBe(false);
+    expect(h.chrome.tabs.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('context menu, commands, badge and capture contract', () => {
+  it('declares both commands and only the minimal contextMenus addition', () => {
+    expect(manifest.commands['toggle-mirror']?.suggested_key.default).toBe('Ctrl+Shift+M');
+    expect(manifest.commands['capture-page']?.suggested_key.default).toBe('Ctrl+Shift+Y');
+    expect(manifest.permissions).toContain('contextMenus');
+    expect(manifest.host_permissions).toEqual(['http://*/*', 'https://*/*', 'file:///*']);
+    expect(manifest.description).toMatch(/chụp/i);
+  });
+  it('registers the Vietnamese PDF context menu on install', async () => {
+    const h = await install();
+    h.chrome.runtime.onInstalled.fire({ reason: 'install' });
+    expect(h.chrome.contextMenus.create).toHaveBeenCalledWith(expect.objectContaining({ id: 'mirror-open', title: 'Mở bản dịch Mirror', contexts: ['page', 'link'] }));
+  });
+  it('opens a mirror from the context menu for an authorized PDF page', async () => {
+    const h = await install();
+    h.chrome.contextMenus.onClicked.fire({ menuItemId: 'mirror-open', tabId: 3, pageUrl: 'https://example.com/a.pdf' }, { id: 3, url: 'https://example.com/a.pdf', index: 0, active: true });
+    await vi.waitFor(() => expect(h.chrome.tabs.create).toHaveBeenCalledTimes(1));
+    expect(h.chrome.tabs.create).toHaveBeenCalledWith(expect.objectContaining({ url: 'chrome-extension://test/index.html?file=https%3A%2F%2Fexample.com%2Fa.pdf&sourceTab=3', openerTabId: 3 }));
+    expect(h.session['mirror:session:3']).toMatchObject({ sourceTabId: 3, pdfUrl: 'https://example.com/a.pdf' });
+  });
+  it('notifies instead of mirroring a page that is not a PDF source', async () => {
+    const h = await install();
+    h.chrome.contextMenus.onClicked.fire({ menuItemId: 'mirror-open', tabId: 3, pageUrl: 'https://example.com/article' }, { id: 3, url: 'https://example.com/article', index: 0, active: true });
+    await vi.waitFor(() => expect(h.chrome.tabs.sendMessage).toHaveBeenCalledWith(3, expect.objectContaining({ type: 'mirror:notice', message: expect.stringContaining('PDF') })));
+    expect(h.chrome.tabs.create).not.toHaveBeenCalled();
+  });
+  it('focuses the existing mirror instead of opening a duplicate on context click', async () => {
+    const h = await install();
+    h.session['mirror:session:3'] = { sourceTabId: 3, viewerTabId: 90, documentUrl: 'https://example.com/a.pdf', pdfUrl: 'https://example.com/a.pdf' };
+    h.chrome.contextMenus.onClicked.fire({ menuItemId: 'mirror-open', tabId: 3, pageUrl: 'https://example.com/a.pdf' }, { id: 3, url: 'https://example.com/a.pdf', index: 0, active: true });
+    await vi.waitFor(() => expect(h.chrome.tabs.update).toHaveBeenCalledWith(90, { active: true }));
+    expect(h.chrome.tabs.create).not.toHaveBeenCalled();
+  });
+  it('toggles automatic mirrors from the keyboard command and persists consent', async () => {
+    const h = await install();
+    const tab = { id: 3, url: 'https://example.com/download', active: true, windowId: 1 };
+    h.chrome.commands.onCommand.fire('toggle-mirror', tab);
+    await vi.waitFor(() => expect(h.local['mirror:enabled']).toBe(true));
+    expect(h.local['mirror:consentVersion']).toBe(1);
+    h.chrome.commands.onCommand.fire('toggle-mirror', tab);
+    await vi.waitFor(() => expect(h.local['mirror:enabled']).toBe(false));
+  });
+  it('shows the open mirror count on the badge and clears it when mirrors close', async () => {
+    const h = await install();
+    h.session['mirror:session:3'] = { sourceTabId: 3, viewerTabId: 90, documentUrl: 'https://example.com/a.pdf', pdfUrl: 'https://example.com/a.pdf' };
+    h.session['mirror:session:4'] = { sourceTabId: 4, viewerTabId: 91, documentUrl: 'https://example.com/b.pdf', pdfUrl: 'https://example.com/b.pdf' };
+    h.chrome.storage.onChanged.fire({}, 'session');
+    await vi.waitFor(() => expect(h.chrome.action.setBadgeText).toHaveBeenLastCalledWith({ text: '2' }));
+    delete h.session['mirror:session:4'];
+    h.chrome.storage.onChanged.fire({}, 'session');
+    await vi.waitFor(() => expect(h.chrome.action.setBadgeText).toHaveBeenLastCalledWith({ text: '1' }));
+    delete h.session['mirror:session:3'];
+    h.chrome.storage.onChanged.fire({}, 'session');
+    await vi.waitFor(() => expect(h.chrome.action.setBadgeText).toHaveBeenLastCalledWith({ text: '' }));
+  });
+  it('closes the mirror viewer when its source tab closes and clears the badge', async () => {
+    const h = await install();
+    h.session['mirror:session:3'] = { sourceTabId: 3, viewerTabId: 90, documentUrl: 'https://example.com/a.pdf', pdfUrl: 'https://example.com/a.pdf' };
+    h.chrome.tabs.onRemoved.fire(3, {});
+    await vi.waitFor(() => expect(h.chrome.tabs.remove).toHaveBeenCalledWith(90));
+    await vi.waitFor(() => expect(h.session['mirror:session:3']).toBeUndefined());
+    await vi.waitFor(() => expect(h.chrome.action.setBadgeText).toHaveBeenLastCalledWith({ text: '' }));
+  });
+  it('captures the visible page from the keyboard command and hands it to only that viewer once', async () => {
+    const h = await install();
+    h.chrome.commands.onCommand.fire('capture-page', { id: 3, url: 'https://example.com/article', active: true, windowId: 1 });
+    await vi.waitFor(() => expect(h.chrome.tabs.create).toHaveBeenCalledWith(expect.objectContaining({ url: 'chrome-extension://test/index.html?capture=1&sourceTab=3', openerTabId: 3 })));
+    expect(h.chrome.runtime.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'mirror:capture-ready', targetTabId: 90, sourceTabId: 3 }));
+    const capture = await h.message({ type: 'mirror:get-capture' });
+    expect(capture).toMatchObject({ ok: true, sourceTabId: 3, captureId: expect.any(String) });
+    expect(capture.image).toMatch(/^data:image\/png;base64,/);
+    expect((await h.message({ type: 'mirror:get-capture' })).ok).toBe(false);
+  });
+  it('expires an unredeemed capture and rejects mismatched or untrusted readers', async () => {
+    const h = await install();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      h.chrome.commands.onCommand.fire('capture-page', { id: 3, url: 'https://example.com/article', active: true, windowId: 1 });
+      await vi.waitFor(() => expect(h.chrome.tabs.create).toHaveBeenCalledTimes(1));
+      expect((await h.message({ type: 'mirror:get-capture' }, { id: 'test', tab: { id: 3 }, url: 'https://example.com/article', frameId: 0 })).ok).toBe(false);
+      expect((await h.message({ type: 'mirror:get-capture', captureId: 'other' })).ok).toBe(false);
+      now.mockReturnValue(1_000_000 + 120_001);
+      expect((await h.message({ type: 'mirror:get-capture' })).ok).toBe(false);
+    } finally { now.mockRestore(); }
+  });
+  it('rejects non-PNG and oversized capture payloads from the popup path', async () => {
+    const h = await install();
+    const popup = { id: 'test', tab: { id: 91 }, url: 'chrome-extension://test/popup.html', frameId: 0 };
+    expect((await h.message({ type: 'mirror:open-capture', sourceTabId: 3, image: 'data:image/jpeg;base64,AAAA' }, popup)).ok).toBe(false);
+    expect((await h.message({ type: 'mirror:open-capture', sourceTabId: 3, image: 'data:image/png;base64,' + 'A'.repeat(20_000_000) }, popup)).ok).toBe(false);
     expect(h.chrome.tabs.create).not.toHaveBeenCalled();
   });
 });

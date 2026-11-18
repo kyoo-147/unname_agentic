@@ -29,6 +29,55 @@ export function groupTextItems(items: PdfTextItem[], viewport: number[], page: n
   return blocks;
 }
 
+export type PageRotation = 0 | 90 | 180 | 270;
+export function normalizeRotation(value: number): PageRotation {
+  if (!Number.isFinite(value)) return 0;
+  return ((((Math.round(value / 90) * 90) % 360) + 360) % 360) as PageRotation;
+}
+export function nextRotation(current: number, delta = 90): PageRotation {
+  return normalizeRotation(current + delta);
+}
+export function rotatePageSize(size: { width: number; height: number }, rotation: number): { width: number; height: number } {
+  const quarter = normalizeRotation(rotation) % 180 !== 0;
+  return quarter ? { width:size.height, height:size.width } : { width:size.width, height:size.height };
+}
+
+export interface PageTextItem extends PdfTextItem { hasEOL?: boolean }
+export interface SearchMatch { page: number; snippet: string; index: number }
+export function readPageTextItems(items: readonly unknown[]): PageTextItem[] {
+  return items.flatMap(item => {
+    if (!item || typeof item !== 'object' || !('str' in item)) return [];
+    const candidate = item as Record<string, unknown>;
+    const str = typeof candidate.str === 'string' ? candidate.str : '';
+    const transform = Array.isArray(candidate.transform) && candidate.transform.every(value => typeof value === 'number') ? candidate.transform as number[] : [1,0,0,1,0,0];
+    const width = typeof candidate.width === 'number' ? candidate.width : 0;
+    const height = typeof candidate.height === 'number' ? candidate.height : 0;
+    return [{ str, transform, width, height, dir:typeof candidate.dir === 'string' ? candidate.dir : undefined, fontName:typeof candidate.fontName === 'string' ? candidate.fontName : undefined, hasEOL:candidate.hasEOL === true }];
+  });
+}
+export function searchTextPage(items: readonly { str: string }[], page: number, query: string): SearchMatch | null {
+  const needle = foldSearchText(query).text;
+  if (!needle) return null;
+  const text = items.map(item => item.str).join(' ');
+  const folded = foldSearchText(text);
+  const at = folded.text.indexOf(needle);
+  if (at < 0) return null;
+  const start = folded.map[at] ?? 0;
+  const end = (folded.map[at + needle.length - 1] ?? start) + 1;
+  const from = Math.max(0,start - 64);
+  const to = Math.min(text.length,end + 64);
+  return { page, snippet:text.slice(from,to).replace(/\s+/g,' ').trim(), index:start };
+}
+export function foldSearchText(input: string): { text: string; map: number[] } {
+  let text = '';
+  const map: number[] = [];
+  for (let index = 0; index < input.length; index++) {
+    const folded = input[index]!.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/gi,'d').toLowerCase();
+    for (const character of folded) { text += character; map.push(index); }
+  }
+  return { text, map };
+}
+
 export interface TextFit { lines: string[]; fontSize: number; lineHeight: number; overflow: boolean }
 export function fitText(text: string, width: number, height: number, preferred: number, measure: (text: string, size: number) => number, minimum = 7): TextFit {
   let result: TextFit = { lines:[text], fontSize:preferred, lineHeight:preferred*1.15, overflow:true };

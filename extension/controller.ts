@@ -6,6 +6,7 @@ export interface MirrorSession {
 }
 
 export interface Sender { tabId?: number; url?: string }
+export interface DetectOptions { force?: boolean }
 interface Dependencies {
   enabled(): Promise<boolean>;
   load(id: number): Promise<MirrorSession | undefined>;
@@ -13,6 +14,8 @@ interface Dependencies {
   open(url: string, sourceTabId: number): Promise<number>;
   viewerUrl: string;
   fetcher: typeof fetch;
+  isOpen?(viewerTabId: number): Promise<boolean>;
+  close?(viewerTabId: number): Promise<void>;
 }
 
 export function sourceUrl(value: string): string | undefined {
@@ -24,20 +27,39 @@ export function sourceUrl(value: string): string | undefined {
   } catch { return; }
 }
 
+export function pdfPath(value: string | undefined): boolean {
+  const url = sourceUrl(value ?? '');
+  if (!url) return false;
+  try { return /\.pdf$/i.test(new URL(url).pathname); } catch { return false; }
+}
+
 export class MirrorController {
   private pending = new Map<number, Promise<void>>();
   constructor(private readonly deps: Dependencies) {}
 
-  async detect(tabId: number, documentUrl: string, candidate: string): Promise<void> {
+  async detect(tabId: number, documentUrl: string, candidate: string, options: DetectOptions = {}): Promise<void> {
     const previous = this.pending.get(tabId) ?? Promise.resolve();
     const next = previous.catch(() => {}).then(async () => {
       const pdfUrl = sourceUrl(candidate);
-      if (tabId < 0 || !pdfUrl || !sourceUrl(documentUrl) || !await this.deps.enabled()) return;
+      const document = sourceUrl(documentUrl);
+      if (tabId < 0 || !pdfUrl || !document) return;
+      if (!options.force && !await this.deps.enabled()) return;
       const current = await this.deps.load(tabId);
-      if (current && current.documentUrl === sourceUrl(documentUrl) && current.pdfUrl === pdfUrl) return;
+      if (current && current.documentUrl === document && current.pdfUrl === pdfUrl) {
+        if (!this.deps.isOpen || await this.deps.isOpen(current.viewerTabId)) return;
+        await this.deps.save(tabId, undefined);
+      } else if (current && this.deps.close) {
+        await this.deps.save(tabId, undefined);
+        await this.deps.close(current.viewerTabId).catch(() => {});
+      }
       const viewer = `${this.deps.viewerUrl}?file=${encodeURIComponent(pdfUrl)}&sourceTab=${tabId}`;
       const viewerTabId = await this.deps.open(viewer, tabId);
-      await this.deps.save(tabId, { sourceTabId: tabId, documentUrl: sourceUrl(documentUrl)!, pdfUrl, viewerTabId });
+      try {
+        await this.deps.save(tabId, { sourceTabId: tabId, documentUrl: document, pdfUrl, viewerTabId });
+      } catch (error) {
+        await this.deps.close?.(viewerTabId).catch(() => {});
+        throw error;
+      }
     });
     this.pending.set(tabId, next);
     try { await next; } finally { if (this.pending.get(tabId) === next) this.pending.delete(tabId); }
@@ -46,7 +68,9 @@ export class MirrorController {
   async navigate(tabId: number, url: string): Promise<void> {
     await this.pending.get(tabId)?.catch(() => {});
     const session = await this.deps.load(tabId);
-    if (session && session.documentUrl !== sourceUrl(url)) await this.deps.save(tabId, undefined);
+    if (!session || session.documentUrl === sourceUrl(url)) return;
+    await this.deps.save(tabId, undefined);
+    await this.deps.close?.(session.viewerTabId).catch(() => {});
   }
 
   async authorize(sender: Sender): Promise<MirrorSession> {

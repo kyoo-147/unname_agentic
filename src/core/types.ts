@@ -48,6 +48,7 @@ export interface TranslationResult {
   text: string;
   provider: ProviderKind;
   cached: boolean;
+  characterCount: number;
 }
 
 export interface ViewportAnchor {

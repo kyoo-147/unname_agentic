@@ -47,7 +47,8 @@ $files = @(
     'native-shell\Cargo.toml', 'native-shell\Cargo.lock', 'native-shell\build.rs',
     'native-shell\rust-toolchain.toml', 'native-shell\LICENSE', 'native-shell\THIRD_PARTY.md',
     'native-shell\.gitattributes', 'desktop\Cargo.toml', 'desktop\Cargo.lock',
-    'desktop\runtime\LICENSE', 'desktop\runtime\VERSION'
+    'desktop\runtime\LICENSE', 'desktop\runtime\VERSION',
+    'LICENSE', '.github\workflows\ci.yml'
 )
 
 $copied = 0

@@ -1,0 +1,3 @@
+# Worker profile overlay: the product agents do not need the KiCAD tool server.
+- id: mcp-kicad
+  disabled: true

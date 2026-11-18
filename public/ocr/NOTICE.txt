@@ -1,0 +1,26 @@
+Vendored OCR assets for Mirror PDF
+==================================
+
+These files let browser-side OCR run without downloading model data from a CDN.
+
+Tesseract.js worker
+- worker.min.js from tesseract.js 7.0.0 (Apache-2.0)
+- https://github.com/naptha/tesseract.js
+- License: LICENSE-tesseract.js.txt
+
+Tesseract core (WebAssembly, LSTM-only builds)
+- tesseract-core-lstm.wasm.js
+- tesseract-core-simd-lstm.wasm.js
+- tesseract-core-relaxedsimd-lstm.wasm.js
+- from tesseract.js-core 7.0.0 (Apache-2.0)
+- https://github.com/naptha/tesseract.js-core
+- License: LICENSE-tesseract-core.txt
+- The engine picks the SIMD/relaxed-SIMD build supported by the browser.
+
+Language data (tessdata_fast, integer LSTM models)
+- eng.traineddata, 4,113,088 bytes
+- vie.traineddata, 531,275 bytes
+- https://github.com/tesseract-ocr/tessdata_fast (Apache-2.0)
+
+Total vendored size is about 15.7 MB, below the 20 MB budget. The raw
+.traineddata files are served with gzip disabled (see createTesseractEngine).

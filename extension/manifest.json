@@ -2,12 +2,22 @@
   "manifest_version": 3,
   "name": "Mirror PDF Translator",
   "version": "0.1.0",
-  "description": "Automatically open a translated PDF mirror after opt-in. Keep the original tab untouched.",
+  "description": "Tự động mở bản dịch song song cho PDF trên web, kèm chụp trang đang xem khi tài liệu không đọc được trực tiếp.",
   "minimum_chrome_version": "120",
-  "permissions": ["storage", "tabs", "webRequest", "scripting", "activeTab", "nativeMessaging"],
+  "permissions": ["storage", "tabs", "webRequest", "scripting", "activeTab", "nativeMessaging", "contextMenus"],
   "host_permissions": ["http://*/*", "https://*/*", "file:///*"],
   "background": {"service_worker": "background.js", "type": "module"},
-  "action": {"default_title": "Mirror PDF · enable or capture", "default_popup": "popup.html"},
+  "action": {"default_title": "Mirror PDF · bật tự động hoặc chụp trang", "default_popup": "popup.html"},
+  "commands": {
+    "toggle-mirror": {
+      "suggested_key": {"default": "Ctrl+Shift+M", "mac": "Command+Shift+M"},
+      "description": "Bật hoặc tắt tự động mở bản dịch"
+    },
+    "capture-page": {
+      "suggested_key": {"default": "Ctrl+Shift+Y", "mac": "Command+Shift+Y"},
+      "description": "Chụp trang đang xem và mở bản dịch"
+    }
+  },
   "content_scripts": [{"matches": ["http://*/*", "https://*/*", "file:///*"], "js": ["content.js"], "run_at": "document_idle", "all_frames": false}],
   "content_security_policy": {"extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"}
 }
