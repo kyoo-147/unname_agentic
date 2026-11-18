@@ -16,6 +16,21 @@ pub enum PdfReaderEvent { Location(u16), BrowserLocation { page: u16, fraction: 
 #[derive(Clone)]
 enum Source { Pdf(PathBuf), Capture(CaptureSource) }
 
+impl Source {
+    /// One log token: no whitespace and no `=`, so `key=value` parsing survives a
+    /// capture title such as `Quarterly report · Acrobat`.
+    fn log_label(&self) -> String {
+        let raw = match self {
+            Self::Pdf(path) => path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string()),
+            Self::Capture(source) => source.label(),
+        };
+        let mut label = String::new();
+        for ch in raw.chars().take(80) { label.push(if ch.is_whitespace() || ch == '=' { '_' } else { ch }); }
+        if label.is_empty() { label.push_str("unknown"); }
+        label
+    }
+}
+
 struct CleanPatch { image: Arc<RenderImage>, rect: model::BlockRect, text_color: Hsla }
 
 struct PreparedPage {
@@ -45,6 +60,41 @@ fn prepare(frame: PageFrame) -> PreparedPage {
         Some(CleanPatch { image: render_image(pixels), rect, text_color: if dark { white() } else { black() } })
     }).collect();
     PreparedPage { raw_digest: frame.document_digest.clone(), frame, original, patches }
+}
+
+/// OCUL: one INFO line per prepared page frame, the measurement the desktop
+/// harness under `artifacts/desktop-test/measure` parses. Keep the prefix and
+/// the field names stable:
+/// `ocr page=<1-based> pages=<n> scanned=<0|1> ran=<0|1> ms=<n> regions=<n>
+/// confidence=<f|na> source=<token> doc=<digest>`. Keep it on one line.
+///
+/// `ms` is the call that prepared the frame: PDFium raster plus Windows OCR for
+/// a scanned PDF, screen grab plus Windows OCR for a capture. Windows OCR
+/// reports no per-word confidence, so `confidence=na` says that instead of
+/// inventing a number the engine never produced. `scanned=1` marks a page whose
+/// text layer was empty, and `ran=0` with `scanned=1` is a failed OCR. Nothing
+/// here changes behaviour: the frame is already built when this runs.
+///
+/// `source` is the name the reader opened, which for a library document is the
+/// uuid-named retained copy under `sources/`; `doc` is the first 16 hex of the
+/// document digest, so a line still identifies its PDF when that name does not.
+fn log_prepared_page(page: u16, label: &str, pdf: bool, elapsed: Duration, frame: &PageFrame) {
+    let quality = frame.quality.as_str();
+    let failed = quality.contains("OCR unavailable");
+    let ran = quality.contains("local OCR") || quality.contains("Windows OCR");
+    let scanned = pdf && (quality.starts_with("Scanned PDF") || failed);
+    log::info!(
+        target: "pdf_workspace",
+        "ocr page={} pages={} scanned={} ran={} ms={} regions={} confidence=na source={} doc={}",
+        u32::from(page) + 1,
+        frame.page_count,
+        u8::from(scanned),
+        u8::from(ran),
+        elapsed.as_millis(),
+        frame.blocks.len(),
+        label,
+        frame.document_digest.get(..16).unwrap_or(frame.document_digest.as_str())
+    );
 }
 
 struct ProfileFields {
@@ -265,6 +315,9 @@ impl PdfReader {
         let source = self.source.clone(); let page = self.page; let rotation = self.rotation; let stamp = self.epoch.stamp(); let digest = self.last_digest.clone();
         let task = cx.background_executor().spawn(async move {
             let result: anyhow::Result<Option<PreparedPage>> = (|| {
+                let pdf = matches!(source, Source::Pdf(_));
+                let label = source.log_label();
+                let frame_started = Instant::now();
                 let (frame, raw_digest) = match source {
                     Source::Pdf(path) => { let frame = pdf::load_page(&path, page, None)?; let digest = frame.document_digest.clone(); (frame, digest) },
                     Source::Capture(source) => {
@@ -276,7 +329,9 @@ impl PdfReader {
                         (frame, raw_digest)
                     }
                 };
+                let frame_ms = frame_started.elapsed();
                 let frame = rotate::rotate_frame(frame, rotation);
+                log_prepared_page(page, &label, pdf, frame_ms, &frame);
                 let mut prepared = prepare(frame); prepared.raw_digest = raw_digest;
                 Ok(Some(prepared))
             })();

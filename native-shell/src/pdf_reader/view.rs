@@ -1,7 +1,19 @@
 use super::*;
+use crate::ui::TipExt;
 
-fn quality_label(quality: &str) -> String {
-    match quality {
+/// The status line's quality text: what to show, and the original English
+/// sentence to keep one hover away when the label no longer reads as it.
+///
+/// `mirror_pdf_desktop` writes `PageFrame::quality` as an English sentence
+/// (`pdf::load_page`, `capture::recognize_frame`), and the footer used to print
+/// it straight through — an English sentence in a Vietnamese or Chinese window.
+/// Every sentence those two functions can produce is mapped below; anything
+/// else gets a short translated label instead, so raw English never reaches the
+/// status line. Either way the unrecognised original stays reachable through
+/// the tooltip.
+fn quality_label(quality: &str) -> (String, Option<String>) {
+    if quality.trim().is_empty() { return (String::new(), None); }
+    let label = match quality {
         "PDF text removed; artwork retained. Inspect complex clipping and raster text." => tr3(
             "PDF 文本已移除；保留图像。请检查复杂裁剪和光栅文本。",
             "PDF text removed; artwork retained. Inspect complex clipping and raster text.",
@@ -12,8 +24,56 @@ fn quality_label(quality: &str) -> String {
             "No extractable text. Local OCR required.",
             "Không có chữ để trích xuất. Cần OCR cục bộ.",
         ).to_string(),
-        other => other.to_string(),
+        "Scanned PDF · local OCR · paired text preserves original raster artwork" => tr3(
+            "扫描版 PDF · 本地 OCR · 对照文本保留原始光栅图像",
+            "Scanned PDF · local OCR · paired text preserves original raster artwork",
+            "PDF quét · OCR cục bộ · văn bản song song giữ nguyên ảnh gốc",
+        ).to_string(),
+        other => quality_variant(other).unwrap_or_else(|| tr3(
+            "页面质量信息",
+            "Page quality",
+            "Chất lượng trang",
+        ).to_string()),
+    };
+    // The English original is worth a tooltip exactly when the label stopped
+    // saying it: a translation, a dropped diagnostic, or text we do not know.
+    let detail = (label != quality).then(|| quality.to_string());
+    (label, detail)
+}
+
+/// The quality lines that embed a value — an OCR error returned by `anyhow`, or
+/// the region count `capture::recognize_frame` puts in the middle of its line.
+fn quality_variant(quality: &str) -> Option<String> {
+    for (prefix, zh, en, vi) in [
+        ("Original page retained. OCR unavailable: ",
+            "已保留原始页面 · OCR 不可用",
+            "Original page retained · OCR unavailable",
+            "Đã giữ nguyên trang gốc · OCR không khả dụng"),
+        ("Original capture retained. OCR unavailable: ",
+            "已保留原始截图 · OCR 不可用",
+            "Original capture retained · OCR unavailable",
+            "Đã giữ nguyên ảnh chụp gốc · OCR không khả dụng"),
+    ] {
+        // The tail is an English OS diagnostic from another crate; it belongs in
+        // the tooltip, not in a Vietnamese or Chinese status line.
+        if quality.starts_with(prefix) { return Some(tr3(zh, en, vi).to_string()); }
     }
+    const TAIL: &str = " regions use paired text to preserve raster artwork";
+    for (head, zh, en, vi) in [
+        ("Document region detected · Windows OCR · ",
+            "已检测到文档区域 · Windows OCR · {} 个区域使用对照文本以保留光栅图像",
+            "Document region detected · Windows OCR · {} regions use paired text to preserve raster artwork",
+            "Đã nhận diện vùng tài liệu · Windows OCR · {} vùng dùng văn bản song song để giữ nguyên ảnh gốc"),
+        ("Full source · no confident page boundary · Windows OCR · ",
+            "完整来源 · 未找到可信的页面边界 · Windows OCR · {} 个区域使用对照文本以保留光栅图像",
+            "Full source · no confident page boundary · Windows OCR · {} regions use paired text to preserve raster artwork",
+            "Toàn bộ nguồn · không tìm thấy ranh giới trang rõ ràng · Windows OCR · {} vùng dùng văn bản song song để giữ nguyên ảnh gốc"),
+    ] {
+        if let Some(count) = quality.strip_prefix(head).and_then(|rest| rest.strip_suffix(TAIL)) {
+            return Some(tr3_fill(zh, en, vi, count));
+        }
+    }
+    None
 }
 
 fn input_row(label: &'static str, field: &Entity<TextField>) -> Div {
@@ -236,6 +296,7 @@ impl Render for PdfReader {
         }
         let source_label = match &self.source { Source::Pdf(_) => tr3_fill("本地 PDF · {} 页 · 原文件保留在你的文档库中", "Local PDF · {} pages · original retained in your library", "PDF cục bộ · {} trang · bản gốc được giữ trong thư viện", self.page_count.max(1)), Source::Capture(source) => format!("{} · {}", if self.capture_live { tr3("实时来源", "Live source", "Nguồn trực tiếp") } else { tr3("来源已冻结", "Source frozen", "Nguồn đã đóng băng") }, source.label()) };
         let quality = self.prepared.as_ref().map(|p| p.frame.quality.clone()).unwrap_or_default();
+        let (quality_text, quality_tip) = quality_label(&quality);
         div().relative().size_full().min_w_0().min_h_0().flex().flex_col().bg(Theme::bg_body()).text_color(Theme::text()).font_family(theme::UI_FONT).text_size(px(12.)).line_height(px(18.))
             .child(self.toolbar(cx))
             .when(self.show_settings, |el| el.child(div().id("pdf-settings-scroll").max_h(px(460.)).overflow_y_scroll().child(self.settings_panel(cx))))
@@ -249,8 +310,115 @@ impl Render for PdfReader {
             .when(self.selected.is_some(), |el| el.child(div().id("pdf-selected-scroll").max_h(px(240.)).flex_none().overflow_y_scroll().px(px(16.)).py(px(8.)).child(self.selected_panel(cx))))
             .child(div().flex_none().px(px(16.)).py(px(7.)).border_t_1().border_color(Theme::line_border()).flex().items_center().gap(px(8.))
                 .child(div().size(px(6.)).flex_none().rounded(px(3.)).bg(if self.error.is_some() { Theme::danger() } else if self.paused { Theme::text_caption() } else { Theme::primary() }))
-                .child(div().flex_1().min_w_0().overflow_hidden().text_size(px(11.)).text_color(Theme::text_caption())
-                    .child(format!("{}{}{}", self.status, if quality.is_empty() { "" } else { " · " }, quality_label(&quality)))))
+                .child(div().id("pdf-quality-status").flex_1().min_w_0().overflow_hidden().text_size(px(11.)).text_color(Theme::text_caption())
+                    .child(format!("{}{}{}", self.status, if quality.is_empty() { "" } else { " · " }, quality_text))
+                    .when_some(quality_tip, |el, detail| el.tip_label(detail, ui::TipSide::Above))))
             .when_some(self.divider_overlay(cx), |el, overlay| el.child(overlay))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quality_label;
+    use crate::i18n::{Lang, lang, set_lang};
+
+    // The interface language is process-wide, so these tests take turns and put
+    // it back — the same shape `crate::i18n`'s own tests use.
+    static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn with_lang<T>(language: Lang, f: impl FnOnce() -> T) -> T {
+        let _turn = TURN.lock().unwrap_or_else(|error| error.into_inner());
+        let previous = lang();
+        set_lang(language);
+        let out = f();
+        set_lang(previous);
+        out
+    }
+
+    /// Every sentence `mirror_pdf_desktop` can put in `PageFrame::quality`,
+    /// including the two shapes that embed a value (an OCR diagnostic and a
+    /// region count).
+    const KNOWN: [&str; 7] = [
+        "PDF text removed; artwork retained. Inspect complex clipping and raster text.",
+        "No extractable text. Local OCR required.",
+        "Scanned PDF · local OCR · paired text preserves original raster artwork",
+        "Original page retained. OCR unavailable: Windows OCR is unavailable. Install an OCR language",
+        "Original capture retained. OCR unavailable: Source is minimized",
+        "Document region detected · Windows OCR · 12 regions use paired text to preserve raster artwork",
+        "Full source · no confident page boundary · Windows OCR · 3 regions use paired text to preserve raster artwork",
+    ];
+
+    fn label(quality: &str) -> String { quality_label(quality).0 }
+
+    #[test]
+    fn known_quality_strings_are_translated_in_every_language() {
+        for quality in KNOWN {
+            let vi = with_lang(Lang::Vi, || label(quality));
+            let en = with_lang(Lang::En, || label(quality));
+            let zh = with_lang(Lang::Zh, || label(quality));
+            assert!(!vi.is_empty(), "empty Vietnamese label for {quality}");
+            assert_ne!(vi, quality, "Vietnamese label is still the raw English: {quality}");
+            assert_ne!(vi, en, "Vietnamese label is the English sentence: {quality}");
+            assert_ne!(vi, zh, "Vietnamese and Chinese labels match: {quality}");
+            assert_ne!(en, zh, "English and Chinese labels match: {quality}");
+        }
+    }
+
+    #[test]
+    fn vietnamese_quality_labels_use_the_vietnamese_sentences() {
+        for (quality, expected) in [
+            (KNOWN[0], "Đã xoá chữ gốc; giữ nguyên hình ảnh. Kiểm tra kỹ vùng cắt và chữ dạng raster."),
+            (KNOWN[1], "Không có chữ để trích xuất. Cần OCR cục bộ."),
+            (KNOWN[2], "PDF quét · OCR cục bộ · văn bản song song giữ nguyên ảnh gốc"),
+            (KNOWN[3], "Đã giữ nguyên trang gốc · OCR không khả dụng"),
+            (KNOWN[4], "Đã giữ nguyên ảnh chụp gốc · OCR không khả dụng"),
+            (KNOWN[5], "Đã nhận diện vùng tài liệu · Windows OCR · 12 vùng dùng văn bản song song để giữ nguyên ảnh gốc"),
+            (KNOWN[6], "Toàn bộ nguồn · không tìm thấy ranh giới trang rõ ràng · Windows OCR · 3 vùng dùng văn bản song song để giữ nguyên ảnh gốc"),
+        ] {
+            assert_eq!(with_lang(Lang::Vi, || label(quality)), expected, "for {quality}");
+        }
+    }
+
+    #[test]
+    fn unknown_quality_text_never_leaks_english_into_the_label() {
+        let unknown = "Unexpected OCR pipeline condition: the page kept its raster artwork and the checker found no boundary";
+        for language in Lang::ALL {
+            let (text, detail) = with_lang(language, || quality_label(unknown));
+            assert!(!text.is_empty(), "empty label in {language:?}");
+            assert!(!text.contains("raster artwork"), "{language:?} label leaked the English sentence: {text}");
+            assert!(text.chars().count() <= 32, "{language:?} label is not a short generic: {text}");
+            assert_eq!(detail.as_deref(), Some(unknown), "{language:?} lost the original English");
+        }
+        let (vi, _) = with_lang(Lang::Vi, || quality_label(unknown));
+        let (en, _) = with_lang(Lang::En, || quality_label(unknown));
+        let (zh, _) = with_lang(Lang::Zh, || quality_label(unknown));
+        assert_ne!(vi, en); assert_ne!(vi, zh); assert_ne!(en, zh);
+    }
+
+    #[test]
+    fn empty_quality_adds_nothing_to_the_status_line() {
+        for language in Lang::ALL {
+            let (text, detail) = with_lang(language, || quality_label(""));
+            assert!(text.is_empty(), "{language:?} invented a label for an empty quality");
+            assert!(detail.is_none(), "{language:?} invented a tooltip for an empty quality");
+        }
+    }
+
+    #[test]
+    fn quality_tooltip_carries_the_english_exactly_when_the_label_drops_it() {
+        for quality in KNOWN {
+            // Neither translated label shows English, so the original keeps a
+            // hover to stay discoverable.
+            for language in [Lang::Vi, Lang::Zh] {
+                let (_, detail) = with_lang(language, || quality_label(quality));
+                assert_eq!(detail.as_deref(), Some(quality), "{language:?} lost the English original");
+            }
+            // English already reads as the sentence, unless the label drops the
+            // OS diagnostic appended to the two OCR-failure lines.
+            let (text, detail) = with_lang(Lang::En, || quality_label(quality));
+            let drops_diagnostic = quality.contains("OCR unavailable: ");
+            assert_eq!(detail.as_deref(), drops_diagnostic.then_some(quality), "for {quality}");
+            assert!(drops_diagnostic || text == quality, "English label changed: {quality} -> {text}");
+        }
     }
 }

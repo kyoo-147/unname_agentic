@@ -158,6 +158,30 @@ pub struct RowMenu {
     pub batch: bool,
 }
 
+/// What the first window shows when the process starts.
+///
+/// An explicit constructor argument, not a global: `main` knows whether the
+/// process was handed PDF paths, and the decision is testable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenOnStart {
+    /// The process was started with one or more PDF paths: import them. The
+    /// first imported document is the first document the window shows.
+    Import,
+    /// No PDF path was given: the launch that may restore a previous document.
+    /// Today it lands on the library (主页); nothing is restored yet.
+    Restore,
+}
+
+impl OpenOnStart {
+    /// Whether this launch may put a previously opened document on screen.
+    ///
+    /// A launch with PDF paths may not: the requested file would sit behind the
+    /// old document until the multi-second import finishes.
+    pub(crate) fn allows_restore_last_document(self) -> bool {
+        matches!(self, Self::Restore)
+    }
+}
+
 /// What the main pane shows: the open document, 主页 or 回收站.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
@@ -299,17 +323,19 @@ fn notify_system(title: &str, body: &str) {
 }
 
 impl Workspace {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::build_window(None, window, cx)
+    /// The main window. `open_on_start` is decided by `main` from the process
+    /// arguments, so this window never has to read them itself.
+    pub fn new(window: &mut Window, cx: &mut Context<Self>, open_on_start: OpenOnStart) -> Self {
+        Self::build_window(None, open_on_start, window, cx)
     }
 
     /// 在新窗口中打开: a window of its own for `document` (also what the
     /// save-safety harness opens its several windows with).
     pub fn new_document_window(document: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::build_window(document, window, cx)
+        Self::build_window(document, OpenOnStart::Restore, window, cx)
     }
 
-    fn build_window(document: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn build_window(document: Option<String>, open_on_start: OpenOnStart, window: &mut Window, cx: &mut Context<Self>) -> Self {
         crate::settings::load();
         if !cx.has_global::<SharedStore>() { cx.set_global(SharedStore::open().expect("open document library")); }
         let mut store = cx.global::<SharedStore>().clone();
@@ -439,11 +465,18 @@ impl Workspace {
         ws.home.chat = false;
         ws.home.recent_view = false;
         ws.start_companion(window, cx);
-        // An empty library opens on 主页's empty state.
+        // An empty library opens on 主页's empty state. A launch with PDF paths
+        // stops on the library too (the importing toast) until `import_pdf_paths`
+        // opens the requested file: it must never show a different document
+        // first.
         match document.filter(|_| !crate::layout_preview()) {
             Some(id) => ws.open(&id, window, cx),
             None => ws.view = View::Home,
         }
+        debug_assert!(
+            open_on_start.allows_restore_last_document() || ws.current.is_none(),
+            "a launch with PDF paths must not open a document before its import"
+        );
         if std::env::var_os("PDF_WORKSPACE_START_CHAT").is_some() {
             let prompt = std::env::var_os("PDF_WORKSPACE_CHAT_PROMPT").map(|prompt| prompt.to_string_lossy().to_string());
             ws.show_chat(cx);
@@ -482,7 +515,7 @@ impl Workspace {
     /// could not be saved first, see [`Self::save_before`]).
     pub fn try_open(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if crate::layout_preview() {
-            self.show_toast("Layout sample only. Import a PDF in the product workspace to read it.", cx);
+            self.show_toast(crate::i18n::tr3("仅为排版示例。请在产品工作区导入 PDF 后阅读。", "Layout sample only. Import a PDF in the product workspace to read it.", "Chỉ là mẫu bố cục. Hãy nhập PDF trong không gian sản phẩm để đọc."), cx);
             return false;
         }
         if self.view != View::Doc {
@@ -502,7 +535,7 @@ impl Workspace {
         if let Some(meta) = self.entries.iter().find(|e| e.id == id).map(|e| e.meta.clone()).filter(|m| m.source_pdf.is_some()) {
             let path = match self.store.pdf_path(id) {
                 Ok(path) => path,
-                Err(error) => { self.show_toast_kind(ToastKind::Error, &format!("Cannot open retained PDF: {error}"), cx); return false; }
+                Err(error) => { self.show_toast_kind(ToastKind::Error, &format!("{}: {error}", crate::i18n::tr3("无法打开保留的 PDF", "Cannot open retained PDF", "Không mở được PDF đã giữ")), cx); return false; }
             };
             let initial = meta.pdf_page.min((meta.pdf_pages.unwrap_or(1).saturating_sub(1)) as u16);
             let reader = cx.new(|cx| crate::pdf_reader::PdfReader::new(path, initial, window, cx));
@@ -510,7 +543,7 @@ impl Workspace {
             self.editor_sub = Some(cx.subscribe(&reader, move |this, _, event: &crate::pdf_reader::PdfReaderEvent, cx| match event {
                 crate::pdf_reader::PdfReaderEvent::Location(page) => {
                     if let Err(error) = this.store.update_meta(&document, |m| m.pdf_page = *page) {
-                        this.show_toast_kind(ToastKind::Error, &format!("Cannot save reading position: {error}"), cx);
+                        this.show_toast_kind(ToastKind::Error, &format!("{}: {error}", crate::i18n::tr3("无法保存阅读位置", "Cannot save reading position", "Không lưu được vị trí đọc")), cx);
                     } else if let Some(entry) = this.entries.iter_mut().find(|e| e.id == document) { entry.meta.pdf_page = *page; }
                 }
                 crate::pdf_reader::PdfReaderEvent::BrowserLocation { page, fraction, zoom } => this.send_companion_location(&document, *page, *fraction, *zoom, cx),
@@ -538,7 +571,7 @@ impl Workspace {
     }
 
     pub fn open_capture_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if crate::layout_preview() { self.show_toast_kind(ToastKind::Info, "Live mirror is available in the product workspace.", cx); return; }
+        if crate::layout_preview() { self.show_toast_kind(ToastKind::Info, crate::i18n::tr3("实时镜像仅在产品工作区可用。", "Live mirror is available in the product workspace.", "Phản chiếu trực tiếp chỉ có trong không gian sản phẩm."), cx); return; }
         let id = uuid::Uuid::new_v4();
         self.capture_picker = Some(CapturePicker { id, loading: true, sources: vec![], error: None });
         self.row_menu = None;
@@ -1253,6 +1286,23 @@ impl Render for Workspace {
             .children(capture_picker)
             .children(resize_overlay)
             .children(toast)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OpenOnStart;
+
+    /// 启动参数带 PDF: 导入完成前停在文档库，不能先打开上次的文档。
+    #[test]
+    fn open_with_pdf_paths_does_not_restore_the_last_document() {
+        assert!(!OpenOnStart::Import.allows_restore_last_document());
+    }
+
+    /// 没有启动参数: 保持今天的启动路径（文档库），只有这条路径允许将来恢复。
+    #[test]
+    fn open_without_pdf_paths_keeps_the_restore_path() {
+        assert!(OpenOnStart::Restore.allows_restore_last_document());
     }
 }
 

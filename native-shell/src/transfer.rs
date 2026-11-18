@@ -71,6 +71,13 @@ pub(crate) fn radio(on: bool) -> Div {
         .when(!on, |d| d.border_1().border_color(Theme::todo_box()).bg(crate::theme::raised(Theme::bg_body())))
 }
 
+/// GPUI asserts that a shaped line contains no newlines. Import errors are
+/// therefore chained on one line with `"; "`, and a line break inside a chain is
+/// flattened: two failing files must not kill the window.
+fn error_toast(errors: &[String]) -> String {
+    errors.join("; ").replace(['\n', '\r'], " ")
+}
+
 impl Workspace {
     fn close_menus(&mut self) {
         self.row_menu = None;
@@ -79,7 +86,7 @@ impl Workspace {
     /// 上传 / 导入: pick PDF files, each becoming a record.
     pub fn open_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if crate::layout_preview() {
-            self.show_toast("Import is available in the product workspace, not the isolated layout preview.", cx);
+            self.show_toast(crate::i18n::tr3("导入仅在产品工作区可用，不在独立排版预览中。", "Import is available in the product workspace, not the isolated layout preview.", "Nhập tài liệu chỉ có trong không gian sản phẩm, không có trong bản xem trước bố cục."), cx);
             return;
         }
         self.close_menus();
@@ -94,9 +101,9 @@ impl Workspace {
 
     pub fn import_pdf_paths(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
         if crate::layout_preview() || paths.is_empty() { return; }
-        if self.pdf_importing { self.show_toast_kind(ToastKind::Info, "PDF import is already running.", cx); return; }
+        if self.pdf_importing { self.show_toast_kind(ToastKind::Info, crate::i18n::tr3("PDF 导入正在进行。", "PDF import is already running.", "Đang nhập PDF rồi."), cx); return; }
         self.pdf_importing = true;
-        self.show_toast_kind(ToastKind::Info, "Importing PDF and rendering its preview…", cx);
+        self.show_toast_kind(ToastKind::Info, crate::i18n::tr3("正在导入 PDF 并渲染预览…", "Importing PDF and rendering its preview…", "Đang nhập PDF và dựng ảnh xem trước…"), cx);
         let paths = paths.to_vec();
         let task = cx.background_executor().spawn(async move {
             paths.into_iter().map(|path| {
@@ -119,8 +126,8 @@ impl Workspace {
                     w.home.sort_menu = false;
                     w.open(&id, window, cx);
                 }
-                if errors.is_empty() { w.show_toast("PDF imported. Original file retained in your local library.", cx); }
-                else { w.show_toast_kind(ToastKind::Error, &errors.join("\n"), cx); }
+                if errors.is_empty() { w.show_toast(crate::i18n::tr3("已导入 PDF。原始文件已保留在本地书库。", "PDF imported. Original file retained in your local library.", "Đã nhập PDF. Bản gốc được giữ trong thư viện trên máy."), cx); }
+                else { w.show_toast_kind(ToastKind::Error, &error_toast(&errors), cx); }
                 cx.notify();
             });
         }).detach();
@@ -131,7 +138,7 @@ impl Workspace {
         self.close_menus();
         let source = match self.store.pdf_path(id) {
             Ok(path) => path,
-            Err(error) => { self.show_toast_kind(ToastKind::Error, &format!("Cannot find the retained original: {error}"), cx); return; }
+            Err(error) => { self.show_toast_kind(ToastKind::Error, &format!("{}: {error}", crate::i18n::tr3("找不到保留的原始文件", "Cannot find the retained original", "Không tìm thấy bản gốc đã giữ")), cx); return; }
         };
         let title = self.entries.iter().find(|e| e.id == id).map(|e| e.title.replace(['/', ':', '\\'], "_")).unwrap_or_else(|| "Document".into());
         let path = save_path(&format!("{title}.pdf"), cx);
@@ -144,10 +151,25 @@ impl Workspace {
             });
             let result = task.await;
             let _ = this.update(cx, |w, cx| match result {
-                Ok(()) => w.show_toast("Original PDF saved without modification.", cx),
-                Err(error) => w.show_toast_kind(ToastKind::Error, &format!("Could not save original PDF: {error}"), cx),
+                Ok(()) => w.show_toast(crate::i18n::tr3("已按原样保存原始 PDF。", "Original PDF saved without modification.", "Đã lưu bản PDF gốc, không sửa gì."), cx),
+                Err(error) => w.show_toast_kind(ToastKind::Error, &format!("{}: {error}", crate::i18n::tr3("无法保存原始 PDF", "Could not save original PDF", "Không lưu được PDF gốc")), cx),
             });
         }).detach();
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::error_toast;
+
+    /// 两个导入失败必须合成一行: GPUI 的文本整形断言不允许换行, 否则进程会 panic.
+    #[test]
+    fn two_import_errors_make_one_single_line_toast() {
+        let errors = vec!["a.pdf: not a PDF".to_string(), "b.pdf: file is larger than the limit".to_string()];
+        let line = error_toast(&errors);
+        assert_eq!(line, "a.pdf: not a PDF; b.pdf: file is larger than the limit");
+        assert!(!line.contains('\n'));
+        assert!(!error_toast(&["x.pdf: one\ntwo".to_string()]).contains(['\n', '\r']));
     }
 }

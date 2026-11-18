@@ -54,18 +54,27 @@ mod palette;
 
 use gpui::*;
 
+/// PDF paths named on the command line ("Open with", a file dragged onto the
+/// executable). The layout preview never imports.
+fn pdf_paths_from_args() -> Vec<std::path::PathBuf> {
+    if layout_preview() { return Vec::new(); }
+    std::env::args_os().skip(1).map(std::path::PathBuf::from).filter(|path| path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))).collect()
+}
+
 /// The main window, centred at the remembered size.
 fn open_main_window(scripted: bool, cx: &mut App) {
     let bounds = Bounds::centered(None, main_window_size(cx), cx);
+    // Decided before the window exists, so `Workspace` never reads the process
+    // arguments itself. A PDF on the command line means the window must not
+    // restore a previously opened document while that import runs.
+    let paths = pdf_paths_from_args();
+    let open_on_start = if paths.is_empty() { app::OpenOnStart::Restore } else { app::OpenOnStart::Import };
     // Scripted dev runs must not steal keyboard focus from whatever the
     // user is typing into.
     cx.open_window(window_options(bounds, scripted), |window, cx| {
         devtools::start(window, cx);
-        let workspace = cx.new(|cx| app::Workspace::new(window, cx));
-        if !layout_preview() {
-            let paths: Vec<std::path::PathBuf> = std::env::args_os().skip(1).map(std::path::PathBuf::from).filter(|path| path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))).collect();
-            if !paths.is_empty() { workspace.update(cx, |state, cx| state.import_pdf_paths(&paths, window, cx)); }
-        }
+        let workspace = cx.new(|cx| app::Workspace::new(window, cx, open_on_start));
+        if !paths.is_empty() { workspace.update(cx, |state, cx| state.import_pdf_paths(&paths, window, cx)); }
         workspace
     })
     .expect("open window");

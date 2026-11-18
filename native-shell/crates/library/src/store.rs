@@ -16,6 +16,9 @@ use crate::time;
 pub const TRASH_DAYS: u64 = 30;
 /// Largest file the export path will read into memory.
 pub const EXPORT_FILE_LIMIT: u64 = 32 * 1024 * 1024;
+/// Largest PDF the import path will read into memory. A library keeps scans
+/// far larger than the export cap.
+pub const IMPORT_FILE_LIMIT: u64 = 256 * 1024 * 1024;
 /// Library layout version.
 const FORMAT: u64 = 2;
 
