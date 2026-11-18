@@ -1,3 +1,28 @@
+/*
+ * Manifest permission justification — keep this block in sync with extension/manifest.json.
+ *
+ * tests/extension-background.test.ts pins the exact permission and host lists, and requires
+ * every entry to be justified on its own line here. Adding a permission in one place only
+ * fails that test, so the extension can never request new access by accident.
+ *
+ *   storage          Consent (mirror:enabled), per-tab mirror sessions, the popup target
+ *                    language, and pending captures must survive MV3 worker restarts.
+ *   tabs             Open the mirror beside its source tab, focus an existing mirror, and
+ *                    close it when the source navigates or closes.
+ *   webRequest       Read response Content-Type headers so a PDF served without a .pdf
+ *                    suffix is still detected; onHeadersReceived only, never blocking.
+ *   scripting        Re-read the source page DOM before trusting a content-script report, so
+ *                    a page cannot point the reader at an unrelated PDF.
+ *   activeTab        The popup may read or capture the visible tab, but only after the user
+ *                    clicks the action or runs a command.
+ *   nativeMessaging  Optional local desktop companion; never connected during detection,
+ *                    translation, or ordinary reader acquisition.
+ *   contextMenus     "Mở bản dịch Mirror" for a page or for a link target.
+ *   host_permissions http://*/*, https://*/*, file:///* — the detector inspects response
+ *                    headers and embedded objects on whatever page the user browses.
+ *                    Nothing is uploaded; the only fetch is the detected PDF, with the
+ *                    user's own cookies, into the extension reader.
+ */
 import { MirrorController, pdfPath, sourceUrl, type MirrorSession } from './controller';
 import { createTranslationTransport } from '../src/core/translation';
 import type { TranslationSettings } from '../src/core/types';

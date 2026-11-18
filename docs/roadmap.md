@@ -53,7 +53,7 @@ Mục tiêu: bản web/extension là sản phẩm độc lập dùng được, t
 
 - [ ] Chat hỏi tài liệu thật: chọn provider/model, streaming, trích dẫn trang, không bịa khi thiếu nguồn.
 - [ ] Voice input (Windows Speech hoặc Whisper local) và voice mode; hoặc bỏ nút nếu chưa làm.
-- [ ] Xuất bản dịch song ngữ PDF/DOCX; giữ layout.
+- [~] Xuất bản dịch: web .txt, native Markdown theo trang; PDF/DOCX giữ layout còn thiếu.
 - [ ] Desktop → Chrome hai chiều; đồng bộ vị trí đọc.
 - [ ] Auto-update có ký; kênh stable/beta.
 - [ ] Context menu native: dịch trang, dịch vùng chọn, copy song ngữ.

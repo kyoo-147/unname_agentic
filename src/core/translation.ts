@@ -1,7 +1,7 @@
-import type { TextBlock, TranslationRequest, TranslationResult, TranslationTransport } from './types';
-import { buildMessages } from './prompt';
+import { buildMessages, buildSystemPrompt, type ChatMessage, type PromptOptions } from './prompt';
 import { normalizeLanguageCode } from './language';
 import { TranslationError, abortError, isAbortError, withRetry, type RetryOptions } from './retry';
+import type { ProviderKind, TextBlock, TranslationRequest, TranslationResult, TranslationSettings, TranslationTransport } from './types';
 
 export type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -44,6 +44,109 @@ function deeplBody(text: string, sourceLanguage: string, targetLanguage: string)
   return { text: [text], target_lang: targetLanguage.toUpperCase(), ...(sourceLanguage !== 'auto' ? { source_lang: sourceLanguage.toUpperCase() } : {}) };
 }
 
+function promptOptions(settings: TranslationSettings): PromptOptions {
+  return {
+    source: normalizeLanguageCode(settings.sourceLanguage),
+    target: normalizeLanguageCode(settings.targetLanguage),
+    glossary: Object.entries(settings.glossary).map(([source, target]) => ({ source, target })),
+    promptVersion: settings.promptVersion,
+  };
+}
+
+interface ProviderRequest {
+  url: URL;
+  headers: Record<string, string>;
+  payload: string;
+}
+
+/**
+ * Builds a provider request for one prompt. `translate` passes a single
+ * document text; `translateBatch` passes the JSON batch envelope together with
+ * the batch messages. Only the OpenAI-compatible branch reads `messages`, so a
+ * batch can reuse the very same branch for `openai` and `local`; Google and
+ * DeepL build their body from `text` and are never batched (see
+ * {@link supportsBatch}). Keeping the four branches here means the consent
+ * gate, endpoint validation, headers, and bodies exist once.
+ */
+function providerRequest(settings: TranslationSettings, text: string, messages: readonly ChatMessage[]): ProviderRequest {
+  const local = settings.provider === 'local';
+  if (!local && !settings.allowCloud) {
+    throw new TranslationError('auth', 'Cloud translation is disabled. Enable cloud consent in settings.', {
+      userMessage: 'Bạn chưa cho phép gửi văn bản lên đám mây. Bật quyền này trong phần cài đặt dịch.',
+    });
+  }
+  const sourceLanguage = normalizeLanguageCode(settings.sourceLanguage);
+  const targetLanguage = normalizeLanguageCode(settings.targetLanguage);
+  let url: URL;
+  let body: unknown;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (settings.provider === 'google') {
+    if (!settings.apiKey) throw new TranslationError('auth', 'Google Cloud Translation requires an API key.');
+    url = endpoint('https://translation.googleapis.com/language/translate/v2');
+    headers['X-Goog-Api-Key'] = settings.apiKey;
+    body = googleBody(text, sourceLanguage, targetLanguage);
+  } else if (settings.provider === 'deepl') {
+    if (!settings.apiKey) throw new TranslationError('auth', 'DeepL requires an API key.');
+    url = endpoint(settings.endpoint && settings.endpoint.includes('deepl.com') ? settings.endpoint : 'https://api-free.deepl.com/v2/translate');
+    if (!['api.deepl.com', 'api-free.deepl.com'].includes(url.hostname) || url.protocol !== 'https:' || url.pathname !== '/v2/translate' || url.username || url.password) {
+      throw invalid('DeepL endpoint must be https://api.deepl.com/v2/translate or https://api-free.deepl.com/v2/translate.');
+    }
+    headers.Authorization = `DeepL-Auth-Key ${settings.apiKey}`;
+    body = deeplBody(text, sourceLanguage, targetLanguage);
+  } else {
+    url = endpoint(`${settings.endpoint.replace(/\/$/, '')}/chat/completions`);
+    if (local && !isLoopback(url)) throw invalid('Local provider must use a loopback endpoint. Choose OpenAI-compatible for remote servers.');
+    if (!local && !settings.apiKey) throw new TranslationError('auth', 'OpenAI-compatible translation requires an API key.');
+    if (settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`;
+    body = { model: settings.model, temperature: 0, messages };
+  }
+  return { url, headers, payload: JSON.stringify(body) };
+}
+
+interface ProviderResponse {
+  data?: { translations?: { translatedText?: string }[] };
+  translations?: { text?: string }[];
+  choices?: { message?: { content?: string } }[];
+}
+
+function providerText(settings: TranslationSettings, data: unknown): string | undefined {
+  const result = data as ProviderResponse;
+  const translated = settings.provider === 'google'
+    ? result.data?.translations?.[0]?.translatedText
+    : settings.provider === 'deepl'
+      ? result.translations?.[0]?.text
+      : result.choices?.[0]?.message?.content;
+  return typeof translated === 'string' ? translated : undefined;
+}
+
+function translatedText(settings: TranslationSettings, data: unknown): string {
+  const text = providerText(settings, data);
+  if (typeof text !== 'string') throw new TranslationError('invalid', 'The translation service response did not contain translated text.');
+  return text;
+}
+
+async function send(fetcher: Fetcher, retryOptions: RetryOptions, request: ProviderRequest, signal?: AbortSignal): Promise<Response> {
+  return withRetry(async () => {
+    let result: Response;
+    try {
+      result = await fetcher(request.url, { method: 'POST', headers: request.headers, body: request.payload, signal });
+    } catch (error) {
+      if (signal?.aborted || isAbortError(error)) throw abortError(error);
+      throw new TranslationError('network', 'The translation service could not be reached.', { cause: error });
+    }
+    if (!result.ok) throw httpError(result.status);
+    return result;
+  }, { ...retryOptions, signal });
+}
+
+async function readJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch (error) {
+    throw new TranslationError('invalid', 'The translation service returned an unreadable response.', { cause: error, status: response.status });
+  }
+}
+
 export function chunkBlocks(blocks: readonly TextBlock[], maxChars = 3500): TextBlock[][] {
   if (!Number.isSafeInteger(maxChars) || maxChars < 1) throw invalid('maxChars must be a positive integer.');
   const chunks: TextBlock[][] = [];
@@ -63,75 +166,166 @@ export function chunkBlocks(blocks: readonly TextBlock[], maxChars = 3500): Text
   return chunks;
 }
 
-export function createTranslationTransport(fetcher: Fetcher = fetch, retryOptions: RetryOptions = {}): TranslationTransport {
-  return {
-    async translate({ text, settings, signal }: TranslationRequest): Promise<string> {
-      const local = settings.provider === 'local';
-      if (!local && !settings.allowCloud) {
-        throw new TranslationError('auth', 'Cloud translation is disabled. Enable cloud consent in settings.', {
-          userMessage: 'Bạn chưa cho phép gửi văn bản lên đám mây. Bật quyền này trong phần cài đặt dịch.',
-        });
-      }
-      const sourceLanguage = normalizeLanguageCode(settings.sourceLanguage);
-      const targetLanguage = normalizeLanguageCode(settings.targetLanguage);
-      let url: URL;
-      let body: unknown;
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (settings.provider === 'google') {
-        if (!settings.apiKey) throw new TranslationError('auth', 'Google Cloud Translation requires an API key.');
-        url = endpoint('https://translation.googleapis.com/language/translate/v2');
-        headers['X-Goog-Api-Key'] = settings.apiKey;
-        body = googleBody(text, sourceLanguage, targetLanguage);
-      } else if (settings.provider === 'deepl') {
-        if (!settings.apiKey) throw new TranslationError('auth', 'DeepL requires an API key.');
-        url = endpoint(settings.endpoint && settings.endpoint.includes('deepl.com') ? settings.endpoint : 'https://api-free.deepl.com/v2/translate');
-        if (!['api.deepl.com', 'api-free.deepl.com'].includes(url.hostname) || url.protocol !== 'https:' || url.pathname !== '/v2/translate' || url.username || url.password) {
-          throw invalid('DeepL endpoint must be https://api.deepl.com/v2/translate or https://api-free.deepl.com/v2/translate.');
-        }
-        headers.Authorization = `DeepL-Auth-Key ${settings.apiKey}`;
-        body = deeplBody(text, sourceLanguage, targetLanguage);
-      } else {
-        url = endpoint(`${settings.endpoint.replace(/\/$/, '')}/chat/completions`);
-        if (local && !isLoopback(url)) throw invalid('Local provider must use a loopback endpoint. Choose OpenAI-compatible for remote servers.');
-        if (!local && !settings.apiKey) throw new TranslationError('auth', 'OpenAI-compatible translation requires an API key.');
-        if (settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`;
-        const glossary = Object.entries(settings.glossary).map(([source, target]) => ({ source, target }));
-        body = {
-          model: settings.model,
-          temperature: 0,
-          messages: buildMessages(text, { source: sourceLanguage, target: targetLanguage, glossary, promptVersion: settings.promptVersion }),
-        };
-      }
-      const payload = JSON.stringify(body);
-      const response = await withRetry(async () => {
-        let result: Response;
-        try {
-          result = await fetcher(url, { method: 'POST', headers, body: payload, signal });
-        } catch (error) {
-          if (signal?.aborted || isAbortError(error)) throw abortError(error);
-          throw new TranslationError('network', 'The translation service could not be reached.', { cause: error });
-        }
-        if (!result.ok) throw httpError(result.status);
-        return result;
-      }, { ...retryOptions, signal });
-      let data: unknown;
-      try {
-        data = await response.json();
-      } catch (error) {
-        throw new TranslationError('invalid', 'The translation service returned an unreadable response.', { cause: error, status: response.status });
-      }
-      const result = data as { data?: { translations?: { translatedText?: string }[] }; translations?: { text?: string }[]; choices?: { message?: { content?: string } }[] };
-      const translated = settings.provider === 'google'
-        ? result.data?.translations?.[0]?.translatedText
-        : settings.provider === 'deepl'
-          ? result.translations?.[0]?.text
-          : result.choices?.[0]?.message?.content;
-      if (typeof translated !== 'string') throw new TranslationError('invalid', 'The translation service response did not contain translated text.');
-      const trimmed = translated.trim();
-      if (!trimmed) throw new TranslationError('empty', 'Translation service returned no translated text.');
-      return trimmed;
-    },
+/** One translated block, still carrying its source id and page. */
+export interface BatchTranslationEntry {
+  id: string;
+  page: number;
+  text: string;
+  characterCount: number;
+}
+
+export interface BatchTranslationResult {
+  /** Translated blocks in the same order they were passed in. */
+  translations: BatchTranslationEntry[];
+  /** Provider calls attempted, not chunks attempted: a per-block provider spends one per block. */
+  requests: number;
+  /** Source characters actually translated, so an aborted batch never over-reports quota use. */
+  characterCount: number;
+  /** True when the signal stopped the batch; `translations` then holds the finished chunks. */
+  aborted: boolean;
+}
+
+export interface TranslationTransportWithBatch extends TranslationTransport {
+  /**
+   * Translates a document's blocks in chunks.
+   *
+   * - OpenAI-compatible and local prompt providers get one request per chunk
+   *   of {@link chunkBlocks}; the model receives a JSON array of `{id, text}`
+   *   and returns the same ids, so answers are mapped back by id rather than
+   *   by position. Order is always the input order.
+   * - Google v2 and DeepL get one request per block, because this client
+   *   sends them a single text field per request and has no envelope to carry
+   *   block ids (see {@link supportsBatch}).
+   * - An abort stops before the next request and resolves with the blocks
+   *   already translated plus `aborted: true`; nothing is invented for the
+   *   remaining blocks.
+   * - A batch response that cannot be mapped to every requested id throws
+   *   instead of returning a partial success. The caller keeps the previous
+   *   translations and can retry.
+   */
+  translateBatch(blocks: readonly TextBlock[], settings: TranslationSettings, signal?: AbortSignal): Promise<BatchTranslationResult>;
+}
+
+/**
+ * Batching is a prompt-level capability here: only the providers that accept a
+ * chat prompt can take several blocks at once. Google v2 and DeepL are called
+ * with one text field per request, so they stay on the per-block path.
+ */
+export function supportsBatch(provider: ProviderKind): boolean {
+  return provider === 'openai' || provider === 'local';
+}
+
+const BATCH_RULES = [
+  'Batch input: the user message is a JSON array of objects with "id" and "text" keys.',
+  'Translate every "text" value and keep every "id" unchanged.',
+  'Return only a JSON array of objects with the same ids in the same order: [{"id": "...", "text": "..."}].',
+  'Do not add code fences, commentary, or any other keys. These rules replace the single-text return rule for this request.',
+].join('\n');
+
+function batchMessages(blocks: readonly TextBlock[], options: PromptOptions): ChatMessage[] {
+  return [
+    { role: 'system', content: `${buildSystemPrompt(options)}\n\n${BATCH_RULES}` },
+    { role: 'user', content: JSON.stringify(blocks.map(block => ({ id: block.id, text: block.text }))) },
+  ];
+}
+
+interface BatchEntry {
+  id: string;
+  text: string;
+}
+
+function parseBatchContent(content: string): BatchEntry[] | undefined {
+  const unfenced = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  let data: unknown;
+  try {
+    data = JSON.parse(unfenced);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(data)) return undefined;
+  const entries: BatchEntry[] = [];
+  for (const item of data) {
+    if (typeof item !== 'object' || item === null) return undefined;
+    const entry = item as { id?: unknown; text?: unknown };
+    if (typeof entry.id !== 'string' || typeof entry.text !== 'string') return undefined;
+    entries.push({ id: entry.id, text: entry.text });
+  }
+  return entries;
+}
+
+function matchBatch(chunk: readonly TextBlock[], entries: readonly BatchEntry[]): Map<string, string> {
+  const answers = new Map<string, string>();
+  for (const entry of entries) if (!answers.has(entry.id)) answers.set(entry.id, entry.text);
+  const matched = new Map<string, string>();
+  const missing: string[] = [];
+  for (const block of chunk) {
+    const answer = answers.get(block.id);
+    if (answer === undefined) missing.push(block.id);
+    else matched.set(block.id, answer);
+  }
+  if (missing.length > 0) throw invalid(`The batch translation response did not include ${missing.length} of ${chunk.length} requested blocks.`);
+  return matched;
+}
+
+export function createTranslationTransport(fetcher: Fetcher = fetch, retryOptions: RetryOptions = {}): TranslationTransportWithBatch {
+  const translate = async ({ text, settings, signal }: TranslationRequest): Promise<string> => {
+    const request = providerRequest(settings, text, buildMessages(text, promptOptions(settings)));
+    const response = await send(fetcher, retryOptions, request, signal);
+    const data = await readJson(response);
+    const trimmed = translatedText(settings, data).trim();
+    if (!trimmed) throw new TranslationError('empty', 'Translation service returned no translated text.');
+    return trimmed;
   };
+
+  const translateBatch = async (blocks: readonly TextBlock[], settings: TranslationSettings, signal?: AbortSignal): Promise<BatchTranslationResult> => {
+    const result: BatchTranslationResult = { translations: [], requests: 0, characterCount: 0, aborted: false };
+    if (signal?.aborted) return { ...result, aborted: true };
+    if (blocks.length === 0) return result;
+
+    if (!supportsBatch(settings.provider)) {
+      for (const block of blocks) {
+        if (signal?.aborted) return { ...result, aborted: true };
+        result.requests += 1;
+        let text: string;
+        try {
+          text = await translate({ text: block.text, settings, signal });
+        } catch (error) {
+          if (error instanceof TranslationError && error.kind === 'aborted') return { ...result, aborted: true };
+          throw error;
+        }
+        result.translations.push({ id: block.id, page: block.page, text, characterCount: countCharacters(block.text) });
+        result.characterCount += countCharacters(block.text);
+      }
+      return result;
+    }
+
+    const options = promptOptions(settings);
+    for (const chunk of chunkBlocks(blocks)) {
+      if (signal?.aborted) return { ...result, aborted: true };
+      const messages = batchMessages(chunk, options);
+      const request = providerRequest(settings, messages[1]?.content ?? '', messages);
+      result.requests += 1;
+      try {
+        const response = await send(fetcher, retryOptions, request, signal);
+        const data = await readJson(response);
+        const entries = parseBatchContent(translatedText(settings, data));
+        if (!entries) throw invalid('The batch translation response was not a JSON array of {"id","text"} entries.');
+        const matched = matchBatch(chunk, entries);
+        for (const block of chunk) {
+          const text = matched.get(block.id)!.trim();
+          if (!text) throw new TranslationError('empty', 'Translation service returned no translated text.');
+          result.translations.push({ id: block.id, page: block.page, text, characterCount: countCharacters(block.text) });
+        }
+        for (const block of chunk) result.characterCount += countCharacters(block.text);
+      } catch (error) {
+        if (error instanceof TranslationError && error.kind === 'aborted') return { ...result, aborted: true };
+        throw error;
+      }
+    }
+    return result;
+  };
+
+  return { translate, translateBatch };
 }
 
 export class TranslationService {

@@ -1,3 +1,4 @@
+mod export;
 mod geometry;
 mod scrollbar;
 mod state;
@@ -113,6 +114,28 @@ impl PdfReader {
         Self::build(Source::Capture(source), 0, window, cx)
     }
     pub fn open_settings(&mut self, cx: &mut Context<Self>) { self.show_settings = true; cx.notify(); }
+    fn export_page(&mut self, cx: &mut Context<Self>) {
+        let Source::Pdf(path) = self.source.clone() else {
+            cx.emit(PdfReaderEvent::Toast(tr3("只有本地 PDF 可以导出", "Only a local PDF can be exported", "Chỉ PDF cục bộ mới xuất được").into()));
+            return;
+        };
+        let (markdown, output) = {
+            let Some(prepared) = &self.prepared else { return; };
+            let title = path.file_stem().and_then(|name| name.to_str()).unwrap_or("document");
+            (export::page_markdown(title, self.page, self.page_count, &prepared.frame.blocks), export::output_path(&path, self.page, self.page_count))
+        };
+        match std::fs::write(&output, markdown) {
+            Ok(()) => {
+                let message = format!("{} {}", tr3("已导出", "Exported", "Đã xuất"), output.display());
+                self.status = message.clone();
+                cx.emit(PdfReaderEvent::Toast(message));
+            }
+            Err(error) => {
+                self.error = Some(format!("{}: {error}", tr3("导出失败", "Export failed", "Xuất thất bại")));
+            }
+        }
+        cx.notify();
+    }
     pub fn set_browser_linked(&mut self, linked: bool, cx: &mut Context<Self>) { self.browser_linked = linked; if !linked { self.pending_external = None; } cx.notify(); }
     pub fn follow_external_location(&mut self, page: u16, progress: f32, cx: &mut Context<Self>) {
         if !self.browser_linked || !matches!(self.source, Source::Pdf(_)) || !progress.is_finite() { return; }

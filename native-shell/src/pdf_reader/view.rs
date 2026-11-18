@@ -1,5 +1,21 @@
 use super::*;
 
+fn quality_label(quality: &str) -> String {
+    match quality {
+        "PDF text removed; artwork retained. Inspect complex clipping and raster text." => tr3(
+            "PDF 文本已移除；保留图像。请检查复杂裁剪和光栅文本。",
+            "PDF text removed; artwork retained. Inspect complex clipping and raster text.",
+            "Đã xoá chữ gốc; giữ nguyên hình ảnh. Kiểm tra kỹ vùng cắt và chữ dạng raster.",
+        ).to_string(),
+        "No extractable text. Local OCR required." => tr3(
+            "无可提取文本。需要本地 OCR。",
+            "No extractable text. Local OCR required.",
+            "Không có chữ để trích xuất. Cần OCR cục bộ.",
+        ).to_string(),
+        other => other.to_string(),
+    }
+}
+
 fn input_row(label: &'static str, field: &Entity<TextField>) -> Div {
     div().flex().flex_col().gap(px(4.)).w_full().child(div().text_size(px(11.)).text_color(Theme::text_caption()).child(label))
         .child(div().w_full().min_h(px(30.)).px(px(8.)).py(px(5.)).rounded(px(6.)).border_1().border_color(Theme::line_border()).child(field.clone()))
@@ -40,6 +56,7 @@ impl PdfReader {
             .child(div().text_color(Theme::text_caption()).child(format!("→ {}", self.profile.target_language)))
             .child(ui::secondary_button("pdf-pause", if self.paused { tr3("继续", "Resume", "Tiếp tục") } else { tr3("暂停", "Pause", "Tạm dừng") }).on_click(cx.listener(|reader, _, _, cx| reader.toggle_pause(cx))))
             .child(ui::secondary_button("pdf-retry", tr3("重试", "Retry", "Thử lại")).on_click(cx.listener(|reader, _, _, cx| reader.retry(cx))))
+            .child(ui::secondary_button("pdf-export", tr3("导出本页", "Export this page", "Xuất trang này")).on_click(cx.listener(|reader, _, _, cx| reader.export_page(cx))))
             .when(self.browser_linked, |el| el.child(ui::secondary_button("pdf-browser-detach", tr3("断开 Chrome", "Detach Chrome", "Ngắt liên kết Chrome")).on_click(cx.listener(|reader, _, _, cx| reader.set_browser_linked(false, cx)))))
     }
     fn settings_panel(&self, cx: &mut Context<Self>) -> Div {
@@ -196,7 +213,7 @@ impl Render for PdfReader {
             .when(self.show_paired && self.prepared.is_some(), |el| el.child(div().id("pdf-paired-scroll").max_h(px(200.)).flex_none().overflow_y_scroll().px(px(16.)).py(px(8.)).child(self.paired_text(cx))))
             .when(self.selected.is_some(), |el| el.child(div().id("pdf-selected-scroll").max_h(px(240.)).flex_none().overflow_y_scroll().px(px(16.)).py(px(8.)).child(self.selected_panel(cx))))
             .child(div().px(px(16.)).py(px(8.)).border_t_1().border_color(Theme::line_border()).text_size(px(11.)).text_color(Theme::text_caption())
-                .child(format!("{}{}{}", self.status, if quality.is_empty() { "" } else { " · " }, quality)))
+                .child(format!("{}{}{}", self.status, if quality.is_empty() { "" } else { " · " }, quality_label(&quality))))
             .when_some(self.divider_overlay(cx), |el, overlay| el.child(overlay))
     }
 }

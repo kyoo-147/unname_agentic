@@ -1,4 +1,5 @@
 import { apply, getLocale, initLocale, LOCALES, localeLabel, setLocale, subscribe, t, type Locale } from '../src/i18n';
+import { initTargetLanguage } from './target-language';
 
 initLocale();
 
@@ -9,6 +10,7 @@ const desktop = document.querySelector<HTMLButtonElement>('#desktop')!;
 const desktopStop = document.querySelector<HTMLButtonElement>('#desktop-stop')!;
 const desktopStatus = document.querySelector<HTMLElement>('#desktop-status')!;
 const localeSwitch = document.querySelector<HTMLElement>('#locale-switch')!;
+const targetLanguage = document.querySelector<HTMLSelectElement>('#target-language')!;
 localeSwitch.innerHTML = LOCALES.map(locale => `<button type="button" data-locale="${locale}" aria-pressed="${locale === getLocale()}">${localeLabel(locale)}</button>`).join('');
 
 type DesktopKind = 'checking' | 'ready' | 'following' | 'unavailable' | 'no-source' | 'sending' | 'delivered' | 'stopped' | 'error';
@@ -99,5 +101,6 @@ subscribe(() => { apply(document); renderMode(); renderDesktop(); renderStatus()
 apply(document);
 renderMode();
 renderDesktop();
+void initTargetLanguage(targetLanguage).catch(errorMessage);
 void render().catch(errorMessage);
 void desktopState().catch(error => { desktopView = { kind: 'error', message: error instanceof Error ? error.message : t('desktopUnavailable') }; renderDesktop(); });
