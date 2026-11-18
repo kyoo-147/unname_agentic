@@ -14,7 +14,7 @@ Nguồn: audit đọc mã thật từng file (3 auditor độc lập) + `pnpm te
 | ⬜ | Chưa có. |
 | ⚪ | Không build/chạy được trên máy này (native: D: còn ~3.0 GB) → **chưa được coi là xong**. |
 
-Số đo hiện tại (HEAD): **318 unit test / 28 file** + **42 e2e pass / 0 fail** (chạy lại trong phiên), typecheck sạch, build ok. Ba con số này là mốc để phát hiện hồi quy; một test xanh **không** chứng minh được tính năng nếu đường UI không gọi tới nó — xem mục 1b.
+Số đo hiện tại (HEAD): **323 unit test / 29 file** + **49 e2e pass / 0 fail** (chạy lại trong phiên), typecheck sạch, build ok. Ba con số này là mốc để phát hiện hồi quy; một test xanh **không** chứng minh được tính năng nếu đường UI không gọi tới nó — xem mục 1b.
 
 **Cổng mới chống hồi quy "commit thiếu file"**: `scripts/check-committed-imports.mjs` resolve mọi import tương đối **trong chính commit** (không phải working tree) và đã bắt đúng sự cố thật hôm nay: `6b08e20` chứa `import('./ocr/scan')` nhưng `src/ocr/scan.ts` chưa được add → `main` build hỏng với người clone. Script chạy trong `verify-release.ps1` và trong CI.
 
@@ -26,7 +26,7 @@ Số đo hiện tại (HEAD): **318 unit test / 28 file** + **42 e2e pass / 0 fa
 
 | | Chức năng | | Bằng chứng | Còn thiếu |
 |---|---|---|---|---|
-| A01 | Mở PDF, kéo thả, chọn nhiều tệp | 🟡 | `main.ts`: chọn nhiều tệp **và** kéo thả đều import hết rồi mở tệp đầu; `reader.spec.ts` mở fixture | Chưa có e2e cho kéo thả / nhiều tệp; `load()` vẫn thay tài liệu đang mở (giữ tệp đầu) |
+| A01 | Mở PDF, kéo thả, chọn nhiều tệp | ✅ | e2e `reader-import.spec.ts`: chọn 2 PDF cùng lúc → cả 2 vào thư viện, **tệp đầu** mở trong reader (phân biệt bằng hình học trang); drop thật qua DataTransfer → mở tài liệu, class `.dragging` được xoá | Drop chỉ nhận tệp PDF (đuôi/MIME không hợp lệ do `openPdf` từ chối) |
 | A02 | Render PDF.js giữ tỉ lệ trang | ✅ | `pdf/document.ts` renderPage; e2e so width gốc = width dịch | — |
 | A03 | Trích block chữ + toạ độ | ✅ | `pdf/layout.ts` groupTextItems; `pdf-layout.test.ts` assert rect chính xác | — |
 | A04 | Xoá glyph gốc dưới chữ đã dịch | ✅ | `document.ts` suppressTextContext; e2e pixel: ink gốc > 100, ink dịch = 0 | — |
@@ -45,7 +45,7 @@ Số đo hiện tại (HEAD): **318 unit test / 28 file** + **42 e2e pass / 0 fa
 | A17 | Thư viện tài liệu (giữ qua reload) | ✅ | `core/library-store.ts` IndexedDB + `main.ts` wire + e2e `export-library.spec.ts` reload | — |
 | A18 | Giao diện Việt/Anh/Trung | ✅ | `i18n.test.ts` parity 3 ngữ + mọi key `t()`/`data-i18n` resolve; e2e mặc định tiếng Việt | — |
 | A19 | Glossary + áp dụng provider | ✅ | journey 11: nhập `AI = trí tuệ nhân tạo` → request provider **có** thuật ngữ, không lỗi; `translation.test.ts` chứng minh Google/DeepL **không** nhận glossary; **bug đã sửa**: dòng glossary lỗi không còn nuốt provider/endpoint/ngôn ngữ | Google/DeepL không nhận glossary là giới hạn API, UI nói rõ — không phải lỗi |
-| A20 | Tự nhận diện ngôn ngữ nguồn | 🟡 | `main.ts` showDetectedLanguage; detectLanguage có test | Gợi ý `#detected-language` không được test ở đâu |
+| A20 | Tự nhận diện ngôn ngữ nguồn | ✅ | e2e `reader-import.spec.ts`: mở PDF → `#detected-language` hiện "Looks like this document is in English."; đổi ngôn ngữ đích sang `ja` → gợi ý **không** ghi đè, chọn `ja` vẫn giữ; mở lại tài liệu → gợi ý vẫn đúng | Chỉ nhận diện theo trang 1 (không quét cả tài liệu) |
 | A21 | Danh sách ngôn ngữ đích có tên bản địa | ✅ | `language.ts` 14 ngôn ngữ; test pin nativeName | — |
 | A22 | Mục lục, thumbnail, nhảy trang | ✅ | e2e `reader-navigation.spec.ts`: outline (PDF chèn bookmark bằng pdf-lib) nhảy trang 3 + `aria-current`, thumbnail canvas 160×207 có pixel, ô số trang + Enter nhảy | — |
 | A23 | Tìm trong tài liệu | ✅ | e2e `reader-navigation.spec.ts`: gõ "closer" → 3 kết quả đúng trang → click → nhảy + highlight `.is-search-hit` | Debounce 250ms chỉ chứng minh gián tiếp |
@@ -53,7 +53,7 @@ Số đo hiện tại (HEAD): **318 unit test / 28 file** + **42 e2e pass / 0 fa
 | A25 | Lưu vị trí đọc/zoom/ngôn ngữ | ✅ | e2e `reader-navigation.spec.ts` (test 5): đọc tới trang 3, reload, mở lại từ thư viện → về trang 3 + UI tiếng Anh (`mirror.reading-state`, `mirror.locale`) | — |
 | A26 | Xuất bản dịch (TXT/PDF song ngữ) | ✅ | `export/bilingual.ts` 20 test; `main.ts` nối TXT + nút **Print / Save as PDF** (`printHtml` + Ctrl/Cmd+P); e2e `export-library.spec.ts` + `export-print.spec.ts` 2 test | Không có PDF writer nhị phân: PDF đi qua bộ in của trình duyệt nên mất bố cục gốc/ảnh — đã ghi rõ trong module |
 | A27 | OCR ảnh chụp → block → dịch | ✅ | e2e `capture.spec.ts` OCR thật (3 block, 95–96%); **thêm OCR cho PDF scan**: `ocr/scan.ts` + e2e `scan-ocr.spec.ts` (PDF không có text vẫn OCR + dịch); preprocess một bản duy nhất (`ocr/preprocess.ts`) chạy trước Tesseract, toạ độ map ngược về ảnh gốc | Chỉ `eng+vie`; ảnh nghiêng/mờ chưa có benchmark |
-| A28 | RTL và CJK trong vùng dịch | 🟡 | `text-direction.ts` + 11 test; `layout.ts` dùng detect | Chưa render một PDF RTL/CJK nào; `estimateLineUnits` là dead code |
+| A28 | RTL và CJK trong vùng dịch | ✅ | e2e `rtl-cjk-render.spec.ts`: target Ả Rập → region `dir="rtl"` có chữ Ả Rập, khung > 0; target Trung → region CJK, đoạn dài **xuống dòng** và không tràn (`scrollHeight` ≤ `clientHeight`) | Chứng minh **vùng dịch**; PDF nguồn có sẵn chữ Ả Rập/CJK (font nhúng) chưa có fixture |
 | A29 | Phím tắt đọc | ✅ | `keyboardIntent` 20+ case + test mới `reader-keyboard.test.ts` (Home/End, j/k, +/-, w/f, o, /, Escape, modifier, ô nhập); `main.ts` dispatch đủ | Chưa có e2e bấm phím thật trong trình duyệt (chỉ unit) |
 | A30 | Accessibility WCAG cơ bản | ✅ | `a11y.spec.ts` 8 test: focus trap, aria-live, reduced-motion, contrast 4.5:1 (đo thật) | — |
 
@@ -64,7 +64,7 @@ Số đo hiện tại (HEAD): **318 unit test / 28 file** + **42 e2e pass / 0 fa
 | B01 | Tự phát hiện PDF (URL, MIME, embed/object/iframe) | ✅ | `tests/extension-content.test.ts`: embed `type=application/pdf` không có đuôi .pdf, object đường dẫn tương đối + MIME params, iframe giữ `#page`, và trang chỉ *giống* PDF không mirror; e2e `extension.spec.ts` cho MIME-only trong Chrome thật | Object nhúng phải là DOM stub (repo không có jsdom) — layout/CSS thật chưa test |
 | B02 | Một mirror cho mỗi nguồn | ✅ | `extension.test.ts` open 1 lần, reopen khi tab mất, session sau restart | — |
 | B03 | Fetch bytes có kiểm `%PDF-` + quyền host | ✅ | authorize theo tab, cap 100 MiB, test login page bị từ chối | — |
-| B04 | Popup bật/tắt + trạng thái | 🟡 | `popup.ts` lưu `mirror:enabled`; **đã có select ngôn ngữ đích** (`extension/target-language.ts`, lưu `mirror:targetLanguage`) + test DOM; reader đọc lại và áp nếu hợp lệ (`main.ts`) | Chưa có e2e trong Chrome thật chứng minh reader nhận ngôn ngữ từ popup; chưa có ảnh chụp popup |
+| B04 | Popup bật/tắt + trạng thái | ✅ | e2e `extension-language.spec.ts` với extension MV3 thật: đặt `mirror:targetLanguage=en` → toolbar reader là English **và** request provider hỏi "into English (en)"; giá trị rác `tlh` → fallback `vi`, không lỗi; ảnh chụp trong `artifacts/extension-language/` | Popup vẫn chưa có ảnh chụp UI riêng (hành vi đã test qua storage + reader) |
 | B05 | Badge số mirror | ✅ | test badge 2 → 1 → '' và xoá khi đóng tab nguồn | — |
 | B06 | Capture tab → mirror ảnh | ✅ | e2e `extension-capture.spec.ts` (test 1) với extension MV3 thật: mở đúng 1 viewer `?capture=1`, OCR thật 19 block, card `data-state=done` có bản dịch, `/metrics` tăng | `captureVisibleTab` phải thay bằng screenshot của test (activeTab chỉ cấp khi có gesture) — phần còn lại là code thật |
 | B07 | Gửi PDF sang desktop | 🟡 | `native-bridge.ts` chunk 192 KiB + SHA-256, test byte-exact | Host binary không còn build được; đường Chrome thật chưa từng chạy |
@@ -163,6 +163,10 @@ Luật: mỗi key phải có đủ `vi`/`en`/`zh`, không hardcode tiếng Anh; 
 **Giao thức khi có hai phiên cùng commit một repo** (đã xảy ra sự cố thật): phiên kia chạy `git clean -fd` và **xoá file mới chưa track** của agent (mất spec hành trình lúc 09:47 và 09:49). Từ giờ: mỗi lane ghi bản dự phòng vào `artifacts/` (đã gitignore, `clean -fd` không xoá) và lead commit ngay khi file xuất hiện.
 
 ## 2. Việc phải làm để tick hết (theo thứ tự tác động)
+
+### Trạng thái: web + extension đã kín ô ✅
+
+Mọi dòng A và B đều đã tích; phần còn lại **chỉ là việc bị chặn từ bên ngoài**: B07/B08 (cần binary desktop), C02–C23 (cần build native), D11 (tài khoản GitHub bị khoá billing). P0 dưới đây vì vậy chỉ còn các điều kiện mở chặn, không còn mã phải viết.
 
 ### P0 — chặn phát hành
 1. **A09/A10** stop thật sự + retry mọi trang lỗi (kể cả đã cuộn qua) + test — retry hiện chỉ xếp lại trang đang thấy.
