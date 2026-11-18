@@ -10,6 +10,8 @@ export interface TextBlock {
   page: number;
   text: string;
   rect: Rect;
+  /** Unrotated page rect, used to draw translated text on a rotated canvas. */
+  baseRect?: Rect;
   fontSize: number;
   fontFamily: string;
   color: string;

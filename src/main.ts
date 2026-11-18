@@ -272,6 +272,7 @@ function paintMirror(result: RenderedPage) {
   const canvas=document.createElement('canvas'); canvas.width=result.original.width; canvas.height=result.original.height; canvas.className='page-canvas';
   const context=canvas.getContext('2d')!; context.drawImage(result.original,0,0);
   const scale=canvas.width/result.model.width;
+  if(result.rotation!==0) { paintRotatedMirror(result,slot,canvas,context,scale); return; }
   const overlays: {block:TextBlock;text:string;size:number;lineHeight:number}[]=[];
   for(const block of result.model.blocks) {
     const text=translations.get(block.id); if(!text) continue;
@@ -292,6 +293,36 @@ function paintMirror(result: RenderedPage) {
       element.style.fontSize=`${overlay.size/result.model.width*100}cqw`; element.style.lineHeight=String(overlay.lineHeight/overlay.size); element.dir=resolveBlockDirection(block.direction,text??'');
     } else if(text) { element.classList.add('callout-region'); element.title=t('calloutTitle'); element.setAttribute('aria-label',t('calloutAria')); }
     else if(errors.has(block.id)) {element.classList.add('failed-region');element.title=errors.get(block.id)!;}
+  }
+  highlight(selected?.id??'');
+}
+function paintRotatedMirror(result: RenderedPage,slot: HTMLElement,canvas: HTMLCanvasElement,context: CanvasRenderingContext2D,scale: number) {
+  const overlays: {block:TextBlock;text:string}[]=[];
+  for(const block of result.model.blocks) {
+    const text=translations.get(block.id); if(!text) continue;
+    const base=block.baseRect??block.rect;
+    const fit=fitText(text,base.width,base.height,block.fontSize,(line,size)=>{context.font=`${size}px sans-serif`;return context.measureText(line).width;});
+    if(!result.background||fit.overflow) continue;
+    const {x,y,width,height}=block.rect;
+    context.drawImage(result.background,x*scale,y*scale,width*scale,height*scale,x*scale,y*scale,width*scale,height*scale);
+    context.save();
+    if(result.rotation===90) { context.translate(result.model.width*scale,0); context.rotate(Math.PI/2); }
+    else if(result.rotation===180) { context.translate(result.model.width*scale,result.model.height*scale); context.rotate(Math.PI); }
+    else { context.translate(0,result.model.height*scale); context.rotate(-Math.PI/2); }
+    context.scale(scale,scale);
+    context.fillStyle='#202724'; context.textBaseline='top'; context.font=`${fit.fontSize}px sans-serif`;
+    fit.lines.forEach((line,index)=>context.fillText(line,base.x,base.y+index*fit.lineHeight));
+    context.restore();
+    overlays.push({block,text:fit.lines.join('\n')});
+  }
+  slot.replaceChildren(canvas); addRegions(slot,result,true);
+  for(const block of result.model.blocks) {
+    const element=slot.querySelector<HTMLElement>(`[data-region="${block.id}"]`)!;
+    const overlay=overlays.find(item=>item.block.id===block.id);
+    const text=translations.get(block.id);
+    if(overlay) { element.classList.add('painted-region'); element.textContent=overlay.text; element.style.color='transparent'; element.style.background='transparent'; }
+    else if(text) { element.classList.add('callout-region'); element.title=t('calloutTitle'); element.setAttribute('aria-label',t('calloutAria')); }
+    else if(errors.has(block.id)) { element.classList.add('failed-region'); element.title=errors.get(block.id)!; }
   }
   highlight(selected?.id??'');
 }

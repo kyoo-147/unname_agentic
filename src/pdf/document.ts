@@ -1,10 +1,10 @@
 import { getDocument, GlobalWorkerOptions, OPS, type PDFDocumentProxy, type PDFPageProxy } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { PageModel } from '../core/types';
-import { groupTextItems, readPageTextItems, searchTextPage, type PageTextItem, type PdfTextItem, type SearchMatch } from './layout';
+import { groupTextItems, normalizeRotation, readPageTextItems, rotatePageSize, rotateRect, searchTextPage, type PageRotation, type PageTextItem, type PdfTextItem, type SearchMatch } from './layout';
 GlobalWorkerOptions.workerSrc = workerUrl;
 
-export interface RenderedPage { page: PDFPageProxy; model: PageModel; original: HTMLCanvasElement; background: HTMLCanvasElement | null; warning: string }
+export interface RenderedPage { page: PDFPageProxy; model: PageModel; original: HTMLCanvasElement; background: HTMLCanvasElement | null; warning: string; rotation: PageRotation }
 export interface RenderPageOptions { rotation?: number }
 export interface OutlineEntry { title: string; page: number; depth: number }
 export type { PageTextItem, SearchMatch };
@@ -44,7 +44,13 @@ export async function renderPage(document: PDFDocumentProxy, number: number, opt
   const rotation = normalizeRotation(options.rotation ?? 0);
   const viewport = page.getViewport(rotation ? {scale:1, rotation:page.rotate + rotation} : {scale:1});
   const content = await page.getTextContent();
-  const model: PageModel = { number, width:viewport.width, height:viewport.height, blocks:groupTextItems(content.items.filter((item): item is typeof item & PdfTextItem => 'str' in item),viewport.transform,number,content.styles) };
+  const textItems = content.items.filter((item): item is typeof item & PdfTextItem => 'str' in item);
+  const baseViewport = rotation === 0 ? viewport : page.getViewport({scale:1});
+  const baseModel: PageModel = { number, width:baseViewport.width, height:baseViewport.height, blocks:groupTextItems(textItems,baseViewport.transform,number,content.styles) };
+  const model: PageModel = rotation === 0 ? baseModel : (() => {
+    const size = rotatePageSize({width:baseViewport.width,height:baseViewport.height}, rotation);
+    return { number, width:size.width, height:size.height, blocks:baseModel.blocks.map(block => ({...block, baseRect:block.rect, rect:rotateRect(block.rect,rotation,baseViewport.width,baseViewport.height), rotation:normalizeRotation(block.rotation + rotation)})) };
+  })();
   const scale = Math.min(window.devicePixelRatio || 1,2) * 1.25;
   const rasterViewport = page.getViewport(rotation ? {scale, rotation:page.rotate + rotation} : {scale});
   const original = documentCanvas(rasterViewport.width,rasterViewport.height);
@@ -58,9 +64,7 @@ export async function renderPage(document: PDFDocumentProxy, number: number, opt
   }
   let background: HTMLCanvasElement | null = null;
   let warning = '';
-  const rotatedGlyphs = rotation === 0
-    ? model.blocks.some(block => Math.abs(block.rotation) > .5)
-    : model.blocks.some(block => Math.abs(((((block.rotation - rotation) % 360) + 540) % 360) - 180) > .5);
+  const rotatedGlyphs = rotation === 0 && model.blocks.some(block => Math.abs(block.rotation) > .5);
   if (unsafe || type3 || rotatedGlyphs) warning='Complex text, clipping, or rotated glyphs: translations open in a paired reading view; source pixels are preserved.';
   else {
     background = documentCanvas(rasterViewport.width,rasterViewport.height);
@@ -68,7 +72,7 @@ export async function renderPage(document: PDFDocumentProxy, number: number, opt
     await page.render({ canvas:null, canvasContext:suppressTextContext(context), viewport:rasterViewport }).promise;
   }
   if (!model.blocks.length) warning='No embedded text found. This scanned or outlined page needs OCR; the original remains available.';
-  return { page,model,original,background,warning };
+  return { page,model,original,background,warning,rotation };
 }
 
 export async function getOutline(pdf: PdfDocumentLike): Promise<OutlineEntry[]> {
@@ -112,10 +116,6 @@ export async function renderThumbnail(pdf: PdfDocumentLike, number: number, maxW
   return { canvas, dataUrl:canvas.toDataURL(options.format ?? 'image/jpeg',options.quality ?? 0.72), width, height, page:number };
 }
 
-function normalizeRotation(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return ((Math.round(value / 90) * 90) % 360 + 360) % 360;
-}
 
 async function resolveOutlinePage(pdf: PdfDocumentLike, dest: unknown): Promise<number> {
   let value = dest;

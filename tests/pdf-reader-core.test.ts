@@ -320,6 +320,6 @@ describe('renderPage rotation', () => {
   it('adds requested rotation to the page rotation for both viewports', async () => {
     const { viewportCalls, pdf } = harness();
     await renderPage(pdf,1,{ rotation:90 });
-    expect(viewportCalls).toEqual([{ scale:1, rotation:90 },{ scale:1.25, rotation:90 }]);
+    expect(viewportCalls).toEqual([{ scale:1, rotation:90 },{ scale:1 },{ scale:1.25, rotation:90 }]);
   });
 });

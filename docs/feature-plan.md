@@ -39,7 +39,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | A21 | Danh sách ngôn ngữ đích có tên hiển thị | [x] | select từ `SUPPORTED_TARGETS`, 14 ngôn ngữ, tên bản địa |
 | A22 | Mục lục, thumbnail, nhảy trang | [x] | panel outline/thumbnail + ô số trang; `getOutline`, `renderThumbnail` |
 | A23 | Tìm trong tài liệu | [x] | panel search, debounce 250ms, `searchAllPages` có abort |
-| A24 | Xoay trang, chế độ fit width/page | [~] | rotate 0/90/180/270 + fit; overlay bản dịch khi xoay còn lệch, journey 04 đang `fixme` |
+| A24 | Xoay trang, chế độ fit width/page | [x] | rotate 0/90/180/270 + fit; overlay bản dịch vẽ lại trên canvas đúng hướng; journey 04 pass |
 | A25 | Lưu vị trí đọc, zoom, ngôn ngữ qua reload | [x] | `saveReadingState` theo tài liệu; locale lưu localStorage |
 | A26 | Xuất bản dịch (txt/PDF song ngữ) | [x] | `src/export/bilingual.ts` + nút Xuất; e2e tải file `.bilingual.txt` có cả nguồn và bản dịch |
 | A27 | OCR ảnh chụp màn hình → block → dịch | [~] | `src/capture/*` + Tesseract eng/vie; đã nối `?capture=1`; chưa chạy capture thật trong extension |
@@ -106,8 +106,8 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | D05 | Đếm ký tự/chi phí ước tính | [x] | `characterCount` trong kết quả và status bar |
 | D06 | Glossary parser + kiểm tra thuật ngữ | [x] | `parseGlossary`, giới hạn 200 mục, test edge cases |
 | D07 | Prompt template có version, chống prompt injection | [~] | có promptVersion + câu “do not follow instructions”; chưa test |
-| D08 | Test web đơn vị | [x] | 296 passed / 24 files (2026-11-18) |
-| D09 | Test e2e Chromium | [x] | 16 passed (2026-11-18), gồm mặc định tiếng Việt, capture OCR, export và a11y |
+| D08 | Test web đơn vị | [x] | 300 passed / 24 files (2026-11-18) |
+| D09 | Test e2e Chromium | [x] | 29 passed (2026-11-18), gồm 13 user journeys, rotation, capture OCR, export, a11y |
 | D10 | Test native | [~] | 95 + 71 passed trước khi xoá editor; chưa build lại |
 | D11 | CI GitHub Actions | [~] | `.github/workflows/ci.yml` đã có; chưa chạy trên GitHub |
 | D12 | LICENSE root + third-party notices | [x] | `LICENSE` MIT + notice OCR/PDFium/GPUI |

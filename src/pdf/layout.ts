@@ -1,5 +1,5 @@
 import { resolveBlockDirection } from '../core/text-direction';
-import type { TextBlock } from '../core/types';
+import type { Rect, TextBlock } from '../core/types';
 
 export interface PdfTextItem { str: string; transform: number[]; width: number; height: number; dir?: string; fontName?: string }
 export function groupTextItems(items: PdfTextItem[], viewport: number[], page: number, styles: Record<string, { ascent?: number; descent?: number }> = {}): TextBlock[] {
@@ -41,6 +41,16 @@ export function nextRotation(current: number, delta = 90): PageRotation {
 export function rotatePageSize(size: { width: number; height: number }, rotation: number): { width: number; height: number } {
   const quarter = normalizeRotation(rotation) % 180 !== 0;
   return quarter ? { width:size.height, height:size.width } : { width:size.width, height:size.height };
+}
+
+export function rotateRect(rect: Rect, rotation: number, width: number, height: number): Rect {
+  if (!(width > 0) || !(height > 0)) return { ...rect };
+  const x = rect.x / width, y = rect.y / height, w = rect.width / width, h = rect.height / height;
+  const turned = normalizeRotation(rotation);
+  if (turned === 90) return { x: (1 - y - h) * height, y: x * width, width: h * height, height: w * width };
+  if (turned === 180) return { x: (1 - x - w) * width, y: (1 - y - h) * height, width: w * width, height: h * height };
+  if (turned === 270) return { x: y * height, y: (1 - x - w) * width, width: h * height, height: w * width };
+  return { ...rect };
 }
 
 export interface PageTextItem extends PdfTextItem { hasEOL?: boolean }

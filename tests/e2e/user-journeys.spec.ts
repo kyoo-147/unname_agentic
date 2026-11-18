@@ -230,7 +230,7 @@ test('journey 03 a provider error is shown and Retry recovers', async ({ page })
 // overflows and paintMirror degrades most regions to invisible callouts. The journey still
 // runs and asserts the requested behavior, but it is expected to fail until rotation paints
 // translated text. Remove `.fail` to turn this into a hard regression gate.
-test.fail('journey 04 rotates 90, 180, 270 and back, changing geometry and keeping translations painted', { annotation: { type: 'known-issue', description: 'Rotating 90°/270° drops painted translations; see artifacts/journeys/04-rotate-90.png' } }, async ({ page }) => {
+test('journey 04 rotates 90, 180, 270 and back, changing geometry and keeping translations painted', async ({ page }) => {
   await pinEnglish(page);
   await openReader(page);
   await translateVisible(page);
@@ -246,7 +246,8 @@ test.fail('journey 04 rotates 90, 180, 270 and back, changing geometry and keepi
     const landscape = degrees % 180 === 90;
     await waitForLandscape(page, landscape);
     await expect(page.locator('.page-pair').first().locator('.painted-region').first()).toBeVisible({ timeout: 20_000 });
-    const titlePainted = await page.locator('.page-pair').first().locator('.painted-region').filter({ hasText: 'Đọc không còn rào cản' }).first().isVisible().catch(() => false);
+    const title = page.locator('.page-pair').first().locator('.painted-region').filter({ hasText: 'Đọc không còn rào cản' }).first();
+    const titlePainted = await title.waitFor({ state: 'visible', timeout: 10_000 }).then(() => true).catch(() => false);
     const geometry = await pageGeometry(page);
     expect(geometry.ratio).toBeCloseTo(landscape ? 792 / 612 : 612 / 792, 2);
     steps.push({ degrees, titlePainted, ratio: geometry.ratio });
