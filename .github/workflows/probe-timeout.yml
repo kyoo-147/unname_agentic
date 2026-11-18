@@ -1,0 +1,15 @@
+name: probe-timeout
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        timeout-minutes: 3
+      - name: hello
+        timeout-minutes: 2
+        run: echo hello-with-step-timeouts
