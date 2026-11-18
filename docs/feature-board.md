@@ -42,7 +42,7 @@ Số đo hiện tại (5b78dab): **300 unit test / 24 file** (tự chạy lại 
 | A16 | Trạng thái lỗi/đang tải/mất nguồn | ✅ | e2e `#status.is-error`, canvas gốc vẫn hiện | — |
 | A17 | Thư viện tài liệu (giữ qua reload) | ✅ | `core/library-store.ts` IndexedDB + `main.ts` wire + e2e `export-library.spec.ts` reload | — |
 | A18 | Giao diện Việt/Anh/Trung | ✅ | `i18n.test.ts` parity 3 ngữ + mọi key `t()`/`data-i18n` resolve; e2e mặc định tiếng Việt | — |
-| A19 | Glossary + áp dụng provider | 🟡 | parseGlossary (6 mã lỗi), prompt có glossary; test prompt | Google/DeepL không nhận glossary (UI nói rõ); **bug**: một lỗi glossary làm submit settings return sớm → mất thay đổi provider |
+| A19 | Glossary + áp dụng provider | 🟡 | parseGlossary (6 mã lỗi), prompt có glossary; test prompt; **đã sửa bug**: dòng glossary lỗi không còn nuốt provider/endpoint/ngôn ngữ (giữ glossary cũ + báo lỗi rõ) | Google/DeepL vẫn không nhận glossary (UI nói rõ); chưa có test UI cho đếm lỗi glossary |
 | A20 | Tự nhận diện ngôn ngữ nguồn | 🟡 | `main.ts` showDetectedLanguage; detectLanguage có test | Gợi ý `#detected-language` không được test ở đâu |
 | A21 | Danh sách ngôn ngữ đích có tên bản địa | ✅ | `language.ts` 14 ngôn ngữ; test pin nativeName | — |
 | A22 | Mục lục, thumbnail, nhảy trang | 🟡 | `main.ts` outline/thumb/page input; helper có test | Chưa test append entry, thumbnail render, hay click nhảy |
@@ -52,7 +52,7 @@ Số đo hiện tại (5b78dab): **300 unit test / 24 file** (tự chạy lại 
 | A26 | Xuất bản dịch (TXT/PDF song ngữ) | ✅ | `export/bilingual.ts` 20 test; `main.ts` nối TXT + nút **Print / Save as PDF** (`printHtml` + Ctrl/Cmd+P); e2e `export-library.spec.ts` + `export-print.spec.ts` 2 test | Không có PDF writer nhị phân: PDF đi qua bộ in của trình duyệt nên mất bố cục gốc/ảnh — đã ghi rõ trong module |
 | A27 | OCR ảnh chụp → block → dịch | ✅ | e2e `capture.spec.ts` OCR thật (3 block, 95–96%), ảnh `artifacts/capture-ocr-e2e.png` | — |
 | A28 | RTL và CJK trong vùng dịch | 🟡 | `text-direction.ts` + 11 test; `layout.ts` dùng detect | Chưa render một PDF RTL/CJK nào; `estimateLineUnits` là dead code |
-| A29 | Phím tắt đọc | 🟡 | `ui/reader.ts` keyboardIntent, 20+ case test | **Home/End không tồn tại**; chưa có e2e bấm j/k/Ctrl+F thật |
+| A29 | Phím tắt đọc | ✅ | `keyboardIntent` 20+ case + test mới `reader-keyboard.test.ts` (Home/End, j/k, +/-, w/f, o, /, Escape, modifier, ô nhập); `main.ts` dispatch đủ | Chưa có e2e bấm phím thật trong trình duyệt (chỉ unit) |
 | A30 | Accessibility WCAG cơ bản | ✅ | `a11y.spec.ts` 8 test: focus trap, aria-live, reduced-motion, contrast 4.5:1 (đo thật) | — |
 
 ### B. Chrome extension (`extension/`)
@@ -163,12 +163,11 @@ Luật: mỗi key phải có đủ `vi`/`en`/`zh`, không hardcode tiếng Anh; 
 ## 2. Việc phải làm để tick hết (theo thứ tự tác động)
 
 ### P0 — chặn phát hành
-1. **Bug xoay trang 90°/270°** mất chữ dịch (hành trình 04): xoay canvas trong `paintMirror` hoặc hoán trục đo; bỏ `test.fail` để thành cổng hồi quy thật.
-2. **Nối 6 module lượt 2 vào UI** (xem mục 1b): export TXT/PDF, batch "Dịch tất cả", cost trên status bar, preprocess trước Tesseract.
-3. **Bug glossary chặn settings** (`main.ts`): lỗi parse glossary không được chặn submit; phải lưu provider/endpoint/ngôn ngữ rồi mới báo lỗi glossary.
-4. **A29 Home/End** + e2e bấm phím thật (j/k/+/-/Ctrl+F/Home/End).
-5. **A09/A10** stop thật sự + retry mọi trang lỗi (kể cả đã cuộn qua) + test.
-6. **D11 CI**: code đã đúng (workflow + `verify-release.ps1` pass local), nhưng tài khoản GitHub đang bị **khoá vì billing** nên **không job nào start được** — kể cả một workflow tối giản 6 dòng. Việc cần làm nằm ở GitHub Billing (hoặc chuyển repo sang public), không phải sửa mã.
+1. **A09/A10** stop thật sự + retry mọi trang lỗi (kể cả đã cuộn qua) + test — retry hiện chỉ xếp lại trang đang thấy.
+2. **D04 batch**: nút "Dịch tất cả" dùng `translateBatch` thay vì 1 request/khối (module đã có + 17 test, chỉ thiếu call site).
+3. **Nối nốt OCR preprocess vào `capture/reader.ts`** (đang chạy ở lane riêng) và xoá bản trùng trong `ocr/pipeline.ts`.
+4. **D11 CI**: code đã đúng, tài khoản GitHub bị **khoá vì billing** nên không job nào start — sửa ở GitHub Billing (hoặc chuyển repo sang public), không phải sửa mã.
+5. **A30**: skip-link đang trỏ `#app` (chứa cả sidebar) — trỏ `#main-content` để thật sự bỏ qua nav.
 
 ### P1 — chất lượng cảm nhận
 7. A22/A23/A24/A25: e2e cho outline/jump, search, xoay, fit, reload — đây là 4 chức năng người dùng thấy mà chưa có bằng chứng click.
