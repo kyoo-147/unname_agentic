@@ -21,12 +21,14 @@ Result: exit 0, 36 pre-existing warnings, 6m 38s cold build (31.7s after the fir
 - Executable: `pdf_workspace.exe`, 21,400,064 bytes
 - SHA-256: `0C120D7D38115931A7EAED35B3D7302167683A6218F939FCB9F5B4B83250D63F`
 - Package: `dist/pdf-workspace-windows-x64-release-20261118-110746/`
-- Zip: `dist/pdf-workspace-windows-x64-release-20261118-110746.zip`, 11.07 MB
-- Zip SHA-256: `DDFBB2F480F5936E45EEA0EE4C0AB2A327834CD2D7A4E4E6BFA3CCBF4E2E857F`
+- Native-messaging host: `pdf-workspace-host.exe`, 478,208 bytes, SHA-256 `79713585756FC360B2CC9590C3FBE1B5769030DFDBAFBF4E841358BDC95AAF1C`
+- Zip: `dist/pdf-workspace-windows-x64-release-20261118-110746.zip`, 11.28 MB
+- Zip SHA-256: `2D8C417E3FB9C351B7575E830AD2AF43CEFD5CC359412A40FA4500DE4B76FD69`
 
-Package contents: executable, `pdfium.dll`, root and upstream licenses, Lucide license, PDFium
-version and component licenses. The package is **unsigned**; no code-signing certificate was used.
-The Chrome native-messaging host is not part of this zip.
+Package contents: executable, `pdfium.dll`, `pdf-workspace-host.exe`, `install-native-host.ps1`,
+root and upstream licenses, Lucide license, PDFium version and component licenses. The package is
+**unsigned**; no code-signing certificate was used. The companion host answered a framed `hello`
+handshake with protocol 1 and `status: ready`.
 
 ## Runtime check
 
@@ -52,6 +54,6 @@ Regression evidence: fresh packaged launch renders at 15 s; native workspace tes
 ## Limits
 
 - The release is portable, not an installer; it is unsigned.
-- The Chrome native-messaging host (`pdf-workspace-host.exe`) is not included in this package.
+- The Chrome native-messaging host is included, but Chrome registration is a separate user step (`install-native-host.ps1`).
 - Translation is off until a provider is configured; no live provider was called.
 - One fixture, one window size (1679x950), one DPI.

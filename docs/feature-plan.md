@@ -91,7 +91,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | C20 | OCR Tesseract dự phòng ngoài Windows OCR | [ ] | máy chưa cài; Windows OCR là engine duy nhất |
 | C21 | Xoay trang trong reader | [x] | Nút `Xoay trang` xoay ảnh + block theo 90°; unit test 2 case; ảnh `desktop-reader-vi-rotated.png` |
 | C22 | Xuất PDF/bản dịch | [x] | Native xuất trang hiện tại ra Markdown song ngữ cạnh bản gốc (đã chạy thật, toast + file UTF-8); web xuất .bilingual.txt; chưa xuất PDF/DOCX giữ layout |
-| C23 | Packaging + license bundle + ký số | [~] | portable release zip + PDFium/license bundle, chạy được first-import; chưa ký số, thiếu companion host |
+| C23 | Packaging + license bundle + ký số | [~] | portable release zip + PDFium/host/license bundle, chạy được first-import; chưa ký số |
 | C24 | Auto-update | [ ] | bị tắt có chủ đích |
 | C25 | Build lại + test lại toàn bộ trong phiên này | [x] | `cargo test` 50 pass/1 ignored; release exe 21.4 MB; zip 11.07 MB; first-import fix chạy 15s |
 
