@@ -96,6 +96,12 @@ export function detectDirection(text: string): TextDirection {
 }
 
 /** A PDF producer's explicit hint wins; otherwise the block text decides, and neutral text reads as ltr. */
+const RTL_LANGUAGES = new Set(['ar', 'he', 'fa', 'ur', 'yi', 'dv']);
+
+export function isRtlLanguage(code: string | undefined): boolean {
+  return RTL_LANGUAGES.has((code ?? '').toLowerCase().split('-')[0] ?? '');
+}
+
 export function resolveBlockDirection(hint: string | undefined, text: string): 'ltr' | 'rtl' {
   if (hint === 'rtl') return 'rtl';
   if (hint === 'ltr') return 'ltr';

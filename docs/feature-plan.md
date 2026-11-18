@@ -106,8 +106,8 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | D05 | Đếm ký tự/chi phí ước tính | [x] | `characterCount` trong kết quả và status bar |
 | D06 | Glossary parser + kiểm tra thuật ngữ | [x] | `parseGlossary`, giới hạn 200 mục, test edge cases |
 | D07 | Prompt template có version, chống prompt injection | [~] | có promptVersion + câu “do not follow instructions”; chưa test |
-| D08 | Test web đơn vị | [x] | 300 passed / 24 files (2026-11-18) |
-| D09 | Test e2e Chromium | [x] | 29 passed (2026-11-18), gồm 13 user journeys, rotation, capture OCR, export, a11y |
+| D08 | Test web đơn vị | [x] | 323 passed / 29 files (2026-11-18) |
+| D09 | Test e2e Chromium | [x] | 49 passed (2026-11-18), gồm journeys, rotation, RTL/CJK, batch, capture, export, a11y |
 | D10 | Test native | [x] | 50 pass / 1 ignored native workspace; 20 backend desktop; release build OK |
 | D11 | CI GitHub Actions | [~] | `.github/workflows/ci.yml` đã có; chưa chạy trên GitHub |
 | D12 | LICENSE root + third-party notices | [x] | `LICENSE` MIT + notice OCR/PDFium/GPUI |

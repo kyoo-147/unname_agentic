@@ -20,7 +20,7 @@ import {
 } from './ui/reader';
 import { isCaptureRequest, mountCaptureReader, type CaptureReaderHandle } from './capture/reader';
 import { createLibraryStore } from './core/library-store';
-import { resolveBlockDirection } from './core/text-direction';
+import { isRtlLanguage, resolveBlockDirection } from './core/text-direction';
 import { toBilingualHtml, toBilingualText, type ExportedPage } from './export/bilingual';
 import { documentTitle, printHtml, PrintTimeoutError, PrintUnavailableError } from './export/print';
 import { estimateCost, formatUsd } from './core/pricing';
@@ -303,7 +303,7 @@ function paintMirror(result: RenderedPage) {
     const text=translations.get(block.id);
     if(overlay) {
       element.classList.add('painted-region'); element.textContent=overlay.text;
-      element.style.fontSize=`${overlay.size/result.model.width*100}cqw`; element.style.lineHeight=String(overlay.lineHeight/overlay.size); element.dir=resolveBlockDirection(block.direction,text??'');
+      element.style.fontSize=`${overlay.size/result.model.width*100}cqw`; element.style.lineHeight=String(overlay.lineHeight/overlay.size); element.dir=isRtlLanguage(settings.targetLanguage)?'rtl':resolveBlockDirection(undefined,text??'');
     } else if(text) { element.classList.add('callout-region'); element.title=t('calloutTitle'); element.setAttribute('aria-label',t('calloutAria')); }
     else if(errors.has(block.id)) {element.classList.add('failed-region');element.title=errors.get(block.id)!;}
   }
@@ -333,7 +333,7 @@ function paintRotatedMirror(result: RenderedPage,slot: HTMLElement,canvas: HTMLC
     const element=slot.querySelector<HTMLElement>(`[data-region="${block.id}"]`)!;
     const overlay=overlays.find(item=>item.block.id===block.id);
     const text=translations.get(block.id);
-    if(overlay) { element.classList.add('painted-region'); element.textContent=overlay.text; element.style.color='transparent'; element.style.background='transparent'; }
+    if(overlay) { element.classList.add('painted-region'); element.textContent=overlay.text; element.style.color='transparent'; element.style.background='transparent'; element.dir=isRtlLanguage(settings.targetLanguage)?'rtl':resolveBlockDirection(undefined,overlay.text); }
     else if(text) { element.classList.add('callout-region'); element.title=t('calloutTitle'); element.setAttribute('aria-label',t('calloutAria')); }
     else if(errors.has(block.id)) { element.classList.add('failed-region'); element.title=errors.get(block.id)!; }
   }
