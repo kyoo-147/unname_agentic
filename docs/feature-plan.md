@@ -85,7 +85,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | C14 | Giao diện Việt/Anh/Trung đầy đủ | [x] | 124 chuỗi `tr`, reader, shortcuts, thời gian, dialog phá huỷ, diagnostics đều 3 ngôn ngữ; brand/OS/provider error giữ nguyên |
 | C15 | Sáu bảng màu + Light/Dark/System | [x] | `themes.rs`; ảnh chụp |
 | C16 | Phím tắt + màn hình Shortcuts | [x] | `shortcuts.rs`; settings |
-| C17 | Chat hỏi tài liệu | [~] | chat + context trang + history 100 tin + streaming SSE + 3 gợi ý theo trang; chưa tools; attach/skills/mic vẫn toast |
+| C17 | Chat hỏi tài liệu | [~] | chat + context + history + SSE + gợi ý + model label + reset; chưa tools; attach/skills/mic vẫn toast |
 | C18 | Chọn model/agent cho chat | [ ] | nhãn “Model · Auto” tĩnh |
 | C19 | Voice input / voice mode | [ ] | nút có, chưa nối |
 | C20 | OCR Tesseract dự phòng ngoài Windows OCR | [~] | Windows OCR đã verify trên PDF scan; chưa thêm Tesseract fallback native |
@@ -118,7 +118,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | D16 | Release gate kiểm tra artifact `dist` | [x] | `scripts/verify-release.ps1 -ArtifactsOnly` PASS 2/2 checks |
 | D17 | Module giá/chi phí, print, download, OCR preprocess | [x] | Unit test cho `pricing`, `export/print`, `export/download`, `ocr/preprocess`; chưa nối hết vào UI |
 | D18 | OCR CJK cho web scan | [x] | `chi_sim/jpn/kor` vendored; smoke Trung 90.5% mean / 20 từ; scan e2e pass |
-| D19 | Native chat thật | [x] | Chat + `chat_stream` (SSE) + context + history + gợi ý; fixture SSE; test `chat_system`/`parse_sse_delta`; ảnh `desktop-chat-stream3.png`, `desktop-chat-suggestions.png` |
+| D19 | Native chat thật | [x] | Chat + SSE + context + history + gợi ý + model/reset; fixture SSE; test `chat_system`/`parse_sse_delta`; ảnh `desktop-chat-polish.png` |
 
 ## 2. Ảnh chụp kiểm chứng hiện tại
 

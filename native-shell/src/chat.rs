@@ -35,6 +35,7 @@ pub struct Chat {
     busy: bool,
     error: Option<String>,
     context: Option<(String, String)>,
+    model: String,
     _submit: Subscription,
 }
 
@@ -48,7 +49,8 @@ impl Chat {
         let submit = cx.subscribe(&input, |this, _, event: &TextFieldEvent, cx| {
             if matches!(event, TextFieldEvent::Submit) { this.send(cx); }
         });
-        Self { input, messages: load_history(), busy: false, error: None, context: None, _submit: submit }
+        let model = model::load_settings().provider.model;
+        Self { input, messages: load_history(), busy: false, error: None, context: None, model, _submit: submit }
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -69,6 +71,15 @@ impl Chat {
             self.persist();
             cx.notify();
         }
+    }
+
+    pub fn reset(&mut self, cx: &mut Context<Self>) {
+        self.messages.clear();
+        self.context = None;
+        self.error = None;
+        self.busy = false;
+        self.persist();
+        cx.notify();
     }
 
     pub fn ask(&mut self, prompt: String, cx: &mut Context<Self>) {
@@ -193,6 +204,10 @@ impl Render for Chat {
                     "The assistant uses the provider configured in the reader. Without one it reports a clear error.",
                     "Trợ lý dùng nhà cung cấp đã cấu hình trong trình đọc. Chưa cấu hình thì sẽ báo lỗi rõ ràng.",
                 ))))
+                .child(div().mt(px(8.)).flex().items_center().justify_between()
+                    .child(div().text_size(px(11.)).text_color(Theme::text_disabled()).child(format!("{} · {}", tr3("Mô hình", "Model", "Mô hình"), self.model)))
+                    .child(div().id("chat-new").px(px(8.)).h(px(22.)).rounded(px(6.)).flex().items_center().cursor_pointer().text_size(px(11.)).text_color(Theme::text_caption()).hover(|s| s.bg(Theme::fill_hover())).child(tr3("Cuộc trò chuyện mới", "New conversation", "Cuộc trò chuyện mới"))
+                        .on_click(cx.listener(|chat, _, _, cx| chat.reset(cx)))))
                 .when_some(self.context.as_ref().map(|(title, _)| title.clone()), |element, title| element.child(
                     div().mt(px(8.)).flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::text_caption())
                         .child(format!("{} {title}", tr3("Đang hỏi về:", "Asking about:", "Đang hỏi về:")))
@@ -204,7 +219,7 @@ impl Render for Chat {
                     "Hỏi về cách dùng, hoặc mở một PDF để đọc song song.",
                     "Ask how to use the workspace, or open a PDF to read side by side.",
                     "Hỏi về cách dùng, hoặc mở một PDF để đọc song song.",
-                ))).children(self.suggestions(cx))))
+                ))).child(div().flex().flex_wrap().gap(px(8.)).children(self.suggestions(cx)))))
                 .children(messages)
                 .when(self.busy, |element| element.child(div().text_color(Theme::text_caption()).text_size(px(12.)).child(tr3("Đang trả lời…", "Answering…", "Đang trả lời…"))))
                 .when_some(self.error.clone(), |element, error| element.child(div().text_color(Theme::danger()).text_size(px(12.)).child(error))))
