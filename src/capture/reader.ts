@@ -1,7 +1,7 @@
 import './capture.css';
 import type { TextBlock } from '../core/types';
 import { CaptureError, decodeDataUrl, readCaptureParams, requestCaptureImage } from '../ui/capture';
-import type { OcrEngine } from '../ocr/engine';
+import type { OcrEngine, OcrImage } from '../ocr/engine';
 import type { OcrPageModel } from '../ocr/pipeline';
 import {
   blockConfidences,
@@ -78,6 +78,28 @@ function failureFor(error: unknown): Failure {
     }
   }
   return { key: 'errorUnknown', detail: errorMessage(error), retry: true };
+}
+
+/**
+ * Screenshots arrive as bytes; OCR wants pixels, because the pipeline measures
+ * contrast and glyph size before Tesseract runs. Hosts without OffscreenCanvas
+ * return undefined and the pipeline decodes the blob itself instead.
+ */
+async function decodeCapturedPixels(blob: Blob): Promise<ImageData | undefined> {
+  if (typeof createImageBitmap !== 'function' || typeof OffscreenCanvas !== 'function') return undefined;
+  let bitmap: ImageBitmap | undefined;
+  try {
+    bitmap = await createImageBitmap(blob);
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const context = canvas.getContext('2d');
+    if (!context) return undefined;
+    context.drawImage(bitmap, 0, 0);
+    return context.getImageData(0, 0, bitmap.width, bitmap.height);
+  } catch {
+    return undefined;
+  } finally {
+    bitmap?.close();
+  }
 }
 
 export async function mountCaptureReader(options: CaptureReaderOptions): Promise<CaptureReaderHandle> {
@@ -387,6 +409,9 @@ export async function mountCaptureReader(options: CaptureReaderOptions): Promise
     if (imageUrl) image.src = imageUrl;
     else image.removeAttribute('src');
     image.alt = tr('imageAlt');
+    // Model geometry and the displayed capture share the original pixel space,
+    // because runOcr maps a normalised (possibly upscaled) result back. The
+    // aspect ratio and the percentage boxes below therefore need no rescaling.
     if (model.width > 0 && model.height > 0) frame.style.aspectRatio = `${model.width} / ${model.height}`;
     else frame.style.removeProperty('aspect-ratio');
 
@@ -534,12 +559,15 @@ export async function mountCaptureReader(options: CaptureReaderOptions): Promise
     }
     captureImage = dataUrl;
 
-    let imageForOcr: Blob | string = dataUrl;
+    // OCR sees pixels the pipeline can measure; the pane keeps showing the
+    // untouched screenshot. runOcr reports boxes in these original pixels even
+    // after an upscale, so the overlay stays aligned with the image below.
+    let imageForOcr: OcrImage = dataUrl;
     let nextImageUrl: string | undefined;
     try {
       const blob = new Blob([new Uint8Array(decoded.bytes)], { type: decoded.mimeType });
-      imageForOcr = blob;
       nextImageUrl = URL.createObjectURL(blob);
+      imageForOcr = (await decodeCapturedPixels(blob)) ?? blob;
     } catch {
       imageForOcr = dataUrl;
     }

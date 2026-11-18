@@ -1,7 +1,8 @@
 import type { PageModel } from '../core/types';
-import type { OcrEngine, OcrImage, OcrProgress, OcrWord } from './engine';
+import type { OcrBbox, OcrEngine, OcrImage, OcrProgress, OcrWord } from './engine';
 import { DEFAULT_OCR_LANGUAGES, isImageData } from './engine';
-import { blocksToPageModel, mergeWordsToBlocks } from './geometry';
+import { blocksToPageModel, mergeWordsToBlocks, type OcrBlock } from './geometry';
+import { normalizeForOcr, type NormalizeReport, type RgbaImage } from './preprocess';
 
 export type OcrScript = 'latin' | 'han' | 'kana' | 'hangul' | 'cyrillic' | 'arabic' | 'thai' | 'devanagari' | 'unknown';
 
@@ -18,14 +19,22 @@ export interface OcrRunInfo {
   droppedWords: number;
   warnings: string[];
   warningCount: number;
+  /**
+   * What pixel normalisation did to the capture before the engine saw it:
+   * `inverted` means a dark UI was flipped to dark-on-light, `contrastGain` is
+   * the percentile stretch that was applied, and `scale` is the integer upscale
+   * used for tiny glyphs. Every coordinate in this model is already divided back
+   * into original screenshot pixels, so the report is informational.
+   */
+  normalization: NormalizeReport;
 }
 
 export interface OcrPageModel extends PageModel {
   ocr: OcrRunInfo;
   /**
-   * Words kept after the confidence filter, in source-image pixel coordinates.
-   * Readers use these for block confidence so low-confidence words that never
-   * became block text do not drag a block's score down.
+   * Words kept after the confidence filter, in original screenshot pixel
+   * coordinates. Readers use these for block confidence so low-confidence words
+   * that never became block text do not drag a block's score down.
    */
   words: OcrWord[];
 }
@@ -39,7 +48,13 @@ export interface OcrRequest {
   lineGap?: number;
   maxChars?: number;
   page?: number;
+  /** Send the source through untouched (page scanning captures its own pixels). */
   preprocess?: boolean;
+  /**
+   * Legacy linear contrast multiplier. Normalisation now picks its gain from the
+   * capture's own luminance histogram, so this field is only kept so existing
+   * callers keep type-checking.
+   */
   contrast?: number;
   onProgress?: (progress: OcrProgress) => void;
 }
@@ -96,6 +111,21 @@ function createImageData(data: Uint8ClampedArray, width: number, height: number)
   return { data, width, height, colorSpace: 'srgb' } as ImageData;
 }
 
+function identityReport(): NormalizeReport {
+  return { inverted: false, contrastGain: 1, scale: 1 };
+}
+
+function rgbaFromPixels(pixels: ImageData): RgbaImage {
+  return { data: pixels.data, width: pixels.width, height: pixels.height };
+}
+
+/**
+ * Plain grayscale with a linear contrast multiplier.
+ *
+ * `runOcr` no longer calls this: normalisation lives in ./preprocess, where
+ * inversion, percentile contrast and upscaling are decided together. The helper
+ * stays exported for callers that already hold raw pixels.
+ */
 export function grayscaleContrast(image: ImageData, contrast = 1.15): ImageData {
   const output = new Uint8ClampedArray(image.data.length);
   const factor = Number.isFinite(contrast) && contrast > 0 ? contrast : 1;
@@ -113,42 +143,74 @@ export function grayscaleContrast(image: ImageData, contrast = 1.15): ImageData 
   return createImageData(output, image.width, image.height);
 }
 
-async function decodeToBitmap(image: OcrImage): Promise<ImageBitmap | undefined> {
+async function decodeToBitmap(source: Blob | string): Promise<ImageBitmap | undefined> {
   if (typeof createImageBitmap !== 'function') return undefined;
-  if (isImageData(image)) {
-    if (typeof OffscreenCanvas !== 'function') return undefined;
-    const canvas = new OffscreenCanvas(image.width, image.height);
-    const context = canvas.getContext('2d');
-    if (!context) return undefined;
-    context.putImageData(image, 0, 0);
-    return createImageBitmap(canvas);
-  }
-  if (typeof image === 'string') {
-    const response = await fetch(image);
+  if (typeof source === 'string') {
+    const response = await fetch(source);
     if (!response.ok) return undefined;
     return createImageBitmap(await response.blob());
   }
-  return createImageBitmap(image);
+  return createImageBitmap(source);
 }
 
-export async function preprocessImage(image: OcrImage, options: { contrast?: number } = {}): Promise<OcrImage> {
-  if (isImageData(image)) return grayscaleContrast(image, options.contrast);
-  if (typeof OffscreenCanvas !== 'function') return image;
+/**
+ * Read an image's pixels. ImageData is already pixels; a Blob or URL has to be
+ * drawn and read back, which needs OffscreenCanvas. Hosts without it (jsdom,
+ * canvas-less workers) get `undefined` and keep the untouched source.
+ */
+async function readPixels(image: OcrImage): Promise<ImageData | undefined> {
+  if (isImageData(image)) return image;
+  if (typeof OffscreenCanvas !== 'function') return undefined;
+  const bitmap = await decodeToBitmap(image);
+  if (!bitmap) return undefined;
   try {
-    const bitmap = await decodeToBitmap(image);
-    if (!bitmap) return image;
     const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
     const context = canvas.getContext('2d');
-    if (!context) return image;
+    if (!context) return undefined;
     context.drawImage(bitmap, 0, 0);
-    const size = { width: bitmap.width, height: bitmap.height };
-    bitmap.close();
-    const pixels = context.getImageData(0, 0, size.width, size.height);
-    context.putImageData(grayscaleContrast(pixels, options.contrast), 0, 0);
-    return canvas.convertToBlob({ type: 'image/png' });
+    return context.getImageData(0, 0, bitmap.width, bitmap.height);
   } catch {
-    return image;
+    return undefined;
+  } finally {
+    bitmap.close();
   }
+}
+
+interface PreparedImage {
+  /** What the engine sees: normalised pixels, or the untouched source. */
+  image: OcrImage;
+  report: NormalizeReport;
+  /** Pixel size of the image the engine is handed; 0 when it could not be read. */
+  width: number;
+  height: number;
+}
+
+/**
+ * The one preprocessing step before recognition: measure the capture, then
+ * invert, stretch and upscale it through normalizeForOcr. Falls back to the
+ * untouched source when pixels cannot be read, so an unusual host skips
+ * normalisation instead of failing the capture.
+ */
+export async function prepareImageForOcr(image: OcrImage): Promise<PreparedImage> {
+  let pixels: ImageData | undefined;
+  try {
+    pixels = await readPixels(image);
+  } catch {
+    pixels = undefined;
+  }
+  if (!pixels || !isImageData(pixels)) {
+    return { image, report: identityReport(), width: 0, height: 0 };
+  }
+  const normalized = normalizeForOcr(rgbaFromPixels(pixels));
+  if (!(normalized.image.width > 0) || !(normalized.image.height > 0)) {
+    return { image, report: identityReport(), width: 0, height: 0 };
+  }
+  return {
+    image: createImageData(normalized.image.data, normalized.image.width, normalized.image.height),
+    report: normalized.report,
+    width: normalized.image.width,
+    height: normalized.image.height,
+  };
 }
 
 function keptWords(words: OcrWord[], minConfidence: number): { words: OcrWord[]; dropped: number } {
@@ -170,14 +232,59 @@ function meanConfidence(words: OcrWord[]): number {
   return Math.round((total / words.length) * 10) / 10;
 }
 
+/**
+ * Factor that maps engine coordinates back to the original screenshot.
+ *
+ * The engine numbers its boxes in the canvas it was handed, which is the
+ * normalised (possibly upscaled) image. Dividing by the upscale factor returns
+ * original pixels, so the overlay drawn over the untouched screenshot lines up.
+ * The mapping is only applied when the engine reports the same canvas size we
+ * passed: a test double or a provider that resamples on its own numbers its
+ * boxes in some other space, and scaling those would be a guess.
+ */
+function originalPixelFactor(prepared: PreparedImage, width: number, height: number): number {
+  if (prepared.report.scale <= 1 || prepared.width <= 0 || prepared.height <= 0) return 1;
+  const measured = width > 0 && height > 0;
+  if (!measured) return 1 / prepared.report.scale;
+  return width === prepared.width && height === prepared.height ? 1 / prepared.report.scale : 1;
+}
+
+function rescaleBox(bbox: OcrBbox, factor: number): OcrBbox {
+  return {
+    x0: bbox.x0 * factor,
+    y0: bbox.y0 * factor,
+    x1: bbox.x1 * factor,
+    y1: bbox.y1 * factor,
+  };
+}
+
+function rescaleWord(word: OcrWord, factor: number): OcrWord {
+  return { text: word.text, confidence: word.confidence, bbox: rescaleBox(word.bbox, factor) };
+}
+
+function rescaleBlock(block: OcrBlock, factor: number): OcrBlock {
+  return {
+    ...block,
+    rect: {
+      x: block.rect.x * factor,
+      y: block.rect.y * factor,
+      width: block.rect.width * factor,
+      height: block.rect.height * factor,
+    },
+    fontSize: Math.max(1, block.fontSize * factor),
+  };
+}
+
 export async function runOcr(request: OcrRequest): Promise<OcrPageModel> {
   const signal = request.signal;
   signal?.throwIfAborted();
   const languages = request.languages?.length ? request.languages : [...DEFAULT_OCR_LANGUAGES];
   const minConfidence = Number.isFinite(request.minConfidence) ? request.minConfidence! : 35;
-  const image = request.preprocess === false ? request.image : await preprocessImage(request.image, { contrast: request.contrast });
+  const prepared: PreparedImage = request.preprocess === false
+    ? { image: request.image, report: identityReport(), width: 0, height: 0 }
+    : await prepareImageForOcr(request.image);
   signal?.throwIfAborted();
-  const result = await request.engine.recognize(image, {
+  const result = await request.engine.recognize(prepared.image, {
     languages,
     signal,
     onProgress: request.onProgress,
@@ -186,18 +293,28 @@ export async function runOcr(request: OcrRequest): Promise<OcrPageModel> {
 
   const { words, dropped } = keptWords(result.words, minConfidence);
   const blocks = mergeWordsToBlocks(words, { lineGap: request.lineGap, maxChars: request.maxChars });
+  const factor = originalPixelFactor(prepared, result.width, result.height);
   const maxX = Math.max(0, ...words.map(word => word.bbox.x1));
   const maxY = Math.max(0, ...words.map(word => word.bbox.y1));
-  const width = result.width > 0 ? result.width : Math.max(1, maxX);
-  const height = result.height > 0 ? result.height : Math.max(1, maxY);
-  const page = blocksToPageModel(blocks, width, height, request.page ?? 1);
+  const engineWidth = result.width > 0 ? result.width : prepared.width > 0 ? prepared.width : Math.max(1, maxX);
+  const engineHeight = result.height > 0 ? result.height : prepared.height > 0 ? prepared.height : Math.max(1, maxY);
+  const rescale = factor !== 1;
+  const width = rescale ? Math.max(1, Math.round(engineWidth * factor)) : engineWidth;
+  const height = rescale ? Math.max(1, Math.round(engineHeight * factor)) : engineHeight;
+  const page = blocksToPageModel(
+    rescale ? blocks.map(block => rescaleBlock(block, factor)) : blocks,
+    width,
+    height,
+    request.page ?? 1,
+  );
+  const mappedWords = rescale ? words.map(word => rescaleWord(word, factor)) : words;
   const sourceLanguage = detectDominantScript(result.text || words.map(word => word.text).join(' '));
   const warnings: string[] = [];
   if (dropped > 0) warnings.push(`Đã bỏ ${dropped} từ có độ tin cậy thấp hơn ${minConfidence}%.`);
   if (!page.blocks.length) warnings.push('Không nhận ra chữ nào trong ảnh chụp.');
   return {
     ...page,
-    words,
+    words: mappedWords,
     ocr: {
       languages,
       sourceLanguage,
@@ -205,6 +322,7 @@ export async function runOcr(request: OcrRequest): Promise<OcrPageModel> {
       droppedWords: dropped,
       warnings,
       warningCount: warnings.length,
+      normalization: prepared.report,
     },
   };
 }
