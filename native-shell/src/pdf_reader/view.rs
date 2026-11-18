@@ -35,29 +35,54 @@ fn fit_text(text: &str, width: f32, height: f32, ideal_size: f32, bold: bool, co
 }
 
 impl PdfReader {
+    /// True when the current page already carries at least one translation, which
+    /// decides whether the target pane advertises its language or asks for one.
+    fn has_translations(&self) -> bool {
+        self.prepared.as_ref().is_some_and(|prepared| prepared.frame.blocks.iter().any(|block| block.translated.is_some()))
+    }
     fn toolbar(&self, cx: &mut Context<Self>) -> Div {
         let capture_mode = matches!(self.source, Source::Capture(_));
-        div().flex().items_center().flex_wrap().gap(px(6.)).px(px(16.)).py(px(10.)).border_b_1().border_color(Theme::line_border())
+        // Groups are separated by a hairline and the page controls read as one
+        // control, so the row has a shape instead of eleven equal buttons.
+        let divider = || div().w(px(1.)).h(px(18.)).flex_none().bg(Theme::line_border());
+        let page_pill = div().h(px(28.)).px(px(10.)).flex().items_center().justify_center().rounded(px(6.))
+            .bg(Theme::fill_hover()).text_color(Theme::text())
+            .child(format!("{} / {}", self.page + 1, self.page_count.max(1)));
+        let zoom_label = div().w(px(52.)).flex().items_center().justify_center().text_color(Theme::text()).child(format!("{:.0}%", self.zoom * 100.));
+        let target_chip = div().h(px(28.)).px(px(10.)).flex().items_center().gap(px(6.)).rounded(px(6.))
+            .bg(Theme::fill_hover()).text_color(Theme::text())
+            .child(format!("→ {}", self.profile.target_language));
+        div().flex().items_center().flex_wrap().gap(px(10.)).px(px(16.)).py(px(8.))
+            .border_b_1().border_color(Theme::line_border()).bg(theme::raised(Theme::bg_body()))
             .when(!capture_mode, |el| el
-                .child(ui::secondary_button("pdf-previous", tr3("上一页", "Previous", "Trước")).on_click(cx.listener(|reader, _, _, cx| reader.navigate_user(-1, cx))))
-                .child(div().text_color(Theme::text_caption()).child(format!("{} / {}", self.page + 1, self.page_count.max(1))))
-                .child(ui::secondary_button("pdf-next", tr3("下一页", "Next", "Sau")).on_click(cx.listener(|reader, _, _, cx| reader.navigate_user(1, cx)))))
+                .child(div().flex().items_center().gap(px(2.))
+                    .child(ui::secondary_button("pdf-previous", tr3("上一页", "Previous", "Trước")).on_click(cx.listener(|reader, _, _, cx| reader.navigate_user(-1, cx))))
+                    .child(page_pill)
+                    .child(ui::secondary_button("pdf-next", tr3("下一页", "Next", "Sau")).on_click(cx.listener(|reader, _, _, cx| reader.navigate_user(1, cx)))))
+                .child(divider()))
             .when(capture_mode, |el| el.child(ui::secondary_button("pdf-source-live", if self.capture_live { tr3("冻结来源", "Freeze source", "Đóng băng nguồn") } else { tr3("恢复来源", "Resume source", "Tiếp tục nguồn") })
                 .on_click(cx.listener(|reader, _, _, cx| {
                     reader.capture_live = !reader.capture_live; reader.epoch.source();
                     if reader.capture_live { reader.failed = false; reader.error = None; reader.load_needed = true; }
                     cx.notify();
                 }))))
-            .child(ui::secondary_button("pdf-zoom-out", "−").on_click(cx.listener(|reader, _, _, cx| { reader.zoom = (reader.zoom - 0.15).max(0.55); cx.notify(); })))
-            .child(div().text_color(Theme::text_caption()).child(format!("{:.0}%", self.zoom * 100.)))
-            .child(ui::secondary_button("pdf-zoom-in", "+").on_click(cx.listener(|reader, _, _, cx| { reader.zoom = (reader.zoom + 0.15).min(3.); cx.notify(); })))
-            .child(ui::secondary_button("pdf-split", if self.split { tr3("仅译文", "Translation only", "Chỉ bản dịch") } else { tr3("分栏视图", "Split view", "Chia đôi") }).on_click(cx.listener(|reader, _, _, cx| { reader.split = !reader.split; cx.notify(); })))
-            .child(ui::secondary_button("pdf-rotate", tr3("旋转页面", "Rotate page", "Xoay trang")).on_click(cx.listener(|reader, _, _, cx| reader.rotate_page(cx))))
-            .child(ui::secondary_button("pdf-target", tr3("语言 / 提供方", "Language / provider", "Ngôn ngữ / nhà cung cấp")).on_click(cx.listener(|reader, _, _, cx| { reader.show_settings = !reader.show_settings; cx.notify(); })))
-            .child(div().text_color(Theme::text_caption()).child(format!("→ {}", self.profile.target_language)))
-            .child(ui::secondary_button("pdf-pause", if self.paused { tr3("继续", "Resume", "Tiếp tục") } else { tr3("暂停", "Pause", "Tạm dừng") }).on_click(cx.listener(|reader, _, _, cx| reader.toggle_pause(cx))))
-            .child(ui::secondary_button("pdf-retry", tr3("重试", "Retry", "Thử lại")).on_click(cx.listener(|reader, _, _, cx| reader.retry(cx))))
-            .child(ui::secondary_button("pdf-export", tr3("导出本页", "Export this page", "Xuất trang này")).on_click(cx.listener(|reader, _, _, cx| reader.export_page(cx))))
+            .child(div().flex().items_center().gap(px(2.))
+                .child(ui::secondary_button("pdf-zoom-out", "−").on_click(cx.listener(|reader, _, _, cx| { reader.zoom = (reader.zoom - 0.15).max(0.55); cx.notify(); })))
+                .child(zoom_label)
+                .child(ui::secondary_button("pdf-zoom-in", "+").on_click(cx.listener(|reader, _, _, cx| { reader.zoom = (reader.zoom + 0.15).min(3.); cx.notify(); }))))
+            .child(divider())
+            .child(div().flex().items_center().gap(px(2.))
+                .child(ui::secondary_button("pdf-split", if self.split { tr3("仅译文", "Translation only", "Chỉ bản dịch") } else { tr3("分栏视图", "Split view", "Chia đôi") }).on_click(cx.listener(|reader, _, _, cx| { reader.split = !reader.split; cx.notify(); })))
+                .child(ui::secondary_button("pdf-rotate", tr3("旋转页面", "Rotate page", "Xoay trang")).on_click(cx.listener(|reader, _, _, cx| reader.rotate_page(cx)))))
+            .child(divider())
+            .child(div().flex().items_center().gap(px(2.))
+                .child(ui::secondary_button("pdf-target", tr3("语言", "Language", "Ngôn ngữ")).on_click(cx.listener(|reader, _, _, cx| { reader.show_settings = !reader.show_settings; cx.notify(); })))
+                .child(target_chip))
+            .child(div().flex_1())
+            .child(div().flex().items_center().gap(px(2.))
+                .child(ui::secondary_button("pdf-pause", if self.paused { tr3("继续", "Resume", "Tiếp tục") } else { tr3("暂停", "Pause", "Tạm dừng") }).on_click(cx.listener(|reader, _, _, cx| reader.toggle_pause(cx))))
+                .child(ui::secondary_button("pdf-retry", tr3("重试", "Retry", "Thử lại")).on_click(cx.listener(|reader, _, _, cx| reader.retry(cx))))
+                .child(ui::secondary_button("pdf-export", tr3("导出", "Export", "Xuất")).on_click(cx.listener(|reader, _, _, cx| reader.export_page(cx)))))
             .when(self.browser_linked, |el| el.child(ui::secondary_button("pdf-browser-detach", tr3("断开 Chrome", "Detach Chrome", "Ngắt liên kết Chrome")).on_click(cx.listener(|reader, _, _, cx| reader.set_browser_linked(false, cx)))))
     }
     fn settings_panel(&self, cx: &mut Context<Self>) -> Div {
@@ -90,6 +115,10 @@ impl PdfReader {
     fn page_pane(&self, translated: bool, width: f32, height: f32, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(prepared) = &self.prepared else { return div().into_any_element(); };
         let mut paper = div().relative().flex_none().w(px(width)).h(px(height)).overflow_hidden()
+            .rounded(px(3.)).border_1().border_color(Theme::line_border()).shadow(theme::shadow_card())
+            // Until the first translation lands, the target pane would otherwise show
+            // a second copy of the source page and look like a duplicate view.
+            .when(translated && !self.has_translations(), |el| el.opacity(0.4))
             .child(img(prepared.original.clone()).absolute().inset_0().w(px(width)).h(px(height)).object_fit(ObjectFit::Fill));
         for (index, block) in prepared.frame.blocks.iter().enumerate() {
             let [x, y, w, h] = block.rect.at_size(width, height);
@@ -120,8 +149,12 @@ impl PdfReader {
         let pane = self.panes[index]; let content = pane.content(geometry::limits(self.panes, self.split));
         let last_input = self.last_input.clone(); let native_input = self.native_scroll_input.clone();
         div().flex().flex_col().flex_none().w(px(pane.viewport[0])).h_full().min_h_0().overflow_hidden()
-            .child(div().h(px(32.)).flex_none().px(px(16.)).flex().items_center().text_size(px(11.)).text_color(Theme::text_caption()).overflow_hidden()
-                .child(if index == 1 { format!("{} · {} · {}", tr3("翻译", "TRANSLATION", "BẢN DỊCH"), self.profile.target_language, tr3("联动选择", "linked selection", "vùng chọn liên kết")) } else { tr3("原文 · 联动区域选择", "ORIGINAL · linked region selection", "BẢN GỐC · chọn vùng liên kết").into() }))
+            .child(div().h(px(34.)).flex_none().px(px(16.)).flex().items_center().gap(px(8.))
+                .border_b_1().border_color(Theme::line_border())
+                .child(div().text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::text())
+                    .child(if index == 1 { tr3("译文", "TRANSLATION", "BẢN DỊCH").to_string() } else { tr3("原文", "ORIGINAL", "BẢN GỐC").to_string() }))
+                .child(div().text_size(px(11.)).text_color(Theme::text_caption()).overflow_hidden()
+                    .child(if index == 1 { if self.has_translations() { tr3_fill("· {} · 由原文翻译", "· {} · translated from the original", "· {} · dịch từ bản gốc", self.profile.target_language.clone()) } else { tr3("· 还没有译文 — 选择「语言」并保存", "· no translation yet — open Language and save", "· chưa có bản dịch — mở Ngôn ngữ rồi lưu").to_string() } } else { tr3("· 点选区块即可对照", "· click a region to read it side by side", "· nhấn vào một vùng để đọc song song").to_string() })))
             .child(div().relative().flex_1().min_h_0()
                 .child(div().id(if index == 0 { "pdf-source-scroll" } else { "pdf-target-scroll" }).absolute().inset_0().overflow_scroll().track_scroll(&self.scrolls[index])
                     .on_scroll_wheel(move |_, _, _| { last_input.set(index); native_input.set(true); })
@@ -182,6 +215,7 @@ impl Render for PdfReader {
         self.sync_scroll(cx);
         let viewport = self.viewport.clone(); let entity = cx.entity_id();
         let mut pages = div().id("pdf-document-panes").relative().flex().flex_1().min_h_0().min_w_0().overflow_hidden()
+            .bg(theme::raised(Theme::bg_overlay()))
             .child(canvas(move |bounds, _, cx| {
                 if viewport.get() != bounds { viewport.set(bounds); cx.notify(entity); }
             }, |_, _, _, _| {}).absolute().inset_0());
@@ -213,8 +247,10 @@ impl Render for PdfReader {
                     .on_click(cx.listener(|reader, _, _, cx| { reader.show_paired = !reader.show_paired; cx.notify(); })))))
             .when(self.show_paired && self.prepared.is_some(), |el| el.child(div().id("pdf-paired-scroll").max_h(px(200.)).flex_none().overflow_y_scroll().px(px(16.)).py(px(8.)).child(self.paired_text(cx))))
             .when(self.selected.is_some(), |el| el.child(div().id("pdf-selected-scroll").max_h(px(240.)).flex_none().overflow_y_scroll().px(px(16.)).py(px(8.)).child(self.selected_panel(cx))))
-            .child(div().px(px(16.)).py(px(8.)).border_t_1().border_color(Theme::line_border()).text_size(px(11.)).text_color(Theme::text_caption())
-                .child(format!("{}{}{}", self.status, if quality.is_empty() { "" } else { " · " }, quality_label(&quality))))
+            .child(div().flex_none().px(px(16.)).py(px(7.)).border_t_1().border_color(Theme::line_border()).flex().items_center().gap(px(8.))
+                .child(div().size(px(6.)).flex_none().rounded(px(3.)).bg(if self.error.is_some() { Theme::danger() } else if self.paused { Theme::text_caption() } else { Theme::primary() }))
+                .child(div().flex_1().min_w_0().overflow_hidden().text_size(px(11.)).text_color(Theme::text_caption())
+                    .child(format!("{}{}{}", self.status, if quality.is_empty() { "" } else { " · " }, quality_label(&quality)))))
             .when_some(self.divider_overlay(cx), |el, overlay| el.child(overlay))
     }
 }
