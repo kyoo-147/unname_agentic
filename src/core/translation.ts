@@ -341,8 +341,7 @@ export class TranslationService {
 
   async translate(request: TranslationRequest): Promise<TranslationResult> {
     if (request.signal?.aborted) throw abortError(request.signal.reason);
-    const { apiKey: _key, ...identity } = request.settings;
-    const key = JSON.stringify([request.text, identity]);
+    const key = this.keyFor(request.text, request.settings);
     const cached = this.cache.get(key);
     if (cached !== undefined) return { text: cached, provider: request.settings.provider, cached: true, characterCount: countCharacters(request.text) };
     const existing = this.pending.get(key);
@@ -363,4 +362,64 @@ export class TranslationService {
   }
 
   clear(): void { this.cache.clear(); }
+
+  private keyFor(text: string, settings: TranslationSettings): string {
+    const { apiKey: _key, ...identity } = settings;
+    return JSON.stringify([text, identity]);
+  }
+
+  private remember(text: string, settings: TranslationSettings, translation: string): void {
+    this.cache.set(this.keyFor(text, settings), translation);
+    while (this.cache.size > this.maxEntries) this.cache.delete(this.cache.keys().next().value!);
+  }
+
+  /**
+   * Translates a page worth of blocks with as few provider calls as the provider
+   * allows, sharing the cache and the character counter with {@link translate}.
+   *
+   * Cached blocks are resolved locally and never sent again, so the returned
+   * `characterCount` counts only characters that actually left the machine —
+   * which is what the status bar and the cost estimate must report. A transport
+   * without batching still works: the blocks go out one at a time, through the
+   * same cache.
+   */
+  async translateBatch(blocks: readonly TextBlock[], settings: TranslationSettings, signal?: AbortSignal): Promise<BatchTranslationResult> {
+    const result: BatchTranslationResult = { translations: [], requests: 0, characterCount: 0, aborted: false };
+    if (signal?.aborted) { result.aborted = true; return result; }
+    const collected = new Map<string, BatchTranslationEntry>();
+    const missing: TextBlock[] = [];
+    for (const block of blocks) {
+      const cached = this.cache.get(this.keyFor(block.text, settings));
+      if (cached !== undefined) collected.set(block.id, { id: block.id, page: block.page, text: cached, characterCount: 0 });
+      else missing.push(block);
+    }
+    const finish = (): BatchTranslationResult => ({ ...result, translations: blocks.flatMap(block => { const entry = collected.get(block.id); return entry ? [entry] : []; }) });
+    if (!missing.length) return finish();
+    const transport = this.transport as TranslationTransport & Partial<TranslationTransportWithBatch>;
+    if (typeof transport.translateBatch !== 'function') {
+      for (const block of missing) {
+        if (signal?.aborted) { result.aborted = true; break; }
+        const translated = await this.translate({ text: block.text, settings, signal });
+        const sent = translated.cached ? 0 : countCharacters(block.text);
+        result.requests += 1;
+        result.characterCount += sent;
+        collected.set(block.id, { id: block.id, page: block.page, text: translated.text, characterCount: sent });
+      }
+      return finish();
+    }
+    const batch = await transport.translateBatch(missing, settings, signal);
+    const sourceById = new Map(missing.map(block => [block.id, block.text]));
+    for (const entry of batch.translations) {
+      const source = sourceById.get(entry.id);
+      if (source === undefined) continue;
+      const sent = countCharacters(source);
+      this.characters += sent;
+      this.remember(source, settings, entry.text);
+      result.characterCount += sent;
+      collected.set(entry.id, { id: entry.id, page: entry.page, text: entry.text, characterCount: sent });
+    }
+    result.requests = batch.requests;
+    result.aborted = batch.aborted;
+    return finish();
+  }
 }
