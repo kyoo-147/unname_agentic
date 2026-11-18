@@ -1,7 +1,9 @@
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('capture','close')][string]$Action,
+    [Parameter(Mandatory = $true)][ValidateSet('capture','close','click')][string]$Action,
     [int]$ProcessId = 0,
     [string]$Out = '',
+    [int]$X = 0,
+    [int]$Y = 0,
     [int]$TimeoutSec = 25
 )
 $ErrorActionPreference = 'Stop'
@@ -15,6 +17,8 @@ public class MirrorCapture {
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
 }
 "@
 }
@@ -27,6 +31,18 @@ function Get-MainWindow([int]$procId) {
         Start-Sleep -Milliseconds 250
     } while ((Get-Date) -lt $deadline)
     throw "No main window for process $procId within $TimeoutSec s."
+}
+if ($Action -eq 'click') {
+    $hwnd = Get-MainWindow $ProcessId
+    [void][MirrorCapture]::SetForegroundWindow($hwnd)
+    Start-Sleep -Milliseconds 200
+    $lparam = [IntPtr](($Y -shl 16) -bor ($X -band 0xffff))
+    [void][MirrorCapture]::PostMessage($hwnd, 0x0200, [IntPtr]::Zero, $lparam)
+    Start-Sleep -Milliseconds 100
+    [void][MirrorCapture]::PostMessage($hwnd, 0x0201, [IntPtr]1, $lparam)
+    [void][MirrorCapture]::PostMessage($hwnd, 0x0202, [IntPtr]::Zero, $lparam)
+    Write-Output ("CLICK={0},{1}" -f $X, $Y)
+    return
 }
 if ($Action -eq 'capture') {
     $hwnd = Get-MainWindow $ProcessId

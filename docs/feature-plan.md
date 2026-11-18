@@ -85,7 +85,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | C14 | Giao diện Việt/Anh/Trung đầy đủ | [x] | 124 chuỗi `tr`, reader, shortcuts, thời gian, dialog phá huỷ, diagnostics đều 3 ngôn ngữ; brand/OS/provider error giữ nguyên |
 | C15 | Sáu bảng màu + Light/Dark/System | [x] | `themes.rs`; ảnh chụp |
 | C16 | Phím tắt + màn hình Shortcuts | [x] | `shortcuts.rs`; settings |
-| C17 | Chat hỏi tài liệu | [ ] | mới là UI giả: attach/skills/mic/voice hiện toast “coming next” |
+| C17 | Chat hỏi tài liệu | [~] | chat thật: gửi provider, hiện trả lời, lỗi rõ ràng; chưa có context tài liệu/history; attach/skills/mic vẫn toast |
 | C18 | Chọn model/agent cho chat | [ ] | nhãn “Model · Auto” tĩnh |
 | C19 | Voice input / voice mode | [ ] | nút có, chưa nối |
 | C20 | OCR Tesseract dự phòng ngoài Windows OCR | [~] | Windows OCR đã verify trên PDF scan; chưa thêm Tesseract fallback native |
@@ -118,6 +118,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | D16 | Release gate kiểm tra artifact `dist` | [x] | `scripts/verify-release.ps1 -ArtifactsOnly` PASS 2/2 checks |
 | D17 | Module giá/chi phí, print, download, OCR preprocess | [x] | Unit test cho `pricing`, `export/print`, `export/download`, `ocr/preprocess`; chưa nối hết vào UI |
 | D18 | OCR CJK cho web scan | [x] | `chi_sim/jpn/kor` vendored; smoke Trung 90.5% mean / 20 từ; scan e2e pass |
+| D19 | Native chat thật | [x] | Chat view + `provider::chat`; fixture provider trả lời trong bản đóng gói; ảnh `desktop-packaged-chat.png` |
 
 ## 2. Ảnh chụp kiểm chứng hiện tại
 

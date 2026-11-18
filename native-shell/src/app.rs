@@ -163,6 +163,7 @@ pub struct RowMenu {
 pub enum View {
     Doc,
     Home,
+    Chat,
     Trash,
     Settings,
 }
@@ -219,6 +220,7 @@ pub struct Workspace {
     pub entries: Vec<Entry>,
     pub current: Option<String>,
     pub pdf_reader: Option<Entity<crate::pdf_reader::PdfReader>>,
+    pub chat: Entity<crate::chat::Chat>,
     pub(crate) companion: crate::native_bridge::CompanionState,
     pub(crate) companion_task: Option<Task<()>>,
     pub(crate) companion_error: Option<String>,
@@ -390,7 +392,7 @@ impl Workspace {
             store,
             entries,
             current: None,
-            pdf_reader: None, companion: Default::default(), companion_task: None, companion_error: None,
+            pdf_reader: None, chat: cx.new(crate::chat::Chat::new), companion: Default::default(), companion_task: None, companion_error: None,
             pdf_importing: false,
             capture_picker: None,
             live_source: None,
@@ -441,6 +443,11 @@ impl Workspace {
         match document.filter(|_| !crate::layout_preview()) {
             Some(id) => ws.open(&id, window, cx),
             None => ws.view = View::Home,
+        }
+        if std::env::var_os("PDF_WORKSPACE_START_CHAT").is_some() { ws.home.chat = true; ws.view = View::Chat; }
+        if let Some(prompt) = std::env::var_os("PDF_WORKSPACE_CHAT_PROMPT") {
+            let prompt = prompt.to_string_lossy().to_string();
+            ws.chat.update(cx, |chat, cx| chat.ask(prompt, cx));
         }
         // Kept in the top bar (not just a toast): the user should notice.
         let warnings = ws.store.take_warnings();
@@ -715,6 +722,12 @@ impl Workspace {
     }
 
     /// Switch the main pane to 主页 or 回收站 (or back to the document).
+    pub fn show_chat(&mut self, cx: &mut Context<Self>) {
+        self.home.chat = true;
+        self.home.recent_view = false;
+        self.show_view(View::Chat, cx);
+    }
+
     pub fn show_view(&mut self, view: View, cx: &mut Context<Self>) {        self.cancel_shortcut_recording(cx);
         if view == View::Trash {
             self.trash = self.store.list_trash();
@@ -1116,6 +1129,7 @@ impl Render for Workspace {
                 )
                 .into_any_element(),
             View::Home => self.render_home(window, cx),
+            View::Chat => div().flex_1().min_w_0().h_full().child(self.chat.clone()).into_any_element(),
             View::Trash => self.render_trash(cx),
             View::Settings => self.render_settings(cx),
         };

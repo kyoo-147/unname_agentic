@@ -28,6 +28,30 @@ pub fn translate_blocks(settings: &ProviderSettings, blocks: &[TextBlock]) -> Re
     translate_blocks_in(settings, blocks, &data_directory())
 }
 
+/// One non-streaming chat completion for the workspace assistant.
+pub fn chat(settings: &ProviderSettings, messages: &[(bool, String)]) -> Result<String> {
+    let url = validate_endpoint(settings)?;
+    let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    anyhow::ensure!(local || settings.cloud_consent, "Enable cloud text transfer in Settings before using the assistant with this provider");
+    anyhow::ensure!(settings.kind == ProviderKind::Local || !settings.api_key.trim().is_empty(), "Add your provider API key in Settings");
+    let client = Client::builder().timeout(Duration::from_secs(120)).connect_timeout(Duration::from_secs(12)).redirect(reqwest::redirect::Policy::none()).build()?;
+    let mut payload_messages = vec![json!({"role": "system", "content": "You are the assistant in a local PDF reading workspace. Be concise, answer in the user's language, and never claim to have read a document unless its text was supplied."})];
+    for (user, text) in messages {
+        payload_messages.push(json!({"role": if *user { "user" } else { "assistant" }, "content": text}));
+    }
+    let base = settings.endpoint.trim_end_matches('/');
+    let mut builder = client.post(format!("{base}/chat/completions")).json(&json!({"model": settings.model, "temperature": 0.2, "stream": false, "messages": payload_messages}));
+    if !settings.api_key.is_empty() { builder = builder.bearer_auth(&settings.api_key); }
+    let response = builder.send()?;
+    let status = response.status();
+    anyhow::ensure!(status.is_success(), "Assistant request failed with HTTP {}. Check the endpoint, key, model and quota.", status.as_u16());
+    let body: Value = response.json().context("Assistant did not return JSON")?;
+    anyhow::ensure!(body.pointer("/choices/0/finish_reason").and_then(Value::as_str) != Some("length"), "The assistant answer was truncated; raise the model output limit.");
+    let content = body.pointer("/choices/0/message/content").and_then(Value::as_str).context("Assistant response has no message")?;
+    anyhow::ensure!(!content.trim().is_empty(), "The assistant returned an empty answer");
+    Ok(content.trim().to_string())
+}
+
 pub fn translate_blocks_in(settings: &ProviderSettings, blocks: &[TextBlock], directory: &Path) -> Result<Vec<String>> {
     let url = validate_endpoint(settings)?;
     let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));

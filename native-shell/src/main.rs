@@ -6,6 +6,7 @@ pub(crate) const UI_PREVIEW: bool = true;
 pub(crate) fn layout_preview() -> bool { std::env::var_os("PDF_WORKSPACE_LAYOUT_PREVIEW").is_some_and(|v| v == "1") }
 
 mod app;
+mod chat;
 mod pdf_reader;
 mod product_library;
 mod native_bridge;
