@@ -8,7 +8,7 @@ Cập nhật: 2026-11-18 (Asia/Saigon). Nguồn: đọc mã nguồn, chạy test
 - `[~]` — có mã nhưng chưa đủ UX, chưa verify lại trong phiên này, hoặc mới đúng một phần.
 - `[ ]` — chưa có.
 
-Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ có mock. Native chưa build lại trong phiên này vì ổ D: chỉ còn ~3.2 GB; mọi mục native vì vậy tối đa là `[~]` trừ khi có bằng chứng cũ ghi rõ.
+Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ có mock. Native release đã build lại, ký self-signed preview và đóng gói; xem `docs/release-verification.md`. Các mục native còn `[~]` là do thiếu CA certificate, tools/agent picker hoặc automation GUI — không phải do chưa build.
 
 ## 1. Bảng chức năng
 
