@@ -21,7 +21,9 @@ import {
 import { isCaptureRequest, mountCaptureReader, type CaptureReaderHandle } from './capture/reader';
 import { createLibraryStore } from './core/library-store';
 import { resolveBlockDirection } from './core/text-direction';
-import { toBilingualText } from './export/bilingual';
+import { toBilingualHtml, toBilingualText, type ExportedPage } from './export/bilingual';
+import { documentTitle, printHtml, PrintTimeoutError, PrintUnavailableError } from './export/print';
+import { estimateCost, formatUsd } from './core/pricing';
 
 initLocale();
 
@@ -37,7 +39,7 @@ let settings: TranslationSettings = { ...defaultSettings, glossary:{} };
 root.innerHTML = `<aside class="sidebar"><a class="brand" href="#" data-i18n-aria-label="libraryAria" aria-label="Mirror library">${icon('book')}<span>mirror<span class="brand-dot">.</span></span></a><button class="open-button" data-open>${icon('plus')} <span data-i18n="openPdf">Open PDF</span> <kbd>Ctrl O</kbd></button><div class="nav-label" data-i18n="workspaceLabel">YOUR WORKSPACE</div><button class="nav-item active" id="library-nav">${icon('book')} <span data-i18n="myLibrary">My library</span> <span id="library-count">0</span></button><div class="sidebar-note"><span class="small-orbit"></span><p><span data-i18n="sidebarNoteLead">A different language.</span><br><span data-i18n="sidebarNoteTail">The same perspective.</span></p></div><button class="nav-item settings-button" id="settings-open">${icon('settings')} <span data-i18n="settingsNav">Translation settings</span></button><div class="privacy-note"><span data-i18n="privacyLead">Documents stay in this session.</span><br><span data-i18n="privacyTail">Cloud translation is opt-in.</span></div></aside>
 <main><header class="topbar"><div class="breadcrumb"><span data-i18n="workspace">Workspace</span>${icon('arrow')}<strong id="breadcrumb">My library</strong></div>${localeSwitcher()}<span class="local-badge"><i></i> <span data-i18n="localFirst">Local-first reading</span></span></header>
 <section id="library" class="library"><div class="library-heading"><div><div class="eyebrow" data-i18n="libraryEyebrow">A LITTLE CLOSER TO UNDERSTANDING</div><h1 data-i18n="libraryTitle">Your reading room.</h1><p data-i18n="libraryLead">Keep the original. Find the meaning beside it.</p></div><button class="primary" data-open>${icon('plus')} <span data-i18n="importDocument">Import document</span></button></div><div class="library-section-heading"><h2><span data-i18n="allDocuments" style="color:inherit;font-size:inherit;margin-left:0">All documents</span> <span id="document-count">0</span></h2><span data-i18n="recentlyOpened">Recently opened</span></div><div id="documents" class="documents"></div><button class="drop-zone" data-open>${icon('upload')}<strong data-i18n="dropTitle">Your next good read belongs here</strong><span data-i18n="dropHint">Drop a PDF, or browse your files</span><small data-i18n="dropMeta">PDF documents · read locally · no account needed</small></button><div class="library-footnote"><span data-i18n="stepOpen">01 — OPEN</span><span data-i18n="stepRead">02 — READ SIDE BY SIDE</span><span data-i18n="stepUnderstand">03 — UNDERSTAND MORE</span></div></section>
-<section id="reader" hidden><div class="reader-toolbar"><div class="document-heading"><div class="document-title" id="document-title"></div><span id="detected-language" class="detected-language" aria-live="polite" hidden></span></div><div class="toolbar-group reader-nav"><button id="prev-page" type="button" data-i18n-aria-label="previousPage" aria-label="${t('previousPage')}" disabled>‹</button><input id="page-input" class="page-input" type="number" min="1" value="1" inputmode="numeric" data-i18n-aria-label="pageInputAria" aria-label="${t('pageInputAria')}"><span class="page-total">/ <b id="page-total">0</b></span><button id="next-page" type="button" data-i18n-aria-label="nextPage" aria-label="${t('nextPage')}" disabled>›</button></div><div class="toolbar-group view-actions"><button id="fit-width" type="button" data-i18n="fitWidth">Fit width</button><button id="fit-page" type="button" data-i18n="fitPage">Fit page</button><button id="rotate" type="button" data-i18n="rotatePage">Rotate page</button><button id="outline-toggle" type="button" data-i18n="outlineToggle" aria-controls="reader-panel" aria-expanded="false">Outline</button><button id="search-toggle" type="button" data-i18n="searchToggle" aria-controls="reader-panel" aria-expanded="false">Search</button><button id="thumbnails-toggle" type="button" data-i18n="thumbnailsToggle" aria-controls="thumbnails" aria-expanded="false">Thumbnails</button></div><div class="toolbar-actions"><label class="language-label"><span data-i18n="targetLanguageLabel">To</span> <select id="target-language" data-i18n-aria-label="targetLanguageAria" aria-label="${t('targetLanguageAria')}">${targetOptions(settings.targetLanguage)}</select></label><button id="zoom-out" data-i18n-aria-label="zoomOut" aria-label="${t('zoomOut')}">−</button><output id="zoom-label">100%</output><button id="zoom-in" data-i18n-aria-label="zoomIn" aria-label="${t('zoomIn')}">+</button><button id="pause">Pause</button><button id="full">Translate all</button><button id="retry" data-i18n="retry">Retry</button><button id="export-bilingual" data-i18n="exportBilingual">Export bilingual text</button><a id="original-link" target="_blank" rel="noopener" hidden><span data-i18n="openOriginal">Open original ↗</span></a></div></div><div class="pane-headings"><span><span data-i18n="originalHeading">ORIGINAL</span> <small data-i18n="originalNote">Unchanged source</small></span><span><span data-i18n="translatedHeading">TRANSLATED MIRROR</span> <small id="provider-label" data-i18n="providerInitial">Local · Vietnamese</small></span></div><div class="reader-body"><aside id="reader-panel" class="reader-panel reader-panel--overlay" data-i18n-aria-label="readerPanelAria" aria-label="${t('readerPanelAria')}" hidden></aside><div id="reading-scroll" class="reading-scroll"><div id="pages"></div></div><div id="thumbnails" class="reader-thumbstrip reader-thumbstrip--overlay" data-i18n-aria-label="thumbnailsToggle" aria-label="${t('thumbnailsToggle')}" hidden></div></div><div class="reader-bottom"><span id="page-status" data-i18n="pageInitial">Page 1</span><span><span data-i18n="linkedPages">Linked pages</span> <span class="linked-symbol">↔</span> <span data-i18n="selectRegionHint">Select any text region to compare</span></span><button id="reset-split" data-i18n="resetSplit">Reset split</button></div></section>
+<section id="reader" hidden><div class="reader-toolbar"><div class="document-heading"><div class="document-title" id="document-title"></div><span id="detected-language" class="detected-language" aria-live="polite" hidden></span></div><div class="toolbar-group reader-nav"><button id="prev-page" type="button" data-i18n-aria-label="previousPage" aria-label="${t('previousPage')}" disabled>‹</button><input id="page-input" class="page-input" type="number" min="1" value="1" inputmode="numeric" data-i18n-aria-label="pageInputAria" aria-label="${t('pageInputAria')}"><span class="page-total">/ <b id="page-total">0</b></span><button id="next-page" type="button" data-i18n-aria-label="nextPage" aria-label="${t('nextPage')}" disabled>›</button></div><div class="toolbar-group view-actions"><button id="fit-width" type="button" data-i18n="fitWidth">Fit width</button><button id="fit-page" type="button" data-i18n="fitPage">Fit page</button><button id="rotate" type="button" data-i18n="rotatePage">Rotate page</button><button id="outline-toggle" type="button" data-i18n="outlineToggle" aria-controls="reader-panel" aria-expanded="false">Outline</button><button id="search-toggle" type="button" data-i18n="searchToggle" aria-controls="reader-panel" aria-expanded="false">Search</button><button id="thumbnails-toggle" type="button" data-i18n="thumbnailsToggle" aria-controls="thumbnails" aria-expanded="false">Thumbnails</button></div><div class="toolbar-actions"><label class="language-label"><span data-i18n="targetLanguageLabel">To</span> <select id="target-language" data-i18n-aria-label="targetLanguageAria" aria-label="${t('targetLanguageAria')}">${targetOptions(settings.targetLanguage)}</select></label><button id="zoom-out" data-i18n-aria-label="zoomOut" aria-label="${t('zoomOut')}">−</button><output id="zoom-label">100%</output><button id="zoom-in" data-i18n-aria-label="zoomIn" aria-label="${t('zoomIn')}">+</button><button id="pause">Pause</button><button id="full">Translate all</button><button id="retry" data-i18n="retry">Retry</button><button id="export-bilingual" data-i18n="exportBilingual">Export bilingual text</button><button id="export-print" data-i18n="exportPrint">Print / Save as PDF</button><a id="original-link" target="_blank" rel="noopener" hidden><span data-i18n="openOriginal">Open original ↗</span></a></div></div><div class="pane-headings"><span><span data-i18n="originalHeading">ORIGINAL</span> <small data-i18n="originalNote">Unchanged source</small></span><span><span data-i18n="translatedHeading">TRANSLATED MIRROR</span> <small id="provider-label" data-i18n="providerInitial">Local · Vietnamese</small></span></div><div class="reader-body"><aside id="reader-panel" class="reader-panel reader-panel--overlay" data-i18n-aria-label="readerPanelAria" aria-label="${t('readerPanelAria')}" hidden></aside><div id="reading-scroll" class="reading-scroll"><div id="pages"></div></div><div id="thumbnails" class="reader-thumbstrip reader-thumbstrip--overlay" data-i18n-aria-label="thumbnailsToggle" aria-label="${t('thumbnailsToggle')}" hidden></div></div><div class="reader-bottom"><span id="page-status" data-i18n="pageInitial">Page 1</span><span><span data-i18n="linkedPages">Linked pages</span> <span class="linked-symbol">↔</span> <span data-i18n="selectRegionHint">Select any text region to compare</span></span><button id="reset-split" data-i18n="resetSplit">Reset split</button></div></section>
 <div class="status-bar" id="status" role="status" aria-live="polite" aria-atomic="true" data-i18n="ready">Ready when you are.</div></main>
 <input type="file" id="file-input" accept="application/pdf,.pdf" hidden multiple>
 <dialog id="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1"><form id="settings-form"><div class="dialog-heading"><div><span class="eyebrow" data-i18n="settingsEyebrow">MAKE IT YOURS</span><h2 id="settings-title" data-i18n="translationSettings">Translation settings</h2></div><button type="button" id="settings-close" data-i18n-aria-label="closeSettings" aria-label="Close settings">${icon('close')}</button></div>${localeSwitcher()}<p class="dialog-description" data-i18n="settingsDescription">Only extracted text is sent to your chosen provider. Your PDF stays here. Credentials are kept in memory, not saved.</p><label><span data-i18n="providerLabel">Provider</span><select name="provider"><option value="local" data-i18n="providerLocal">Local / Ollama (OpenAI-compatible)</option><option value="google" data-i18n="providerGoogle">Google Cloud Translation</option><option value="deepl" data-i18n="providerDeepl">DeepL</option><option value="openai" data-i18n="providerOpenai">OpenAI-compatible API</option></select></label><label><span data-i18n="apiEndpoint">API endpoint</span><input name="endpoint" type="url" placeholder="http://127.0.0.1:11434/v1" required></label><label><span data-i18n="model">Model</span><input name="model" autocomplete="off"></label><div class="form-row"><label><span data-i18n="sourceLanguage">Source language</span><select name="sourceLanguage"><option value="auto" data-i18n="sourceAuto">Detect automatically</option>${targetOptions()}</select></label><label><span data-i18n="targetLanguage">Target language</span><select name="targetLanguage">${targetOptions()}</select></label></div><label><span data-i18n="apiKey">API key</span><input name="apiKey" type="password" autocomplete="off" data-i18n-placeholder="apiKeyPlaceholder" placeholder="Not needed for a local server"></label><label class="glossary-field"><span data-i18n="glossaryLabel">Glossary</span><textarea name="glossary" rows="5" spellcheck="false" data-i18n-placeholder="glossaryPlaceholder" placeholder="transformer = bộ biến đổi"></textarea></label><p class="settings-help" data-i18n="glossaryHelp">One term per line as "source = translation". Up to 200 terms.</p><p class="settings-help" data-i18n="glossaryProviderHint">Google and DeepL do not accept a custom glossary.</p><p id="glossary-status" class="glossary-status" role="status" aria-live="polite"></p><label class="consent"><input name="allowCloud" type="checkbox"><span data-i18n="cloudConsent">I allow extracted document text to be sent to the selected cloud provider. Provider charges may apply.</span></label><p class="settings-help" data-i18n="settingsHelp">Local endpoints must use localhost. If the provider is unavailable, the original stays readable; no substitute translation is invented.</p><button class="primary" type="submit" data-i18n="applySettings">Apply & translate visible pages</button></form></dialog>
@@ -232,8 +234,17 @@ async function ensurePage(number: number,priority: number): Promise<void> {
   const generation=revision, current=pdf;
   if(rendered.has(number)) { schedulePage(number,priority); return; }
   try { await renderQueue.enqueue(String(number),priority,async()=>{
-    const result=await renderPage(current,number,{rotation});
+    let result=await renderPage(current,number,{rotation});
     if(generation!==revision) return;
+    if(!result.model.blocks.length && result.rotation===0) {
+      try {
+        status('statusOcrScan',false,{page:number});
+        const { recognizeScan }=await import('./ocr/scan');
+        const scan=await recognizeScan(result.original,number,result.model.width,result.model.height);
+        if(generation!==revision) return;
+        if(scan.blocks.length) { result={...result,model:{...result.model,blocks:scan.blocks},warning:''}; status('statusOcrDone',false,{count:scan.blocks.length}); }
+      } catch { /* OCR is optional; the original page stays readable */ }
+    }
     rendered.set(number,result); mountPage(result); schedulePage(number,priority);
     if(result.warning) statusText(result.warning);
     evictPages(number);
@@ -275,7 +286,7 @@ function paintMirror(result: RenderedPage) {
   if(result.rotation!==0) { paintRotatedMirror(result,slot,canvas,context,scale); return; }
   const overlays: {block:TextBlock;text:string;size:number;lineHeight:number}[]=[];
   for(const block of result.model.blocks) {
-    const text=translations.get(block.id); if(!text) continue;
+    const text=translations.get(block.id); if(!text || block.id.startsWith('ocr-')) continue;
     const fit=fitText(text,block.rect.width,block.rect.height,block.fontSize,(line,size)=>{context.font=`${size}px sans-serif`;return context.measureText(line).width;});
     const overlaps=result.model.blocks.some(other=>other.id!==block.id && other.rect.x<block.rect.x+block.rect.width && other.rect.x+other.rect.width>block.rect.x && other.rect.y<block.rect.y+block.rect.height && other.rect.y+other.rect.height>block.rect.y);
     if(!result.background || fit.overflow || overlaps) continue;
@@ -340,7 +351,11 @@ function scheduleBlock(block: TextBlock,priority: number) {
       translations.set(block.id,result.text); errors.delete(block.id);
       const page=rendered.get(block.page); if(page) paintMirror(page);
       if(selected?.id===block.id) renderSelectedTranslation();
-      setStatusText(() => t('statusTranslated', {count:translations.size, chars:service.characterCount, mode:t(paused?'modePaused':full?'modeFull':'modeVisible'), provider:providerName()}));
+      setStatusText(() => {
+        const base=t('statusTranslated', {count:translations.size, chars:service.characterCount, mode:t(paused?'modePaused':full?'modeFull':'modeVisible'), provider:providerName()});
+        const cost=estimateCost({characters:service.characterCount,model:settings.model,direction:'both'});
+        return `${base} · ${t('costEstimate')} ${cost?formatUsd(cost.usd):t('costUnknownModel')}`;
+      });
     } catch(error) {
       if(generation!==revision||currentProfile!==profile||signal.aborted) return;
       const message=userMessage(error); errors.set(block.id,message); statusText(message,true);
@@ -432,19 +447,46 @@ $('zoom-in').addEventListener('click',()=>{fit='actual';zoom=Math.min(3,zoom+.1)
 $('zoom-out').addEventListener('click',()=>{fit='actual';zoom=Math.max(.55,zoom-.1);applyScale();});
 $('pause').addEventListener('click',()=>{paused=!paused;if(paused)translationQueue.pause();else translationQueue.resume();refreshTransportLabels();status(paused?'statusPaused':'statusResumed');});
 $('retry').addEventListener('click',()=>{errors.clear();for(const number of visible)schedulePage(number,0);status('statusRetrying');});
-$('export-bilingual').addEventListener('click',()=>{
-  const pages=[...rendered.values()].sort((a,b)=>a.model.number-b.model.number).map(page=>({
+function exportedPages(): ExportedPage[] {
+  return [...rendered.values()].sort((a,b)=>a.model.number-b.model.number).map(page=>({
     pageNumber:page.model.number,
     blocks:page.model.blocks.map(block=>({source:block.text,target:translations.get(block.id)??'',direction:block.direction})),
   })).filter(page=>page.blocks.some(block=>block.target));
+}
+function pageLabel(page: number) { return t('pageStatus',{page,total:pageTotal}); }
+async function printBilingual(): Promise<void> {
+  const pages=exportedPages();
   if(!pages.length){status('exportEmpty',true);return;}
-  const text=toBilingualText(pages,{header:activeTitle,pageLabel:page=>t('pageStatus',{page,total:pageTotal}),includeSourceOnly:true});
+  const title=documentTitle(activeTitle);
+  document.title=title;
+  try {
+    await printHtml(toBilingualHtml(pages,{title,lang:settings.targetLanguage,pageLabel}));
+    status('exportPrintOpened');
+  } catch(error) {
+    status(error instanceof PrintTimeoutError?'exportPrintTimeout':error instanceof PrintUnavailableError?'exportPrintUnavailable':'exportPrintBlocked',true);
+  }
+}
+$('export-print').addEventListener('click',()=>{void printBilingual();});
+$('export-bilingual').addEventListener('click',()=>{
+  const pages=exportedPages();
+  if(!pages.length){status('exportEmpty',true);return;}
+  const text=toBilingualText(pages,{header:activeTitle,pageLabel,includeSourceOnly:true});
   const blob=new Blob([text],{type:'text/plain;charset=utf-8'});
   const url=URL.createObjectURL(blob);
   const link=document.createElement('a'); link.href=url; link.download=`${activeTitle.replace(/\.pdf$/i,'')}.bilingual.txt`;
   document.body.append(link); link.click(); link.remove();
   setTimeout(()=>URL.revokeObjectURL(url),1000);
   status('exportReady',false,{count:pages.length});
+});
+// Ctrl/Cmd+P prints the bilingual copy (source above, translation below) instead of
+// the app chrome. It only takes over when the reader is open with at least one
+// translated region; otherwise the browser's own print dialog is left alone.
+document.addEventListener('keydown',event=>{
+  if(!(event.ctrlKey||event.metaKey)||event.shiftKey||event.altKey) return;
+  if(event.key.toLowerCase()!=='p'||!pdf||$('reader').hidden) return;
+  if(!exportedPages().length) return;
+  event.preventDefault();
+  void printBilingual();
 });
 $('full').addEventListener('click',async()=>{full=!full;refreshTransportLabels();if(!full){translationQueue.reset();for(const number of visible)schedulePage(number,0);return;}const generation=revision;for(let number=1;pdf&&number<=pdf.numPages&&full&&generation===revision;number++)await ensurePage(number,5);});
 $<HTMLSelectElement>('target-language').addEventListener('change',()=>{const value=normalizeLanguageCode($<HTMLSelectElement>('target-language').value);if(value&&value!=='auto'){settings.targetLanguage=value;changeProfile();}});
@@ -646,6 +688,20 @@ form.addEventListener('submit',event=>{
   if(parsed.entries.length&&canTranslate()) status('statusGlossaryApplied',false,{count:parsed.entries.length});
 });
 syncToolbarTarget();
+// The extension popup can choose the target language before this reader opens; honour it
+// only when it is a supported code. Outside the extension host chrome.storage is absent
+// and this block is a no-op.
+void (async () => {
+  try {
+    const storage = (globalThis as { chrome?: { storage?: { local?: { get(key: string): Promise<Record<string, unknown>> } } } }).chrome?.storage?.local;
+    if (!storage) return;
+    const stored = (await storage.get('mirror:targetLanguage'))['mirror:targetLanguage'];
+    const target = SUPPORTED_TARGETS.find(option => option.code === stored);
+    if (!target || target.code === settings.targetLanguage) return;
+    settings.targetLanguage = target.code;
+    syncToolbarTarget(); updateProvider();
+  } catch { /* not running inside the extension host */ }
+})();
 $('selection-close').addEventListener('click',()=>{$<HTMLDialogElement>('selection-dialog').close();selected=null;highlight('');});
 $('selection-translate').addEventListener('click',()=>{if(selected){errors.delete(selected.id);if(!canTranslate()){status('statusCloudFirst',true);return;}scheduleBlock(selected,-100);}});
 $('reset-split').addEventListener('click',()=>{split=50;applyScale();});
