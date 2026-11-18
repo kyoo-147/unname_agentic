@@ -54,6 +54,16 @@ const server = createServer(async (request, response) => {
         if (!Array.isArray(blocks) || !blocks.every(item => typeof item === 'string')) throw new Error('Expected text blocks');
         content = JSON.stringify({ translations: blocks.map(block => translate(block)) });
       }
+      if (payload.stream) {
+        response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+        const parts = content.match(/[\s\S]{1,24}/g) ?? [content];
+        let index = 0;
+        const timer = setInterval(() => {
+          if (index >= parts.length) { response.write('data: [DONE]\n\n'); clearInterval(timer); response.end(); return; }
+          response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: parts[index++] } }] })}\n\n`);
+        }, 40);
+        return;
+      }
       response.end(JSON.stringify({ choices: [{ message: { content } }], testOnly: true }));
     } catch { response.writeHead(400).end('Invalid test request'); }
     return;

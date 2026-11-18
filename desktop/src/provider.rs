@@ -2,7 +2,7 @@ use crate::model::{ProviderKind, ProviderSettings, TextBlock, data_directory};
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
-use std::{collections::HashMap, io::Read, path::Path, sync::Mutex, time::Duration};
+use std::{collections::HashMap, io::{BufRead, BufReader, Read}, path::Path, sync::Mutex, time::Duration};
 
 static CACHE_WRITE: Mutex<()> = Mutex::new(());
 
@@ -58,6 +58,43 @@ pub fn chat(settings: &ProviderSettings, messages: &[(bool, String)], context: O
     let content = body.pointer("/choices/0/message/content").and_then(Value::as_str).context("Assistant response has no message")?;
     anyhow::ensure!(!content.trim().is_empty(), "The assistant returned an empty answer");
     Ok(content.trim().to_string())
+}
+
+/// A streaming chat completion. `on_delta` receives each text fragment; the
+/// complete answer is returned once the stream ends.
+pub fn chat_stream(settings: &ProviderSettings, messages: &[(bool, String)], context: Option<(&str, &str)>, mut on_delta: impl FnMut(&str)) -> Result<String> {
+    let url = validate_endpoint(settings)?;
+    let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    anyhow::ensure!(local || settings.cloud_consent, "Enable cloud text transfer in Settings before using the assistant with this provider");
+    anyhow::ensure!(settings.kind == ProviderKind::Local || !settings.api_key.trim().is_empty(), "Add your provider API key in Settings");
+    let client = Client::builder().timeout(Duration::from_secs(120)).connect_timeout(Duration::from_secs(12)).redirect(reqwest::redirect::Policy::none()).build()?;
+    let mut payload_messages = vec![json!({"role": "system", "content": chat_system(context)})];
+    for (user, text) in messages {
+        payload_messages.push(json!({"role": if *user { "user" } else { "assistant" }, "content": text}));
+    }
+    let base = settings.endpoint.trim_end_matches('/');
+    let mut builder = client.post(format!("{base}/chat/completions")).json(&json!({"model": settings.model, "temperature": 0.2, "stream": true, "messages": payload_messages}));
+    if !settings.api_key.is_empty() { builder = builder.bearer_auth(&settings.api_key); }
+    let response = builder.send()?;
+    let status = response.status();
+    anyhow::ensure!(status.is_success(), "Assistant request failed with HTTP {}. Check the endpoint, key, model and quota.", status.as_u16());
+    let mut reader = BufReader::new(response);
+    let mut line = String::new();
+    let mut answer = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 { break; }
+        let Some(data) = line.trim().strip_prefix("data:") else { continue };
+        let data = data.trim();
+        if data == "[DONE]" { break; }
+        let Ok(value) = serde_json::from_str::<Value>(data) else { continue };
+        if let Some(delta) = value.pointer("/choices/0/delta/content").and_then(Value::as_str) {
+            answer.push_str(delta);
+            on_delta(delta);
+        }
+    }
+    anyhow::ensure!(!answer.trim().is_empty(), "The assistant returned an empty answer");
+    Ok(answer)
 }
 
 pub fn translate_blocks_in(settings: &ProviderSettings, blocks: &[TextBlock], directory: &Path) -> Result<Vec<String>> {

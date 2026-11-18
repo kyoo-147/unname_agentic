@@ -5,6 +5,9 @@ use crate::ui;
 use gpui::{prelude::FluentBuilder, *};
 use mirror_pdf_desktop::{model, provider};
 use serde::{Deserialize, Serialize};
+use std::sync::mpsc::{self, TryRecvError};
+
+enum StreamEvent { Delta(String), Done(String), Failed(String) }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -84,24 +87,59 @@ impl Chat {
         cx.notify();
 
         let history: Vec<(bool, String)> = self.messages.iter().map(|message| (message.user, message.text.clone())).collect();
+        self.messages.push(ChatMessage { user: false, text: String::new() });
         let context = self.context.clone();
-        let task = cx.background_executor().spawn(async move {
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
             let mut settings = model::load_settings();
             settings.provider.api_key = provider::load_key(settings.provider.kind).unwrap_or_default();
             let context = context.as_ref().map(|(title, text)| (title.as_str(), text.as_str()));
-            provider::chat(&settings.provider, &history, context).map_err(|error| format!("{error:#}"))
+            let result = provider::chat_stream(&settings.provider, &history, context, |delta| { let _ = sender.send(StreamEvent::Delta(delta.to_string())); });
+            let _ = match result {
+                Ok(full) => sender.send(StreamEvent::Done(full)),
+                Err(error) => sender.send(StreamEvent::Failed(format!("{error:#}"))),
+            };
         });
         cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let _ = this.update(cx, |chat, cx| {
-                chat.busy = false;
-                match result {
-                    Ok(answer) => chat.messages.push(ChatMessage { user: false, text: answer }),
-                    Err(error) => chat.error = Some(error),
+            loop {
+                match receiver.try_recv() {
+                    Ok(StreamEvent::Delta(delta)) => {
+                        let _ = this.update(cx, |chat, cx| {
+                            if let Some(message) = chat.messages.last_mut() { if !message.user { message.text.push_str(&delta); } }
+                            cx.notify();
+                        });
+                    }
+                    Ok(StreamEvent::Done(full)) => {
+                        let _ = this.update(cx, |chat, cx| {
+                            if let Some(message) = chat.messages.last_mut() { message.text = full.clone(); }
+                            chat.busy = false;
+                            chat.persist();
+                            cx.notify();
+                        });
+                        break;
+                    }
+                    Ok(StreamEvent::Failed(error)) => {
+                        let _ = this.update(cx, |chat, cx| {
+                            if chat.messages.last().is_some_and(|message| !message.user) { chat.messages.pop(); }
+                            chat.busy = false;
+                            chat.error = Some(error.clone());
+                            chat.persist();
+                            cx.notify();
+                        });
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => cx.background_executor().timer(std::time::Duration::from_millis(35)).await,
+                    Err(TryRecvError::Disconnected) => {
+                        let _ = this.update(cx, |chat, cx| {
+                            if chat.messages.last().is_some_and(|message| !message.user) { chat.messages.pop(); }
+                            chat.busy = false;
+                            chat.error = Some(tr3("Luồng trả lời bị ngắt.", "The answer stream ended unexpectedly.", "Luồng trả lời bị ngắt.").to_string());
+                            cx.notify();
+                        });
+                        break;
+                    }
                 }
-                chat.persist();
-                cx.notify();
-            });
+            }
         }).detach();
     }
 
