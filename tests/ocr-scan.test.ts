@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mapOcrBlocksToPage } from '../src/ocr/scan';
+import { mapOcrBlocksToPage, scanLanguages } from '../src/ocr/scan';
 
 describe('mapOcrBlocksToPage', () => {
   it('scales image-pixel boxes into page coordinates and drops empty text', () => {
@@ -15,5 +15,14 @@ describe('mapOcrBlocksToPage', () => {
 
   it('returns nothing for a zero-sized image', () => {
     expect(mapOcrBlocksToPage([{ text: 'x', rect: { x: 0, y: 0, width: 1, height: 1 } }], 0, 0, 100, 100, 1)).toEqual([]);
+  });
+
+  it('selects OCR languages from the source language and falls back to eng+vie', () => {
+    expect(scanLanguages('zh')).toEqual(['chi_sim', 'eng']);
+    expect(scanLanguages('ja-JP')).toEqual(['jpn', 'eng']);
+    expect(scanLanguages('ko')).toEqual(['kor', 'eng']);
+    expect(scanLanguages('vi')).toEqual(['vie', 'eng']);
+    expect(scanLanguages('auto')).toEqual(['eng', 'vie']);
+    expect(scanLanguages(undefined)).toEqual(['eng', 'vie']);
   });
 });

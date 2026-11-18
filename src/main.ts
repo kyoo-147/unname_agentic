@@ -242,7 +242,7 @@ async function ensurePage(number: number,priority: number): Promise<void> {
       try {
         status('statusOcrScan',false,{page:number});
         const { recognizeScan }=await import('./ocr/scan');
-        const scan=await recognizeScan(result.original,number,result.model.width,result.model.height);
+        const scan=await recognizeScan(result.original,number,result.model.width,result.model.height,settings.sourceLanguage);
         if(generation!==revision) return;
         if(scan.blocks.length) { result={...result,model:{...result.model,blocks:scan.blocks},warning:''}; status('statusOcrDone',false,{count:scan.blocks.length}); }
       } catch { /* OCR is optional; the original page stays readable */ }

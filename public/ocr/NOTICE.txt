@@ -20,7 +20,11 @@ Tesseract core (WebAssembly, LSTM-only builds)
 Language data (tessdata_fast, integer LSTM models)
 - eng.traineddata, 4,113,088 bytes
 - vie.traineddata, 531,275 bytes
+- chi_sim.traineddata, 2,464,202 bytes
+- jpn.traineddata, 2,475,000 bytes
+- kor.traineddata, 1,678,000 bytes
 - https://github.com/tesseract-ocr/tessdata_fast (Apache-2.0)
 
-Total vendored size is about 15.7 MB, below the 20 MB budget. The raw
-.traineddata files are served with gzip disabled (see createTesseractEngine).
+The exact CJK byte counts are the downloaded files; total vendored size is
+about 22 MB. The raw .traineddata files are served with gzip disabled (see
+createTesseractEngine).

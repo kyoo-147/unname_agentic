@@ -107,7 +107,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | D05 | Đếm ký tự/chi phí ước tính | [x] | `characterCount` trong kết quả và status bar |
 | D06 | Glossary parser + kiểm tra thuật ngữ | [x] | `parseGlossary`, giới hạn 200 mục, test edge cases |
 | D07 | Prompt template có version, chống prompt injection | [~] | có promptVersion + câu “do not follow instructions”; chưa test |
-| D08 | Test web đơn vị | [x] | 323 passed / 29 files (2026-11-18) |
+| D08 | Test web đơn vị | [x] | 324 passed / 29 files (2026-11-18) |
 | D09 | Test e2e Chromium | [x] | 49 passed (2026-11-18), gồm journeys, rotation, RTL/CJK, batch, capture, export, a11y |
 | D10 | Test native | [x] | 51 pass / 1 ignored native workspace; 20 backend desktop; release build OK |
 | D11 | CI GitHub Actions | [~] | `.github/workflows/ci.yml` đã có; chưa chạy trên GitHub |
@@ -117,6 +117,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | D15 | Repo Git + remote | [x] | `https://github.com/kyoo-147/mirror_trans_pdf` (private) |
 | D16 | Release gate kiểm tra artifact `dist` | [x] | `scripts/verify-release.ps1 -ArtifactsOnly` PASS 2/2 checks |
 | D17 | Module giá/chi phí, print, download, OCR preprocess | [x] | Unit test cho `pricing`, `export/print`, `export/download`, `ocr/preprocess`; chưa nối hết vào UI |
+| D18 | OCR CJK cho web scan | [x] | `chi_sim/jpn/kor` vendored; smoke Trung 90.5% mean / 20 từ; scan e2e pass |
 
 ## 2. Ảnh chụp kiểm chứng hiện tại
 

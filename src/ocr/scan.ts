@@ -8,7 +8,19 @@ export interface ScanOcrResult {
   droppedWords: number;
 }
 
-const LANGUAGES = ['eng', 'vie'] as const;
+const DEFAULT_LANGUAGES = ['eng', 'vie'] as const;
+const LANGUAGE_MAP: Record<string, readonly string[]> = {
+  vi: ['vie', 'eng'],
+  en: ['eng'],
+  zh: ['chi_sim', 'eng'],
+  ja: ['jpn', 'eng'],
+  ko: ['kor', 'eng'],
+};
+
+export function scanLanguages(sourceLanguage: string | undefined): string[] {
+  const code = (sourceLanguage ?? 'auto').toLowerCase().split('-')[0] ?? 'auto';
+  return [...(LANGUAGE_MAP[code] ?? DEFAULT_LANGUAGES)];
+}
 
 export function mapOcrBlocksToPage(blocks: readonly { text: string; rect: Rect }[], imageWidth: number, imageHeight: number, pageWidth: number, pageHeight: number, page: number): TextBlock[] {
   if (!(imageWidth > 0) || !(imageHeight > 0)) return [];
@@ -33,10 +45,11 @@ export function mapOcrBlocksToPage(blocks: readonly { text: string; rect: Rect }
   });
 }
 
-export async function recognizeScan(canvas: HTMLCanvasElement, page: number, pageWidth: number, pageHeight: number): Promise<ScanOcrResult> {
+export async function recognizeScan(canvas: HTMLCanvasElement, page: number, pageWidth: number, pageHeight: number, sourceLanguage?: string): Promise<ScanOcrResult> {
   const image = canvas.toDataURL('image/png');
-  const engine = createTesseractEngine({ languages: [...LANGUAGES] });
-  const model: PageModel & { ocr?: { meanConfidence?: number; droppedWords?: number } } = await runOcr({ image, engine, languages: [...LANGUAGES], page, preprocess: false });
+  const languages = scanLanguages(sourceLanguage);
+  const engine = createTesseractEngine({ languages });
+  const model: PageModel & { ocr?: { meanConfidence?: number; droppedWords?: number } } = await runOcr({ image, engine, languages, page, preprocess: false });
   return {
     blocks: mapOcrBlocksToPage(model.blocks, model.width, model.height, pageWidth, pageHeight, page),
     confidence: model.ocr?.meanConfidence ?? 0,
