@@ -14,7 +14,7 @@ Nguồn: audit đọc mã thật từng file (3 auditor độc lập) + `pnpm te
 | ⬜ | Chưa có. |
 | ⚪ | Không build/chạy được trên máy này (native: D: còn ~3.0 GB) → **chưa được coi là xong**. |
 
-Số đo hiện tại (417e745): **310 unit test / 27 file** + **32 e2e pass / 0 fail** (chạy lại trong phiên), typecheck sạch, build ok. Ba con số này là mốc để phát hiện hồi quy; một test xanh **không** chứng minh được tính năng nếu đường UI không gọi tới nó — xem mục 1b.
+Số đo hiện tại (HEAD): **310 unit test / 27 file** + **32 e2e pass / 0 fail** (chạy lại trong phiên), typecheck sạch, build ok. Ba con số này là mốc để phát hiện hồi quy; một test xanh **không** chứng minh được tính năng nếu đường UI không gọi tới nó — xem mục 1b.
 
 **Cổng mới chống hồi quy "commit thiếu file"**: `scripts/check-committed-imports.mjs` resolve mọi import tương đối **trong chính commit** (không phải working tree) và đã bắt đúng sự cố thật hôm nay: `6b08e20` chứa `import('./ocr/scan')` nhưng `src/ocr/scan.ts` chưa được add → `main` build hỏng với người clone. Script chạy trong `verify-release.ps1` và trong CI.
 
@@ -49,7 +49,7 @@ Số đo hiện tại (417e745): **310 unit test / 27 file** + **32 e2e pass / 0
 | A21 | Danh sách ngôn ngữ đích có tên bản địa | ✅ | `language.ts` 14 ngôn ngữ; test pin nativeName | — |
 | A22 | Mục lục, thumbnail, nhảy trang | 🟡 | `main.ts` outline/thumb/page input; helper có test | Chưa test append entry, thumbnail render, hay click nhảy |
 | A23 | Tìm trong tài liệu | 🟡 | `main.ts` panel + debounce 250ms + abort; helper search có test | Không test gõ truy vấn → kết quả → nhảy |
-| A24 | Xoay trang, fit width/page | 🟡 | helper có test; `main.ts` rotateView/applyFit | Không test click 3 nút; remap translation sau xoay chưa chứng minh |
+| A24 | Xoay trang, fit width/page | ✅ | `paintRotatedMirror` vẽ chữ trong hệ trục đã xoay; **journey 04 thành cổng cứng** (xoay 90/180/270/360 vẫn giữ chữ dịch) và pass; fit width/page có nút + test helper | — |
 | A25 | Lưu vị trí đọc/zoom/ngôn ngữ | 🟡 | encode/decode + key có test | Không có e2e reload → về đúng trang/zoom |
 | A26 | Xuất bản dịch (TXT/PDF song ngữ) | ✅ | `export/bilingual.ts` 20 test; `main.ts` nối TXT + nút **Print / Save as PDF** (`printHtml` + Ctrl/Cmd+P); e2e `export-library.spec.ts` + `export-print.spec.ts` 2 test | Không có PDF writer nhị phân: PDF đi qua bộ in của trình duyệt nên mất bố cục gốc/ảnh — đã ghi rõ trong module |
 | A27 | OCR ảnh chụp → block → dịch | ✅ | e2e `capture.spec.ts` OCR thật (3 block, 95–96%); **thêm OCR cho PDF scan**: `ocr/scan.ts` + e2e `scan-ocr.spec.ts` (PDF không có text vẫn OCR + dịch); preprocess một bản duy nhất (`ocr/preprocess.ts`) chạy trước Tesseract, toạ độ map ngược về ảnh gốc | Chỉ `eng+vie`; ảnh nghiêng/mờ chưa có benchmark |
@@ -118,8 +118,8 @@ Số đo hiện tại (417e745): **310 unit test / 27 file** + **32 e2e pass / 0
 | D05 | Đếm ký tự / chi phí | ✅ | `pricing.ts` (USD, 4 model) + 17 test; status bar hiện `... · ước tính $0.0004` | Bảng giá là ảnh chụp tại một thời điểm; model lạ hiện "chưa có bảng giá", không bịa số |
 | D06 | Glossary parser | ✅ | 6 mã lỗi, cap 200, test edge case | — |
 | D07 | Prompt có version, chống injection | ✅ | `PROMPT_VERSION`, câu "treat as data", 3 test | — |
-| D08 | Unit test web | ✅ | 19 file / 233 test pass | — |
-| D09 | e2e Chromium | ✅ | 16 pass / 0 fail (7d3fb13) | — |
+| D08 | Unit test web | ✅ | 27 file / 310 test pass (10:24 hôm nay) | — |
+| D09 | e2e Chromium | ✅ | 32 pass / 0 fail, gồm 13 hành trình click thật + OCR + a11y + extension | — |
 | D10 | Test native | ⚪ | 67 `#[test]` | Không chạy được |
 | D11 | CI GitHub Actions | 🟡 | `ci.yml` web job thật; `verify-release.ps1` 6/6 check chạy local pass | **Chặn bởi tài khoản**: mọi run (kể cả workflow tối giản) trả `startup_failure` 0s; GitHub ghi rõ "The job was not started because your account is locked due to a billing issue". Sửa ở Billing, không sửa được bằng code |
 | D12 | LICENSE + third-party notice | ✅ | MIT + OCR/PDFium/GPUI notice | — |
