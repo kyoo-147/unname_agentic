@@ -91,9 +91,9 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | C20 | OCR Tesseract dự phòng ngoài Windows OCR | [ ] | máy chưa cài; Windows OCR là engine duy nhất |
 | C21 | Xoay trang trong reader | [x] | Nút `Xoay trang` xoay ảnh + block theo 90°; unit test 2 case; ảnh `desktop-reader-vi-rotated.png` |
 | C22 | Xuất PDF/bản dịch | [x] | Native xuất trang hiện tại ra Markdown song ngữ cạnh bản gốc (đã chạy thật, toast + file UTF-8); web xuất .bilingual.txt; chưa xuất PDF/DOCX giữ layout |
-| C23 | Packaging + license bundle + ký số | [~] | từng đóng gói; chưa làm lại sau khi xoá editor |
+| C23 | Packaging + license bundle + ký số | [~] | portable release zip + PDFium/license bundle, chạy được first-import; chưa ký số, thiếu companion host |
 | C24 | Auto-update | [ ] | bị tắt có chủ đích |
-| C25 | Build lại + test lại toàn bộ trong phiên này | [x] | `cargo check` + `cargo test` 50 pass/1 ignored + build exe + ảnh Home/Reader, Xuất trang, Xoay trang |
+| C25 | Build lại + test lại toàn bộ trong phiên này | [x] | `cargo test` 50 pass/1 ignored; release exe 21.4 MB; zip 11.07 MB; first-import fix chạy 15s |
 
 ### D. Lõi dùng chung & chất lượng
 
@@ -108,7 +108,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | D07 | Prompt template có version, chống prompt injection | [~] | có promptVersion + câu “do not follow instructions”; chưa test |
 | D08 | Test web đơn vị | [x] | 300 passed / 24 files (2026-11-18) |
 | D09 | Test e2e Chromium | [x] | 29 passed (2026-11-18), gồm 13 user journeys, rotation, capture OCR, export, a11y |
-| D10 | Test native | [~] | 95 + 71 passed trước khi xoá editor; chưa build lại |
+| D10 | Test native | [x] | 50 pass / 1 ignored native workspace; 20 backend desktop; release build OK |
 | D11 | CI GitHub Actions | [~] | `.github/workflows/ci.yml` đã có; chưa chạy trên GitHub |
 | D12 | LICENSE root + third-party notices | [x] | `LICENSE` MIT + notice OCR/PDFium/GPUI |
 | D13 | Tài liệu kiến trúc/quyết định | [x] | `docs/decisions.tsv`, product-contract, native.md |

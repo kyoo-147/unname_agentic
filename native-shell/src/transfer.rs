@@ -108,6 +108,7 @@ impl Workspace {
             let results = task.await;
             let _ = this.update_in(cx, |w, window, cx| {
                 w.pdf_importing = false;
+                w.store.reload();
                 w.entries = w.store.list();
                 w.sort();
                 let mut last = None;

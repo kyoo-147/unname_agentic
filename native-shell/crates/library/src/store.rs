@@ -186,6 +186,13 @@ impl Store {
         write_json(&self.doc_path(id), &json!({ "title": title, "icon": icon }))
     }
 
+    /// Re-read the on-disk index after another Store handle wrote to it.
+    pub fn reload(&mut self) {
+        self.meta.clear();
+        self.warnings.clear();
+        self.load_index();
+    }
+
     /// Every record, in the order the Home view sorts them.
     pub fn list(&mut self) -> Vec<Entry> {
         let ids: Vec<String> = self.meta.keys().cloned().collect();

@@ -165,6 +165,7 @@ impl crate::app::Workspace {
         if !self.companion.accept(&update) { return; }
         if update.event.kind == "session_ended" {
             if !self.entries.iter().any(|entry| entry.id == update.document_id) {
+                self.store.reload();
                 self.entries = self.store.list(); self.sort(); self.load_home();
                 cx.notify();
             }
@@ -177,6 +178,7 @@ impl crate::app::Workspace {
         }
         let new_session = self.companion.active.as_ref().is_none_or(|(directory, binding)| directory != &update.directory || binding != &update.event.binding);
         if new_session {
+            self.store.reload();
             self.entries = self.store.list(); self.sort(); self.load_home();
             if !self.companion.can_select(&update.event.binding) { cx.notify(); return; }
             if !self.entries.iter().any(|entry| entry.id == update.document_id) { return; }

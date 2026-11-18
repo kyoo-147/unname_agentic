@@ -11,6 +11,7 @@ impl gpui::Global for SharedStore {}
 impl SharedStore {
     pub fn open() -> Result<Self> { Ok(Self(Rc::new(RefCell::new(Store::open()?)))) }
     pub fn take_warnings(&self) -> Vec<String> { self.0.borrow_mut().take_warnings() }
+    pub fn reload(&mut self) { self.0.borrow_mut().reload() }
     pub fn list(&mut self) -> Vec<Entry> { self.0.borrow_mut().list() }
     pub fn pdf_path(&self, id: &str) -> Result<std::path::PathBuf> { self.0.borrow().pdf_path(id) }
     pub fn delete(&mut self, id: &str, root: Option<&str>) -> Result<()> { self.0.borrow_mut().delete(id, root) }
