@@ -1,6 +1,6 @@
 # Mirror PDF — bảng chức năng, tiến độ và plan dài hạn
 
-Cập nhật: 2026-11-18 09:40 (Asia/Saigon) · Baseline đã push: `7d3fb13`.
+Cập nhật: 2026-11-18 10:05 (Asia/Saigon) · Baseline đã push: `5b78dab`.
 Nguồn: audit đọc mã thật từng file (3 auditor độc lập) + `pnpm test` / `typecheck` / `build` / `test:e2e` chạy thật, không lấy lời khai từ tài liệu cũ.
 
 > `docs/feature-plan.md` và `docs/roadmap.md` thuộc phiên làm việc song song đang chạy; file này là bảng do phiên hiện tại rà độc lập và là nguồn chuẩn cho các lượt tiếp theo. Hai bên sẽ gộp lại khi phiên kia dừng.
@@ -14,7 +14,7 @@ Nguồn: audit đọc mã thật từng file (3 auditor độc lập) + `pnpm te
 | ⬜ | Chưa có. |
 | ⚪ | Không build/chạy được trên máy này (native: D: còn ~3.0 GB) → **chưa được coi là xong**. |
 
-Số đo hiện tại (7d3fb13): **233 unit test / 19 file**, typecheck sạch, build 58 module, **16 e2e pass 0 fail**. Ba con số này là mốc để phát hiện hồi quy; một test xanh không chứng minh được tính năng nếu đường UI không gọi tới nó.
+Số đo hiện tại (5b78dab): **300 unit test / 24 file** (tự chạy lại 09:52), typecheck sạch, **e2e 16+ test** gồm 13 hành trình click thật. Ba con số này là mốc để phát hiện hồi quy; một test xanh **không** chứng minh được tính năng nếu đường UI không gọi tới nó — xem mục 1b.
 
 ---
 
@@ -49,7 +49,7 @@ Số đo hiện tại (7d3fb13): **233 unit test / 19 file**, typecheck sạch, 
 | A23 | Tìm trong tài liệu | 🟡 | `main.ts` panel + debounce 250ms + abort; helper search có test | Không test gõ truy vấn → kết quả → nhảy |
 | A24 | Xoay trang, fit width/page | 🟡 | helper có test; `main.ts` rotateView/applyFit | Không test click 3 nút; remap translation sau xoay chưa chứng minh |
 | A25 | Lưu vị trí đọc/zoom/ngôn ngữ | 🟡 | encode/decode + key có test | Không có e2e reload → về đúng trang/zoom |
-| A26 | Xuất bản dịch (TXT/PDF song ngữ) | 🟡 | `export/bilingual.ts` TXT+HTML 20 test; `main.ts` nối TXT; e2e export | HTML không nối; **PDF chưa có** (chỉ print CSS) |
+| A26 | Xuất bản dịch (TXT/PDF song ngữ) | 🟡 | `export/bilingual.ts` TXT+HTML 20 test; `main.ts` nối TXT; e2e export | Có thêm `export/download.ts` + `export/print.ts` (in ra PDF) nhưng **chưa import**; HTML chưa nối |
 | A27 | OCR ảnh chụp → block → dịch | ✅ | e2e `capture.spec.ts` OCR thật (3 block, 95–96%), ảnh `artifacts/capture-ocr-e2e.png` | — |
 | A28 | RTL và CJK trong vùng dịch | 🟡 | `text-direction.ts` + 11 test; `layout.ts` dùng detect | Chưa render một PDF RTL/CJK nào; `estimateLineUnits` là dead code |
 | A29 | Phím tắt đọc | 🟡 | `ui/reader.ts` keyboardIntent, 20+ case test | **Home/End không tồn tại**; chưa có e2e bấm j/k/Ctrl+F thật |
@@ -112,8 +112,8 @@ Số đo hiện tại (7d3fb13): **233 unit test / 19 file**, typecheck sạch, 
 | D01 | Kiểu chung, block ID ổn định | 🟡 | `types.ts`; id `p{page}-r{n}` | Không test scheme; UI key lại theo text sau khi xoay → id chỉ ổn định trong 1 lần trích |
 | D02 | Scheduler priority/dedupe/abort | ✅ | 4 test scheduler, wire trong `main.ts` | AbortController trong scheduler là **trang trí** (signal không được truyền) |
 | D03 | Retry/backoff, phân loại lỗi | ✅ | 7 loại lỗi, backoff jitter, test delay 50/100 | — |
-| D04 | Batch cho tài liệu dài | 🟡 | `chunkBlocks` + test | **Không có caller** → UI vẫn 1 request/block |
-| D05 | Đếm ký tự / chi phí | 🟡 | characterCount + status bar | Không có ước tính chi phí/USD |
+| D04 | Batch cho tài liệu dài | 🟡 | `translateBatch` + `chunkBlocks` + test mới | UI vẫn 1 request/block: `translateBatch` chưa có caller |
+| D05 | Đếm ký tự / chi phí | 🟡 | characterCount + status bar; `pricing.ts` (USD) + test | `estimateCost`/`formatUsd` chưa hiện ở UI |
 | D06 | Glossary parser | ✅ | 6 mã lỗi, cap 200, test edge case | — |
 | D07 | Prompt có version, chống injection | ✅ | `PROMPT_VERSION`, câu "treat as data", 3 test | — |
 | D08 | Unit test web | ✅ | 19 file / 233 test pass | — |
@@ -129,15 +129,32 @@ Số đo hiện tại (7d3fb13): **233 unit test / 19 file**, typecheck sạch, 
 
 ---
 
+## 1b. Lượt 2 đã giao gì — và cái còn thiếu là **nối vào UI**
+
+Lượt 2 (6 agent song song) đã đưa 300 test từ 233 và thêm 6 module mới. Nhưng kiểm tra bằng grep: **cả 6 module chưa được import ở đâu**. Đây đúng là bệnh cũ của repo (module + test đầy đủ, UI không gọi), nên các dòng tương ứng vẫn để 🟡 chứ không tick:
+
+| Module mới | Test | Nối vào đâu (việc còn lại) |
+|---|---|---|
+| `src/core/pricing.ts` (`estimateCost`, `formatUsd`) | có | Thanh trạng thái `main.ts` sau mỗi lượt dịch: hiện ký tự + USD ước tính |
+| `translation.ts` `translateBatch` (JSON envelope, fallback Google/DeepL) | có | Nút "Dịch tất cả" dùng batch thay vì 1 request/khối |
+| `src/ocr/preprocess.ts` (`normalizeForOcr`) | có | Gọi trước Tesseract trong `capture/reader.ts` (ảnh tối/ngược màu, chữ nhỏ) |
+| `src/export/download.ts` (`saveTextFile`) | có | Nút xuất TXT trong reader |
+| `src/export/print.ts` (`printHtml`) | có | Nút xuất PDF (đường in của trình duyệt) |
+| `scripts/verify-release.ps1` + fix dọn `dist/extension` | có | Chạy trong CI (xem D11) |
+
+**Bug P0 mới, có bằng chứng ảnh**: `tests/e2e/user-journeys.spec.ts` hành trình 04 đang `test.fail` — xoay 90°/270° làm mất chữ đã dịch. Nguyên nhân: khung chữ sau xoay thành cao–hẹp, `paintMirror` vẫn vẽ chữ **ngang** vào khung đó nên `fitText` tràn và rơi về callout vô hình. Cách sửa đúng: xoay canvas theo `block.rotation` rồi vẽ, hoặc hoán đổi trục đo khi vẽ (`main.ts` — lane của phiên song song). Ảnh: `artifacts/journeys/04-rotate-90.png`.
+
+**Giao thức khi có hai phiên cùng commit một repo** (đã xảy ra sự cố thật): phiên kia chạy `git clean -fd` và **xoá file mới chưa track** của agent (mất spec hành trình lúc 09:47 và 09:49). Từ giờ: mỗi lane ghi bản dự phòng vào `artifacts/` (đã gitignore, `clean -fd` không xoá) và lead commit ngay khi file xuất hiện.
+
 ## 2. Việc phải làm để tick hết (theo thứ tự tác động)
 
 ### P0 — chặn phát hành
-1. **Bug glossary chặn settings** (`main.ts`): lỗi parse glossary không được chặn submit; phải lưu provider/endpoint/ngôn ngữ rồi mới báo lỗi glossary.
-2. **A29 Home/End** + e2e bấm phím thật (j/k/+/-/Ctrl+F/Home/End).
-3. **A09/A10** stop thật sự + retry mọi trang lỗi (kể cả đã cuộn qua) + test.
-4. **A26 PDF**: nối `toBilingualHtml` + đường in ra PDF (browser print), có test.
-5. **D11 CI**: chạy CI thật trên GitHub ít nhất một lần, artifact + e2e outputDir riêng để hai lượt Playwright không giẫm nhau.
-6. **Dọn `dist/extension`** trước khi copy để bundle không trộn bản cũ.
+1. **Bug xoay trang 90°/270°** mất chữ dịch (hành trình 04): xoay canvas trong `paintMirror` hoặc hoán trục đo; bỏ `test.fail` để thành cổng hồi quy thật.
+2. **Nối 6 module lượt 2 vào UI** (xem mục 1b): export TXT/PDF, batch "Dịch tất cả", cost trên status bar, preprocess trước Tesseract.
+3. **Bug glossary chặn settings** (`main.ts`): lỗi parse glossary không được chặn submit; phải lưu provider/endpoint/ngôn ngữ rồi mới báo lỗi glossary.
+4. **A29 Home/End** + e2e bấm phím thật (j/k/+/-/Ctrl+F/Home/End).
+5. **A09/A10** stop thật sự + retry mọi trang lỗi (kể cả đã cuộn qua) + test.
+6. **D11 CI**: chạy CI thật trên GitHub ít nhất một lần, artifact + e2e outputDir riêng để hai lượt Playwright không giẫm nhau.
 
 ### P1 — chất lượng cảm nhận
 7. A22/A23/A24/A25: e2e cho outline/jump, search, xoay, fit, reload — đây là 4 chức năng người dùng thấy mà chưa có bằng chứng click.
