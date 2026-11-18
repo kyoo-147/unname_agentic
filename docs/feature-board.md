@@ -26,7 +26,7 @@ Số đo hiện tại (HEAD): **310 unit test / 27 file** + **32 e2e pass / 0 fa
 
 | | Chức năng | | Bằng chứng | Còn thiếu |
 |---|---|---|---|---|
-| A01 | Mở PDF, kéo thả, chọn nhiều tệp | 🟡 | `main.ts` input multiple; e2e `reader.spec.ts` mở fixture | Kéo thả chỉ lấy `files[0]`; không test drop, không test nhiều tệp (mỗi lần load thay tài liệu trước) |
+| A01 | Mở PDF, kéo thả, chọn nhiều tệp | 🟡 | `main.ts`: chọn nhiều tệp **và** kéo thả đều import hết rồi mở tệp đầu; `reader.spec.ts` mở fixture | Chưa có e2e cho kéo thả / nhiều tệp; `load()` vẫn thay tài liệu đang mở (giữ tệp đầu) |
 | A02 | Render PDF.js giữ tỉ lệ trang | ✅ | `pdf/document.ts` renderPage; e2e so width gốc = width dịch | — |
 | A03 | Trích block chữ + toạ độ | ✅ | `pdf/layout.ts` groupTextItems; `pdf-layout.test.ts` assert rect chính xác | — |
 | A04 | Xoá glyph gốc dưới chữ đã dịch | ✅ | `document.ts` suppressTextContext; e2e pixel: ink gốc > 100, ink dịch = 0 | — |
@@ -34,8 +34,8 @@ Số đo hiện tại (HEAD): **310 unit test / 27 file** + **32 e2e pass / 0 fa
 | A06 | Hai pane + kéo chia + reset 50/50 | ✅ | `main.ts` splitter aria-valuenow; e2e ArrowRight → 52 | — |
 | A07 | Đồng bộ trang/zoom với tab nguồn | 🟡 | `ui/bridge.ts`, `extension/background.ts`; test validator + router | Chưa có test chứng minh reader thật sự nhảy theo message |
 | A08 | Dịch ưu tiên vùng nhìn thấy | ✅ | `scheduler.test.ts` selection < visible < prefetch | — |
-| A09 | Dịch toàn bộ, có thể dừng | 🟡 | `main.ts` nút Translate all → vòng numPages | Không có test; "stop" chỉ reset queue, không chứng minh huỷ request đang bay |
-| A10 | Pause / resume / retry lỗi | 🟡 | `main.ts` pause/resume/retry; e2e chỉ chứng minh nhánh lỗi | Không test pause/resume; retry chỉ xếp lại trang đang thấy (trang đã cuộn qua chết luôn) |
+| A09 | Dịch toàn bộ, có thể dừng | ✅ | batch từng trang + `AbortController` riêng; e2e `translate-batch.spec.ts` bấm Stop giữa tài liệu: tối đa 2 trang được dịch, nhãn về "Dịch toàn bộ", không lỗi | — |
+| A10 | Pause / resume / retry lỗi | ✅ | journey 02 (pause/resume) + journey 03 (lỗi → Retry → hồi phục); retry giờ quét **mọi trang đã render** và vẽ lại, không chỉ trang đang thấy | Đường retry cho trang đã cuộn qua mới sửa, chưa có e2e riêng |
 | A11 | Chọn vùng, đọc song song theo vùng | ✅ | e2e click `.source-region` → dialog; `a11y.spec.ts` focus trap | — |
 | A12 | Fit chữ vào khung, không cắt âm thầm | ✅ | `pdf-layout.test.ts` (300 ký tự, CJK), fallback callout | — |
 | A13 | Cache + dedupe request | ✅ | `translation.test.ts` cache hit, 4 request đồng thời → 1 call | — |
@@ -114,7 +114,7 @@ Số đo hiện tại (HEAD): **310 unit test / 27 file** + **32 e2e pass / 0 fa
 | D01 | Kiểu chung, block ID ổn định | 🟡 | `types.ts`; id `p{page}-r{n}` | Không test scheme; UI key lại theo text sau khi xoay → id chỉ ổn định trong 1 lần trích |
 | D02 | Scheduler priority/dedupe/abort | ✅ | 4 test scheduler, wire trong `main.ts` | AbortController trong scheduler là **trang trí** (signal không được truyền) |
 | D03 | Retry/backoff, phân loại lỗi | ✅ | 7 loại lỗi, backoff jitter, test delay 50/100 | — |
-| D04 | Batch cho tài liệu dài | 🟡 | `translateBatch` + `chunkBlocks` + test mới | UI vẫn 1 request/block: `translateBatch` chưa có caller |
+| D04 | Batch cho tài liệu dài | ✅ | `TranslationService.translateBatch` (cache + đếm ký tự) + nối vào "Dịch toàn bộ"; e2e `translate-batch.spec.ts` đo **số request thật** < số block | Google/DeepL vẫn 1 request/khối (API single-text) — đã ghi rõ |
 | D05 | Đếm ký tự / chi phí | ✅ | `pricing.ts` (USD, 4 model) + 17 test; status bar hiện `... · ước tính $0.0004` | Bảng giá là ảnh chụp tại một thời điểm; model lạ hiện "chưa có bảng giá", không bịa số |
 | D06 | Glossary parser | ✅ | 6 mã lỗi, cap 200, test edge case | — |
 | D07 | Prompt có version, chống injection | ✅ | `PROMPT_VERSION`, câu "treat as data", 3 test | — |
