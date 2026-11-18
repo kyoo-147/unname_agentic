@@ -49,7 +49,7 @@ Số đo hiện tại (5b78dab): **300 unit test / 24 file** (tự chạy lại 
 | A23 | Tìm trong tài liệu | 🟡 | `main.ts` panel + debounce 250ms + abort; helper search có test | Không test gõ truy vấn → kết quả → nhảy |
 | A24 | Xoay trang, fit width/page | 🟡 | helper có test; `main.ts` rotateView/applyFit | Không test click 3 nút; remap translation sau xoay chưa chứng minh |
 | A25 | Lưu vị trí đọc/zoom/ngôn ngữ | 🟡 | encode/decode + key có test | Không có e2e reload → về đúng trang/zoom |
-| A26 | Xuất bản dịch (TXT/PDF song ngữ) | 🟡 | `export/bilingual.ts` TXT+HTML 20 test; `main.ts` nối TXT; e2e export | Có thêm `export/download.ts` + `export/print.ts` (in ra PDF) nhưng **chưa import**; HTML chưa nối |
+| A26 | Xuất bản dịch (TXT/PDF song ngữ) | ✅ | `export/bilingual.ts` 20 test; `main.ts` nối TXT + nút **Print / Save as PDF** (`printHtml` + Ctrl/Cmd+P); e2e `export-library.spec.ts` + `export-print.spec.ts` 2 test | Không có PDF writer nhị phân: PDF đi qua bộ in của trình duyệt nên mất bố cục gốc/ảnh — đã ghi rõ trong module |
 | A27 | OCR ảnh chụp → block → dịch | ✅ | e2e `capture.spec.ts` OCR thật (3 block, 95–96%), ảnh `artifacts/capture-ocr-e2e.png` | — |
 | A28 | RTL và CJK trong vùng dịch | 🟡 | `text-direction.ts` + 11 test; `layout.ts` dùng detect | Chưa render một PDF RTL/CJK nào; `estimateLineUnits` là dead code |
 | A29 | Phím tắt đọc | 🟡 | `ui/reader.ts` keyboardIntent, 20+ case test | **Home/End không tồn tại**; chưa có e2e bấm j/k/Ctrl+F thật |
@@ -62,7 +62,7 @@ Số đo hiện tại (5b78dab): **300 unit test / 24 file** (tự chạy lại 
 | B01 | Tự phát hiện PDF (URL, MIME, embed/object/iframe) | 🟡 | background webRequest + tabs.onUpdated có test; e2e MIME | Nhánh DOM `content.ts` **0 test**, e2e không bao giờ chạy tới |
 | B02 | Một mirror cho mỗi nguồn | ✅ | `extension.test.ts` open 1 lần, reopen khi tab mất, session sau restart | — |
 | B03 | Fetch bytes có kiểm `%PDF-` + quyền host | ✅ | authorize theo tab, cap 100 MiB, test login page bị từ chối | — |
-| B04 | Popup bật/tắt + trạng thái | 🟡 | `popup.ts` lưu `mirror:enabled`, trạng thái desktop | Không test DOM, không ảnh chụp, **không có ngôn ngữ đích** |
+| B04 | Popup bật/tắt + trạng thái | 🟡 | `popup.ts` lưu `mirror:enabled`; **đã có select ngôn ngữ đích** (`extension/target-language.ts`, lưu `mirror:targetLanguage`) + test DOM; reader đọc lại và áp nếu hợp lệ (`main.ts`) | Chưa có e2e trong Chrome thật chứng minh reader nhận ngôn ngữ từ popup; chưa có ảnh chụp popup |
 | B05 | Badge số mirror | ✅ | test badge 2 → 1 → '' và xoá khi đóng tab nguồn | — |
 | B06 | Capture tab → mirror ảnh | 🟡 | reader + e2e web capture chạy thật | Chưa chạy chuỗi thật trong Chrome extension (captureVisibleTab → ?capture=1 → OCR) |
 | B07 | Gửi PDF sang desktop | 🟡 | `native-bridge.ts` chunk 192 KiB + SHA-256, test byte-exact | Host binary không còn build được; đường Chrome thật chưa từng chạy |
@@ -113,7 +113,7 @@ Số đo hiện tại (5b78dab): **300 unit test / 24 file** (tự chạy lại 
 | D02 | Scheduler priority/dedupe/abort | ✅ | 4 test scheduler, wire trong `main.ts` | AbortController trong scheduler là **trang trí** (signal không được truyền) |
 | D03 | Retry/backoff, phân loại lỗi | ✅ | 7 loại lỗi, backoff jitter, test delay 50/100 | — |
 | D04 | Batch cho tài liệu dài | 🟡 | `translateBatch` + `chunkBlocks` + test mới | UI vẫn 1 request/block: `translateBatch` chưa có caller |
-| D05 | Đếm ký tự / chi phí | 🟡 | characterCount + status bar; `pricing.ts` (USD) + test | `estimateCost`/`formatUsd` chưa hiện ở UI |
+| D05 | Đếm ký tự / chi phí | ✅ | `pricing.ts` (USD, 4 model) + 17 test; status bar hiện `... · ước tính $0.0004` | Bảng giá là ảnh chụp tại một thời điểm; model lạ hiện "chưa có bảng giá", không bịa số |
 | D06 | Glossary parser | ✅ | 6 mã lỗi, cap 200, test edge case | — |
 | D07 | Prompt có version, chống injection | ✅ | `PROMPT_VERSION`, câu "treat as data", 3 test | — |
 | D08 | Unit test web | ✅ | 19 file / 233 test pass | — |
@@ -143,6 +143,20 @@ Lượt 2 (6 agent song song) đã đưa 300 test từ 233 và thêm 6 module m�
 | `scripts/verify-release.ps1` + fix dọn `dist/extension` | có | Chạy trong CI (xem D11) |
 
 **Bug P0 mới, có bằng chứng ảnh**: `tests/e2e/user-journeys.spec.ts` hành trình 04 đang `test.fail` — xoay 90°/270° làm mất chữ đã dịch. Nguyên nhân: khung chữ sau xoay thành cao–hẹp, `paintMirror` vẫn vẽ chữ **ngang** vào khung đó nên `fitText` tràn và rơi về callout vô hình. Cách sửa đúng: xoay canvas theo `block.rotation` rồi vẽ, hoặc hoán đổi trục đo khi vẽ (`main.ts` — lane của phiên song song). Ảnh: `artifacts/journeys/04-rotate-90.png`.
+
+### Danh sách nối UI chính xác (một commit, không chia nhỏ)
+
+| Việc | Điểm sửa | Cần thêm |
+|---|---|---|
+| Xuất PDF (in) | `main.ts` cạnh handler `#export-bilingual` (dòng ~435): `printHtml(toBilingualHtml(pages,{title:documentTitle(activeTitle),lang:settings.targetLanguage,pageLabel}))`, `document.title=documentTitle(activeTitle)` trước khi in | key `exportPrint`, `exportPrintOpened`, `exportPrintUnavailable`, `exportPrintBlocked`, `exportPrintTimeout` |
+| Xuất TXT sạch | thay khối blob+anchor thủ công bằng `saveTextFile(\`${...}.bilingual\`, text, TEXT_MIME)` | key `exportPageLabel` |
+| Chi phí | sau mỗi lượt dịch, cạnh `statusTranslated`: `estimateCost({characters,model:settings.model})` → `formatUsd` | key `costEstimate`, `costUnknownModel`, `costEstimateNote` |
+| Batch | nút `#full` dùng `translateBatch(pageBlocks, settings, signal)` thay vì `scheduleBlock` từng khối; giữ nguyên đường per-block cho vùng nhìn thấy | không cần |
+| Ngôn ngữ đích từ popup | sau `syncToolbarTarget()`: đọc `chrome.storage.local['mirror:targetLanguage']`, chỉ áp khi thuộc `SUPPORTED_TARGETS` | không cần |
+| Lỗi thư viện | `hydrateLibrary()` thay `catch{}` bằng map `LibraryStoreError` → key | key `libraryUnavailable`, `libraryQuotaFull`, `librarySaveFailed` |
+| OCR đã chuẩn hoá | `capture/reader.ts` (đang làm ở lane riêng) → báo cho người dùng khi ảnh bị đảo màu/phóng to | key `captureNormalized`, `captureTinyText` |
+
+Luật: mỗi key phải có đủ `vi`/`en`/`zh`, không hardcode tiếng Anh; test `tests/i18n.test.ts` sẽ bắt key thiếu.
 
 **Giao thức khi có hai phiên cùng commit một repo** (đã xảy ra sự cố thật): phiên kia chạy `git clean -fd` và **xoá file mới chưa track** của agent (mất spec hành trình lúc 09:47 và 09:49). Từ giờ: mỗi lane ghi bản dự phòng vào `artifacts/` (đã gitignore, `clean -fd` không xoá) và lead commit ngay khi file xuất hiện.
 
