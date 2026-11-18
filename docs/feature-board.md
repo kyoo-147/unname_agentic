@@ -44,7 +44,7 @@ Số đo hiện tại (HEAD): **318 unit test / 28 file** + **42 e2e pass / 0 fa
 | A16 | Trạng thái lỗi/đang tải/mất nguồn | ✅ | e2e `#status.is-error`, canvas gốc vẫn hiện | — |
 | A17 | Thư viện tài liệu (giữ qua reload) | ✅ | `core/library-store.ts` IndexedDB + `main.ts` wire + e2e `export-library.spec.ts` reload | — |
 | A18 | Giao diện Việt/Anh/Trung | ✅ | `i18n.test.ts` parity 3 ngữ + mọi key `t()`/`data-i18n` resolve; e2e mặc định tiếng Việt | — |
-| A19 | Glossary + áp dụng provider | 🟡 | parseGlossary (6 mã lỗi), prompt có glossary; test prompt; **đã sửa bug**: dòng glossary lỗi không còn nuốt provider/endpoint/ngôn ngữ (giữ glossary cũ + báo lỗi rõ) | Google/DeepL vẫn không nhận glossary (UI nói rõ); chưa có test UI cho đếm lỗi glossary |
+| A19 | Glossary + áp dụng provider | ✅ | journey 11: nhập `AI = trí tuệ nhân tạo` → request provider **có** thuật ngữ, không lỗi; `translation.test.ts` chứng minh Google/DeepL **không** nhận glossary; **bug đã sửa**: dòng glossary lỗi không còn nuốt provider/endpoint/ngôn ngữ | Google/DeepL không nhận glossary là giới hạn API, UI nói rõ — không phải lỗi |
 | A20 | Tự nhận diện ngôn ngữ nguồn | 🟡 | `main.ts` showDetectedLanguage; detectLanguage có test | Gợi ý `#detected-language` không được test ở đâu |
 | A21 | Danh sách ngôn ngữ đích có tên bản địa | ✅ | `language.ts` 14 ngôn ngữ; test pin nativeName | — |
 | A22 | Mục lục, thumbnail, nhảy trang | ✅ | e2e `reader-navigation.spec.ts`: outline (PDF chèn bookmark bằng pdf-lib) nhảy trang 3 + `aria-current`, thumbnail canvas 160×207 có pixel, ô số trang + Enter nhảy | — |
@@ -111,7 +111,7 @@ Số đo hiện tại (HEAD): **318 unit test / 28 file** + **42 e2e pass / 0 fa
 
 | | Chức năng | | Bằng chứng | Còn thiếu |
 |---|---|---|---|---|
-| D01 | Kiểu chung, block ID ổn định | 🟡 | `types.ts`; id `p{page}-r{n}` | Không test scheme; UI key lại theo text sau khi xoay → id chỉ ổn định trong 1 lần trích |
+| D01 | Kiểu chung, block ID ổn định | ✅ | `tests/block-ids.test.ts` pin scheme `p{page}-r{n}` (0-based), id tất định khi trích lại, không trùng giữa các trang, và id OCR `ocr-p{page}-{n}` không đụng id PDF | Sau khi xoay, `rotateView` nối bản dịch **theo text** (id đổi vì thứ tự khối đổi); hai khối cùng text sẽ dùng chung một bản dịch — chấp nhận được, đã ghi rõ trong code |
 | D02 | Scheduler priority/dedupe/abort | ✅ | 4 test scheduler, wire trong `main.ts` | AbortController trong scheduler là **trang trí** (signal không được truyền) |
 | D03 | Retry/backoff, phân loại lỗi | ✅ | 7 loại lỗi, backoff jitter, test delay 50/100 | — |
 | D04 | Batch cho tài liệu dài | ✅ | `TranslationService.translateBatch` (cache + đếm ký tự) + nối vào "Dịch toàn bộ"; e2e `translate-batch.spec.ts` đo **số request thật** < số block | Google/DeepL vẫn 1 request/khối (API single-text) — đã ghi rõ |
