@@ -119,7 +119,7 @@ Số đo hiện tại (5b78dab): **300 unit test / 24 file** (tự chạy lại 
 | D08 | Unit test web | ✅ | 19 file / 233 test pass | — |
 | D09 | e2e Chromium | ✅ | 16 pass / 0 fail (7d3fb13) | — |
 | D10 | Test native | ⚪ | 67 `#[test]` | Không chạy được |
-| D11 | CI GitHub Actions | 🟡 | `ci.yml` web job thật + `verify-web.ps1` | **Chưa từng chạy trên GitHub**; native job `if: false` |
+| D11 | CI GitHub Actions | 🟡 | `ci.yml` web job thật; `verify-release.ps1` 6/6 check chạy local pass | **Chặn bởi tài khoản**: mọi run (kể cả workflow tối giản) trả `startup_failure` 0s; GitHub ghi rõ "The job was not started because your account is locked due to a billing issue". Sửa ở Billing, không sửa được bằng code |
 | D12 | LICENSE + third-party notice | ✅ | MIT + OCR/PDFium/GPUI notice | — |
 | D13 | Tài liệu kiến trúc/quyết định | ✅ | `decisions.tsv` 26 dòng có ngày | — |
 | D14 | Feature flag / telemetry / crash report | ⬜ | — | Cố ý không có (privacy-first) |
@@ -154,7 +154,7 @@ Lượt 2 (6 agent song song) đã đưa 300 test từ 233 và thêm 6 module m�
 3. **Bug glossary chặn settings** (`main.ts`): lỗi parse glossary không được chặn submit; phải lưu provider/endpoint/ngôn ngữ rồi mới báo lỗi glossary.
 4. **A29 Home/End** + e2e bấm phím thật (j/k/+/-/Ctrl+F/Home/End).
 5. **A09/A10** stop thật sự + retry mọi trang lỗi (kể cả đã cuộn qua) + test.
-6. **D11 CI**: chạy CI thật trên GitHub ít nhất một lần, artifact + e2e outputDir riêng để hai lượt Playwright không giẫm nhau.
+6. **D11 CI**: code đã đúng (workflow + `verify-release.ps1` pass local), nhưng tài khoản GitHub đang bị **khoá vì billing** nên **không job nào start được** — kể cả một workflow tối giản 6 dòng. Việc cần làm nằm ở GitHub Billing (hoặc chuyển repo sang public), không phải sửa mã.
 
 ### P1 — chất lượng cảm nhận
 7. A22/A23/A24/A25: e2e cho outline/jump, search, xoay, fit, reload — đây là 4 chức năng người dùng thấy mà chưa có bằng chứng click.
