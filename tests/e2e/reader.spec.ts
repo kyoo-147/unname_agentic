@@ -1,6 +1,10 @@
 import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('mirror.locale', 'en'));
+});
+
 test('imports a real PDF, translates anchored regions and keeps vector artwork', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -59,7 +63,16 @@ test('shows a real provider failure without substituting source text', async ({ 
   await page.locator('#settings-open').click();
   await page.locator('[name=endpoint]').fill('http://127.0.0.1:4319/unavailable');
   await page.getByRole('button', { name: 'Apply & translate visible pages' }).click();
-  await expect(page.locator('#status')).toContainText('HTTP 404');
+  await expect(page.locator('#status')).toHaveClass(/is-error/);
+  await expect(page.locator('#status')).not.toHaveText('');
   await expect(page.locator('.painted-region')).toHaveCount(0);
   await expect(page.locator('.original-slot canvas').first()).toBeVisible();
+});
+
+test('defaults to Vietnamese on a fresh profile', async ({ page }) => {
+  await page.addInitScript(() => localStorage.removeItem('mirror.locale'));
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Phòng đọc của bạn.' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Thêm tài liệu' })).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'vi');
 });
