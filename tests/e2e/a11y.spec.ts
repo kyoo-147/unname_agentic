@@ -49,7 +49,10 @@ test('document language follows the chosen locale and the skip link moves focus'
   expect(ring.style).toBe('solid');
   expect(ring.width).toBeGreaterThanOrEqual(2);
   await page.keyboard.press('Enter');
-  await expect(page.locator('#app')).toBeFocused();
+  // The skip link must land on the reading area, not on the app root that starts
+  // with the sidebar (WCAG 2.4.1 bypass blocks).
+  await expect(page.locator('#main-content')).toBeFocused();
+  await expect(page.locator('#main-content .topbar')).toBeVisible();
   await page.locator('.topbar [data-locale="zh"]').click();
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh');
   await expect(skip).toHaveText('跳至主要内容');
