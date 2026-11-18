@@ -85,8 +85,8 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | C14 | Giao diện Việt/Anh/Trung đầy đủ | [x] | 124 chuỗi `tr`, reader, shortcuts, thời gian, dialog phá huỷ, diagnostics đều 3 ngôn ngữ; brand/OS/provider error giữ nguyên |
 | C15 | Sáu bảng màu + Light/Dark/System | [x] | `themes.rs`; ảnh chụp |
 | C16 | Phím tắt + màn hình Shortcuts | [x] | `shortcuts.rs`; settings |
-| C17 | Chat hỏi tài liệu | [~] | chat + context + history + SSE + gợi ý + model label + reset; chưa tools; attach/skills/mic vẫn toast |
-| C18 | Chọn model/agent cho chat | [ ] | nhãn “Model · Auto” tĩnh |
+| C17 | Chat hỏi tài liệu | [~] | chat + context + history + SSE + gợi ý + model/reset + panel endpoint/model; chưa tools; attach/skills/mic vẫn toast |
+| C18 | Chọn model/agent cho chat | [~] | sửa endpoint/model trong chat có validate + lưu; chưa có danh mục model/agent |
 | C19 | Voice input / voice mode | [ ] | nút có, chưa nối |
 | C20 | OCR Tesseract dự phòng ngoài Windows OCR | [~] | Windows OCR đã verify trên PDF scan; chưa thêm Tesseract fallback native |
 | C21 | Xoay trang trong reader | [x] | Nút `Xoay trang` xoay ảnh + block theo 90°; unit test 2 case; ảnh `desktop-reader-vi-rotated.png` |

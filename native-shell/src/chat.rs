@@ -36,6 +36,10 @@ pub struct Chat {
     error: Option<String>,
     context: Option<(String, String)>,
     model: String,
+    endpoint_input: Entity<TextField>,
+    model_input: Entity<TextField>,
+    show_config: bool,
+    config_status: Option<String>,
     _submit: Subscription,
 }
 
@@ -49,12 +53,31 @@ impl Chat {
         let submit = cx.subscribe(&input, |this, _, event: &TextFieldEvent, cx| {
             if matches!(event, TextFieldEvent::Submit) { this.send(cx); }
         });
-        let model = model::load_settings().provider.model;
-        Self { input, messages: load_history(), busy: false, error: None, context: None, model, _submit: submit }
+        let settings = model::load_settings();
+        let model = settings.provider.model.clone();
+        let endpoint_input = cx.new(|cx| { let mut field = TextField::new("http://127.0.0.1:11434/v1", cx); field.set_text(&settings.provider.endpoint, cx); field });
+        let model_input = cx.new(|cx| { let mut field = TextField::new("gpt-4.1-mini", cx); field.set_text(&model, cx); field });
+        let show_config = !model::data_directory().join("settings.json").exists();
+        Self { input, messages: load_history(), busy: false, error: None, context: None, model, endpoint_input, model_input, show_config, config_status: None, _submit: submit }
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.input.read(cx).focus_handle(cx));
+    }
+
+    fn save_config(&mut self, cx: &mut Context<Self>) {
+        let endpoint = self.endpoint_input.read(cx).text.trim().to_string();
+        let model_name = self.model_input.read(cx).text.trim().to_string();
+        if endpoint.is_empty() || model_name.is_empty() { self.config_status = Some(tr3("Endpoint và model không được để trống.", "Endpoint and model are required.", "Endpoint và model không được để trống.").to_string()); cx.notify(); return; }
+        let mut settings = model::load_settings();
+        let previous = settings.provider.endpoint.clone();
+        settings.provider.endpoint = endpoint.clone();
+        settings.provider.model = model_name.clone();
+        match provider::validate_endpoint(&settings.provider).and_then(|_| model::save_settings(&settings)) {
+            Ok(()) => { self.model = model_name; self.config_status = Some(tr3("Đã lưu cấu hình nhà cung cấp.", "Provider settings saved.", "Đã lưu cấu hình nhà cung cấp.").to_string()); }
+            Err(error) => { settings.provider.endpoint = previous; self.config_status = Some(format!("{error:#}")); }
+        }
+        cx.notify();
     }
 
     fn persist(&self) {
@@ -205,7 +228,8 @@ impl Render for Chat {
                     "Trợ lý dùng nhà cung cấp đã cấu hình trong trình đọc. Chưa cấu hình thì sẽ báo lỗi rõ ràng.",
                 ))))
                 .child(div().mt(px(8.)).flex().items_center().justify_between()
-                    .child(div().text_size(px(11.)).text_color(Theme::text_disabled()).child(format!("{} · {}", tr3("Mô hình", "Model", "Mô hình"), self.model)))
+                    .child(div().id("chat-model").px(px(4.)).h(px(22.)).rounded(px(6.)).flex().items_center().cursor_pointer().text_size(px(11.)).text_color(Theme::text_disabled()).hover(|s| s.bg(Theme::fill_hover())).child(format!("{} · {}", tr3("Mô hình", "Model", "Mô hình"), self.model))
+                        .on_click(cx.listener(|chat, _, _, cx| { chat.show_config = !chat.show_config; cx.notify(); })))
                     .child(div().id("chat-new").px(px(8.)).h(px(22.)).rounded(px(6.)).flex().items_center().cursor_pointer().text_size(px(11.)).text_color(Theme::text_caption()).hover(|s| s.bg(Theme::fill_hover())).child(tr3("Cuộc trò chuyện mới", "New conversation", "Cuộc trò chuyện mới"))
                         .on_click(cx.listener(|chat, _, _, cx| chat.reset(cx)))))
                 .when_some(self.context.as_ref().map(|(title, _)| title.clone()), |element, title| element.child(
@@ -213,6 +237,10 @@ impl Render for Chat {
                         .child(format!("{} {title}", tr3("Đang hỏi về:", "Asking about:", "Đang hỏi về:")))
                         .child(div().id("chat-clear-context").size(px(18.)).flex().items_center().justify_center().rounded(px(4.)).cursor_pointer().hover(|s| s.bg(Theme::fill_hover())).child("×")
                             .on_click(cx.listener(|chat, _, _, cx| chat.set_context(None, cx))))))
+            .when(self.show_config, |element| element.child(div().flex_none().px(px(24.)).py(px(10.)).border_b_1().border_color(Theme::line_border()).flex().flex_col().gap(px(6.))
+                .child(div().flex().items_center().gap(px(8.)).child(div().w(px(70.)).text_size(px(12.)).text_color(Theme::text_caption()).child("Endpoint")).child(div().flex_1().min_w_0().child(self.endpoint_input.clone())))
+                .child(div().flex().items_center().gap(px(8.)).child(div().w(px(70.)).text_size(px(12.)).text_color(Theme::text_caption()).child(tr3("Mô hình", "Model", "Mô hình"))).child(div().flex_1().min_w_0().child(self.model_input.clone())))
+                .child(div().flex().items_center().gap(px(8.)).child(ui::primary_button("chat-save-config", tr3("Lưu", "Save", "Lưu")).on_click(cx.listener(|chat, _, _, cx| chat.save_config(cx)))).when_some(self.config_status.clone(), |row, status| row.child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(status))))))
             .child(div().id("chat-messages").flex_1().min_h_0().overflow_y_scroll().px(px(24.)).py(px(20.))
                 .flex().flex_col().gap(px(10.))
                 .when(messages.is_empty(), |element| element.child(div().flex().flex_col().gap(px(10.)).child(div().text_color(Theme::text_caption()).text_size(px(13.)).child(tr3(

@@ -18,12 +18,12 @@ cargo build --release --manifest-path native-shell/Cargo.toml -p pdf_workspace -
 
 Result: exit 0, 36 pre-existing warnings, 6m 38s cold build (31.7s after the first-import fix).
 
-- Executable: `pdf_workspace.exe`, 21,814,784 bytes
-- SHA-256: `204774406C3AE487C4FD25E0AA638AB2A291EBD0C0CF900A3E560FB50B4443ED`
+- Executable: `pdf_workspace.exe`, 21,628,416 bytes
+- SHA-256: `F4683905165A628226A2AB7DAF79E146D57127AE8C2A3F9819B1DC0CDFEED40F`
 - Package: `dist/pdf-workspace-windows-x64-release-20261118-110746/`
 - Native-messaging host: `pdf-workspace-host.exe`, 478,208 bytes, SHA-256 `79713585756FC360B2CC9590C3FBE1B5769030DFDBAFBF4E841358BDC95AAF1C`
-- Zip: `dist/pdf-workspace-windows-x64-release-20261118-110746.zip`, 11.36 MB
-- Zip SHA-256: `F157AE2E31258F9E0736177C8EDA95F55EBF86E6051AAD4CAA0C9AFD18EE132D`
+- Zip: `dist/pdf-workspace-windows-x64-release-20261118-110746.zip`, 11.34 MB
+- Zip SHA-256: `1C46A4BA7786E5C7813AFC3031ECF99FC5342A76801E832A8F2BC7ADD4B37AC6`
 
 Package contents: executable, `pdfium.dll`, `pdf-workspace-host.exe`, `install-native-host.ps1`,
 root and upstream licenses, Lucide license, PDFium version and component licenses. The package is
@@ -87,11 +87,14 @@ Answers stream through `provider::chat_stream` (SSE `delta.content` frames) and 
 while the stream is open; the fixture provider was extended to emit SSE and the packaged build rendered
 `Bản dịch kiểm thử: Chào anh, đây là kiểm tra streaming` (`artifacts/desktop-chat-stream3.png`).
 The chat also offers three contextual prompts (`Tóm tắt trang này`, `Liệt kê số liệu`, `Giải thích thuật ngữ`)
-when a page is attached; the header shows the configured model and a `Cuộc trò chuyện mới` reset;
-screenshot `artifacts/desktop-chat-polish.png`. `parse_sse_delta` has a unit test for real deltas, `[DONE]`,
+when a page is attached; the header shows the configured model and a `Cuộc trò chuyện mới` reset.
+On a fresh data directory the chat opens a provider panel for `Endpoint` and `Mô hình` with validation and
+save (`artifacts/desktop-chat-config.png`); no API-key field is shown here because keys stay in the
+Windows Credential Manager and are configured in the reader. Screenshot: `artifacts/desktop-chat-polish.png`. `parse_sse_delta` has a unit test for real deltas, `[DONE]`,
 ping and non-JSON lines.
-Still open: tool calls, selecting another page, and a provider/model picker inside chat. Without a
-configured provider the view shows the provider error inline.
+Still open: tool calls, selecting another page, and an agent/list picker; endpoint and model are now
+editable text fields rather than a catalogue. Without a configured provider the view shows the provider
+error inline.
 
 ## Limits
 
