@@ -50,6 +50,53 @@ test('translate all batches a page into one provider request', async ({ page }) 
   expect(painted).toBeGreaterThan(5);
 });
 
+test('stopping translate-all aborts the batch instead of finishing the document', async ({ page }) => {
+  // Slow each provider round trip down so the stop click lands mid-document; on a
+  // fast loopback provider the whole four-page batch can finish in tens of ms.
+  await page.route('**/v1/chat/completions', async route => {
+    await new Promise(resolve => setTimeout(resolve, 800));
+    await route.continue();
+  });
+  await page.goto('/');
+  await page.locator('#file-input').setInputFiles(resolve('tests/fixtures/mirror-field-notes.pdf'));
+  await expect(page.locator('.page-pair')).toHaveCount(4);
+
+  await page.locator('#settings-open').click();
+  await page.locator('[name=endpoint]').fill(`${PROVIDER}/v1`);
+  await page.locator('[name=model]').fill('deterministic-test-only');
+  await page.getByRole('button', { name: /Áp dụng/i }).click();
+  await expect(page.locator('.painted-region').first()).toBeVisible({ timeout: 20_000 });
+  // Let the opening per-block queue drain first: otherwise the counter moves
+  // because of that work, not because of the batch under test. Stable for two
+  // 400 ms samples means nothing is in flight.
+  let lastSeen = -1;
+  await expect.poll(async () => {
+    const now = await requestCount(page);
+    const stable = now === lastSeen;
+    lastSeen = now;
+    return stable;
+  }, { timeout: 20_000, intervals: [400, 400, 400, 400, 400] }).toBe(true);
+
+  const before = await requestCount(page);
+  await page.locator('#full').click();
+  // Stop as soon as the first batched page request has left.
+  await expect.poll(() => requestCount(page), { timeout: 20_000 }).toBeGreaterThan(before);
+  await page.locator('#full').click();
+
+  const stoppedAt = await requestCount(page);
+  await page.waitForTimeout(2500);
+  const settled = await requestCount(page);
+  // Whatever lands after the stop is the work the reader deliberately keeps for
+  // the pages on screen; what must not happen is the rest of the document going
+  // out. Two painted pages at most (the visible pair), never all four.
+  expect(settled).toBeGreaterThanOrEqual(stoppedAt);
+  const paintedPages = await page.locator('.page-pair').evaluateAll(rows =>
+    rows.filter(row => row.querySelector('.painted-region') !== null).length);
+  expect(paintedPages).toBeLessThanOrEqual(2);
+  await expect(page.locator('#full')).toHaveText(/Dịch toàn bộ|Translate all/i);
+  await expect(page.locator('#status')).not.toHaveClass(/is-error/);
+});
+
 test('a provider that cannot batch still translates, one call per block', async ({ page }) => {
   await page.goto('/');
   await page.locator('#file-input').setInputFiles(resolve('tests/fixtures/mirror-field-notes.pdf'));

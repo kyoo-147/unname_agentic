@@ -78,6 +78,7 @@ const translationQueue = new ViewportScheduler<void>(2);
 const renderQueue = new ViewportScheduler<void>(2);
 let pdf: PDFDocumentProxy | null = null;
 let revision = 0, profile = 0, paused = false, full = false, batching = false, zoom = 1, split = 50;
+let batchController: AbortController | null = null;
 let rotation: PageRotation = 0;
 let fit: FitMode = 'width';
 let rotating = false;
@@ -160,6 +161,7 @@ function updateCurrentMarkers() {
 }
 function resetWork() {
   revision++; profile++; requestController.abort(); requestController=new AbortController();
+  batchController?.abort(); batchController=null;
   translationQueue.reset(); renderQueue.reset(); rendered.clear(); translations.clear(); errors.clear(); visible.clear();
   observer?.disconnect(); observer=null; full=false; batching=false; paused=false; translationQueue.resume(); refreshTransportLabels();
   rotation=0; fit='width'; zoom=1; rotating=false; pageNumber=1; pageTotal=0; readingPosition={page:1,fraction:0}; activeDocKey='';
@@ -380,7 +382,7 @@ async function translatePageInBatch(number: number): Promise<boolean> {
   if(!result||!canTranslate()) return false;
   const pending=result.model.blocks.filter(block=>!translations.has(block.id)&&!errors.has(block.id));
   if(pending.length<2) return false;
-  const generation=revision, currentProfile=profile, snapshot={...settings}, signal=requestController.signal;
+  const generation=revision, currentProfile=profile, snapshot={...settings}, signal=batchController?.signal??requestController.signal;
   try {
     const batch=await service.translateBatch(pending,snapshot,signal);
     if(generation!==revision||currentProfile!==profile) return true;
@@ -478,7 +480,14 @@ $('rotate').addEventListener('click',()=>void rotateView());
 $('zoom-in').addEventListener('click',()=>{fit='actual';zoom=Math.min(3,zoom+.1);applyScale();});
 $('zoom-out').addEventListener('click',()=>{fit='actual';zoom=Math.max(.55,zoom-.1);applyScale();});
 $('pause').addEventListener('click',()=>{paused=!paused;if(paused)translationQueue.pause();else translationQueue.resume();refreshTransportLabels();status(paused?'statusPaused':'statusResumed');});
-$('retry').addEventListener('click',()=>{errors.clear();for(const number of visible)schedulePage(number,0);status('statusRetrying');});
+$('retry').addEventListener('click',()=>{
+  // Retry must reach every failed block, not only the ones currently on screen:
+  // a failure the reader scrolled past used to stay dead forever.
+  errors.clear();
+  for(const page of rendered.values()) { paintMirror(page); schedulePage(page.model.number,0); }
+  for(const number of visible) schedulePage(number,0);
+  status('statusRetrying');
+});
 function exportedPages(): ExportedPage[] {
   return [...rendered.values()].sort((a,b)=>a.model.number-b.model.number).map(page=>({
     pageNumber:page.model.number,
@@ -523,9 +532,16 @@ document.addEventListener('keydown',event=>{
 });
 $('full').addEventListener('click',async()=>{
   full=!full; refreshTransportLabels();
-  if(!full){ batching=false; translationQueue.reset(); for(const number of visible) schedulePage(number,0); return; }
+  if(!full){
+    // Stop means stop: abort the batch in flight as well as the per-block queue.
+    batching=false; batchController?.abort(); batchController=null;
+    translationQueue.reset();
+    for(const number of visible) schedulePage(number,0);
+    return;
+  }
   const generation=revision;
   batching=true;
+  batchController=new AbortController();
   try {
     for(let number=1; pdf&&number<=pdf.numPages&&full&&generation===revision; number++) {
       await ensurePage(number,5);
@@ -533,7 +549,7 @@ $('full').addEventListener('click',async()=>{
       // provider that cannot batch falls back to the per-block queue inside the loop.
       await translatePageInBatch(number);
     }
-  } finally { batching=false; }
+  } finally { batching=false; batchController=null; }
 });
 $<HTMLSelectElement>('target-language').addEventListener('change',()=>{const value=normalizeLanguageCode($<HTMLSelectElement>('target-language').value);if(value&&value!=='auto'){settings.targetLanguage=value;changeProfile();}});
 function changeProfile() {profile++; requestController.abort();requestController=new AbortController();translationQueue.reset();translations.clear();errors.clear();for(const page of rendered.values())paintMirror(page);for(const number of visible)schedulePage(number,0);updateProvider();status(canTranslate()?'statusSettingsApplied':'statusCloudNeeded');}
