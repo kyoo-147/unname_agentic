@@ -456,10 +456,12 @@ function exportedPages(): ExportedPage[] {
 function pageLabel(page: number) { return t('pageStatus',{page,total:pageTotal}); }
 async function printBilingual(): Promise<void> {
   const pages=exportedPages();
+  console.log('PRINT_CLICK', pages.length);
   if(!pages.length){status('exportEmpty',true);return;}
   const title=documentTitle(activeTitle);
   document.title=title;
   status('exportPrintOpened');
+  await new Promise<void>(resolve=>setTimeout(resolve,0));
   try {
     await printHtml(toBilingualHtml(pages,{title,lang:settings.targetLanguage,pageLabel}));
   } catch(error) {

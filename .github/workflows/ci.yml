@@ -32,6 +32,9 @@ jobs:
       - name: Install dependencies
         timeout-minutes: 10
         run: pnpm install --frozen-lockfile
+      - name: Committed imports resolve
+        timeout-minutes: 5
+        run: node scripts/check-committed-imports.mjs
       - name: Unit tests
         timeout-minutes: 10
         run: pnpm test

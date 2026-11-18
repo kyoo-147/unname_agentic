@@ -99,6 +99,7 @@ try {
         # Retries stay pinned to 0 so a flaky run cannot buy a green release gate.
         Step 'e2e' { pnpm exec playwright test --retries=0; if ($LASTEXITCODE -ne 0) { throw 'e2e failed' } }
     }
+    Step 'committed imports' { node scripts/check-committed-imports.mjs; if ($LASTEXITCODE -ne 0) { throw 'a committed file imports a module that is not committed'; } }
     Step 'extension artifacts' { Assert-ExtensionOutput }
     Step 'web references' { Assert-WebReferences }
 
