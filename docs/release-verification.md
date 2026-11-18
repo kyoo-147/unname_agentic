@@ -51,6 +51,20 @@ workspace calls it after file import and after browser-companion updates, then r
 Regression evidence: fresh packaged launch renders at 15 s; native workspace tests remain
 **50 passed, 0 failed, 1 ignored**; release build succeeds.
 
+## Native scanned PDF OCR
+
+The packaged release opened `tests/fixtures/scanned-page.pdf` (image-only, no embedded text) on a
+fresh library. After 20 s the reader showed the scanned page with the recognized lines:
+
+- `SCANNED PAGE`
+- `Reading without boundaries`
+- `Local OCR should find this text.`
+- `Numbers 42 and 3.14159 stay exact.`
+
+Engine: Windows OCR. The original raster is preserved and the text is used as paired text, not
+painted over the scan. Screenshot: `artifacts/desktop-native-scan-ocr.png`.
+Translation was off; this proves the native OCR path, not translation quality.
+
 ## Limits
 
 - The release is portable, not an installer; it is unsigned.
