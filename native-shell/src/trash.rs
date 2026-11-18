@@ -50,7 +50,7 @@ pub(crate) fn page_header(ws: &Workspace, title: &'static str, left: f32, cx: &m
                     .rounded(px(8.))
                     .cursor_pointer()
                     .hover(|s| s.bg(Theme::fill_hover_strong()))
-                    .tip(crate::settings::tr("展开侧栏", "Show sidebar"), Some(crate::shortcuts::hint("workspace::ToggleSidebar", "⌘ + ]")))
+                    .tip(crate::i18n::tr3("展开侧栏", "Show sidebar", "Hiện thanh bên"), Some(crate::shortcuts::hint("workspace::ToggleSidebar", "⌘ + ]")))
                     .child(icon("panel-left-open", 17., Theme::icon()))
                     .on_click(cx.listener(|w, _, _, cx| {
                         w.sidebar_open = true;
@@ -275,7 +275,7 @@ impl Workspace {
     fn show_store_warnings(&mut self, cx: &mut Context<Self>) {
         let warnings = self.store.take_warnings();
         if !warnings.is_empty() {
-            let msg = warnings.iter().map(|s| crate::settings::diagnostic(s)).collect::<Vec<_>>().join(crate::settings::tr("；", "; "));
+            let msg = warnings.iter().map(|s| crate::settings::diagnostic(s)).collect::<Vec<_>>().join(crate::i18n::tr3("；", "; ", "; "));
             self.show_toast_kind(crate::ui::ToastKind::Error, &msg, cx);
             self.status = crate::app::SaveStatus::Failed(msg);
         }

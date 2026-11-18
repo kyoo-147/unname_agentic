@@ -234,7 +234,7 @@ impl Workspace {
                     .rounded(px(9.))
                     .bg(Theme::fill_hover_strong())
                     .child(icon("library", 15., Theme::text_code()))
-                    .child(div().ml(px(8.)).text_size(px(13.)).line_height(px(20.)).child(crate::settings::tr("我的文档", "My documents"))),
+                    .child(div().ml(px(8.)).text_size(px(13.)).line_height(px(20.)).child(crate::i18n::tr3("我的文档", "My documents", "Tài liệu của tôi"))),
             );
 
         let row = |key: String, selected: bool| {

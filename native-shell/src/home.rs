@@ -268,11 +268,11 @@ impl Workspace {
         let header = page_header(self, if self.home.chat { crate::i18n::tr3("新对话", "New chat", "Trò chuyện mới") } else { crate::settings::text("主页") }, 26., cx).relative().children(search)
             .when(crate::layout_preview(), |d| d.child(div().no_drag().mr(px(12.)).text_size(px(11.)).line_height(px(16.)).text_color(Theme::text_caption()).child("Layout preview")))
             .when(narrow, |d| d.child(crate::ui::header_icon("home-search", "search").mr(px(4.))
-                .tip(crate::settings::tr("搜索文档", "Search documents"), Some(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J")))
+                .tip(crate::i18n::tr3("搜索文档", "Search documents", "Tìm tài liệu"), Some(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J")))
                 .on_click(cx.listener(|w, _, window, cx| w.open_search(window, cx)))))
             .child(
             crate::ui::header_icon("home-new", "plus")
-                .tip(crate::settings::tr("导入 PDF", "Import PDF"), None)
+                .tip(crate::i18n::tr3("导入 PDF", "Import PDF", "Nhập PDF"), None)
                 .on_click(cx.listener(|w, _, window, cx| w.open_import(window, cx))).into_any_element()
         );
         // Tabs as segmented items: the current one on a quiet fill, no accent.
@@ -392,7 +392,7 @@ impl Workspace {
         let body = if (self.home.chat || self.entries.is_empty()) && !self.search_open {
             self.render_home_greeting(cx)
         } else if entries.is_empty() && (self.home.grid || self.home.tab == HomeTab::Recent) {
-            empty_state("illus/empty-list.svg", crate::settings::tr("暂无 PDF 文档", "No PDF documents yet")).into_any_element()
+            empty_state("illus/empty-list.svg", crate::i18n::tr3("暂无 PDF 文档", "No PDF documents yet", "Chưa có tài liệu PDF nào")).into_any_element()
         } else if self.home.grid {
             self.render_home_grid(&entries, window, cx)
         } else {

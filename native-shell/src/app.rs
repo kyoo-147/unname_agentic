@@ -24,52 +24,51 @@ actions!(workspace, [NewDoc, ImportDoc, ToggleSidebar, FocusSearch, FindInDoc, R
 
 /// The menu bar, in the interface language.
 pub fn set_menus(cx: &mut App) {
-    use crate::settings::tr;
     cx.set_menus(vec![
         Menu {
             name: "Workspace".into(),
             items: vec![
-                MenuItem::action(tr("关于 Workspace", "About Workspace"), OpenAbout),
+                MenuItem::action(crate::i18n::tr3("关于 Workspace", "About Workspace", "Giới thiệu Workspace"), OpenAbout),
                 MenuItem::separator(),
-                MenuItem::action(tr("设置…", "Settings…"), OpenSettings),
+                MenuItem::action(crate::i18n::tr3("设置…", "Settings…", "Cài đặt…"), OpenSettings),
                 MenuItem::separator(),
-                MenuItem::os_submenu(tr("服务", "Services"), SystemMenuType::Services),
+                MenuItem::os_submenu(crate::i18n::tr3("服务", "Services", "Dịch vụ"), SystemMenuType::Services),
                 MenuItem::separator(),
-                MenuItem::action(tr("隐藏 Workspace", "Hide Workspace"), HideApp),
-                MenuItem::action(tr("隐藏其他", "Hide Others"), HideOthers),
-                MenuItem::action(tr("全部显示", "Show All"), ShowAll),
+                MenuItem::action(crate::i18n::tr3("隐藏 Workspace", "Hide Workspace", "Ẩn Workspace"), HideApp),
+                MenuItem::action(crate::i18n::tr3("隐藏其他", "Hide Others", "Ẩn các ứng dụng khác"), HideOthers),
+                MenuItem::action(crate::i18n::tr3("全部显示", "Show All", "Hiện tất cả"), ShowAll),
                 MenuItem::separator(),
-                MenuItem::action(tr("退出 Workspace", "Quit Workspace"), Quit),
+                MenuItem::action(crate::i18n::tr3("退出 Workspace", "Quit Workspace", "Thoát Workspace"), Quit),
             ],
         },
         Menu {
-            name: tr("文件", "File").into(),
+            name: crate::i18n::tr3("文件", "File", "Tệp").into(),
             items: vec![
-                MenuItem::action(tr("导入 PDF…", "Import PDF…"), ImportDoc),
+                MenuItem::action(crate::i18n::tr3("导入 PDF…", "Import PDF…", "Nhập PDF…"), ImportDoc),
                 MenuItem::separator(),
-                MenuItem::action(tr("关闭窗口", "Close Window"), CloseWindow),
+                MenuItem::action(crate::i18n::tr3("关闭窗口", "Close Window", "Đóng cửa sổ"), CloseWindow),
             ],
         },
         // The standard Edit menu: its items act on the focused editor, and
         // macOS adds 听写 and 表情与符号 to it.
         Menu {
-            name: tr("编辑", "Edit").into(),
+            name: crate::i18n::tr3("编辑", "Edit", "Sửa").into(),
             items: {
                 vec![
-                    MenuItem::os_action(tr("剪切", "Cut"), crate::input::Cut, OsAction::Cut),
-                    MenuItem::os_action(tr("拷贝", "Copy"), crate::input::Copy, OsAction::Copy),
-                    MenuItem::os_action(tr("粘贴", "Paste"), crate::input::Paste, OsAction::Paste),
-                    MenuItem::os_action(tr("全选", "Select All"), crate::input::SelectAll, OsAction::SelectAll),
+                    MenuItem::os_action(crate::i18n::tr3("剪切", "Cut", "Cắt"), crate::input::Cut, OsAction::Cut),
+                    MenuItem::os_action(crate::i18n::tr3("拷贝", "Copy", "Sao chép"), crate::input::Copy, OsAction::Copy),
+                    MenuItem::os_action(crate::i18n::tr3("粘贴", "Paste", "Dán"), crate::input::Paste, OsAction::Paste),
+                    MenuItem::os_action(crate::i18n::tr3("全选", "Select All", "Chọn tất cả"), crate::input::SelectAll, OsAction::SelectAll),
                 ]
             },
         },
         Menu {
-            name: tr("窗口", "Window").into(),
+            name: crate::i18n::tr3("窗口", "Window", "Cửa sổ").into(),
             items: vec![
-                MenuItem::action(tr("最小化", "Minimize"), Minimize),
-                MenuItem::action(tr("缩放", "Zoom"), Zoom),
+                MenuItem::action(crate::i18n::tr3("最小化", "Minimize", "Thu nhỏ"), Minimize),
+                MenuItem::action(crate::i18n::tr3("缩放", "Zoom", "Phóng to"), Zoom),
                 MenuItem::separator(),
-                MenuItem::action(tr("进入 / 退出全屏幕", "Enter / Exit Full Screen"), ToggleFullScreen),
+                MenuItem::action(crate::i18n::tr3("进入 / 退出全屏幕", "Enter / Exit Full Screen", "Vào / thoát toàn màn hình"), ToggleFullScreen),
             ],
         },
     ]);
@@ -319,7 +318,7 @@ impl Workspace {
             f
         });
         let settings_filter = cx.new(|cx| {
-            let mut f = TextField::new(crate::settings::tr("搜索快捷键", "Search shortcuts"), cx);
+            let mut f = TextField::new(crate::i18n::tr3("搜索快捷键", "Search shortcuts", "Tìm phím tắt"), cx);
             f.placeholder_color = Theme::text_disabled();
             f
         });
@@ -446,7 +445,7 @@ impl Workspace {
         // Kept in the top bar (not just a toast): the user should notice.
         let warnings = ws.store.take_warnings();
         if !warnings.is_empty() {
-            let msg = warnings.iter().map(|s| crate::settings::diagnostic(s)).collect::<Vec<_>>().join(crate::settings::tr("；", "; "));
+            let msg = warnings.iter().map(|s| crate::settings::diagnostic(s)).collect::<Vec<_>>().join(crate::i18n::tr3("；", "; ", "; "));
             ws.show_toast_kind(ToastKind::Error, &msg, cx);
             ws.status = SaveStatus::Failed(msg);
         }
@@ -888,9 +887,9 @@ impl Workspace {
             .rounded(px(9.)).bg(Theme::fill_hover())
             .cursor_pointer().hover(|s| s.bg(Theme::fill_hover_strong()))
             .child(icon("search", 15., Theme::text_caption()))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(Theme::text_caption()).child(crate::settings::tr("搜索文档…", "Search documents…")))
+            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).text_color(Theme::text_caption()).child(crate::i18n::tr3("搜索文档…", "Search documents…", "Tìm tài liệu…")))
             .when(width >= 200., |d| d.child(div().flex_none().text_size(px(11.)).text_color(Theme::text_placeholder()).child(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J").replace(" + ", " "))))
-            .tip(crate::settings::tr("搜索文档", "Search documents"), Some(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J")))
+            .tip(crate::i18n::tr3("搜索文档", "Search documents", "Tìm tài liệu"), Some(crate::shortcuts::hint("workspace::FocusSearch", "⌘ + J")))
             .on_click(cx.listener(|w, _, window, cx| w.open_search(window, cx))))
     }
 
@@ -985,7 +984,7 @@ impl Workspace {
                         .rounded(px(8.))
                         .cursor_pointer()
                         .hover(|s| s.bg(Theme::fill_hover_strong()))
-                        .tip(crate::settings::tr("展开侧栏", "Show sidebar"), Some(crate::shortcuts::hint("workspace::ToggleSidebar", "⌘ + ]")))
+                        .tip(crate::i18n::tr3("展开侧栏", "Show sidebar", "Hiện thanh bên"), Some(crate::shortcuts::hint("workspace::ToggleSidebar", "⌘ + ]")))
                         .child(icon("panel-left-open", 17., Theme::icon()))
                         .on_click(cx.listener(|w, _, _, cx| {
                             w.sidebar_open = true;
@@ -1049,7 +1048,7 @@ impl Workspace {
                             // from this button's right edge.
                             seg("doc-more", "ellipsis")
                                 .relative()
-                                .tip(crate::settings::tr("更多", "More"), None)
+                                .tip(crate::i18n::tr3("更多", "More", "Thêm"), None)
                                 .child(canvas(move |b, _, _| record_more.set(Some(b)), |_, _, _, _| {}).absolute().inset_0())
                                 .on_click(cx.listener(|w, _, _, cx| {
                                     if let (Some(id), Some(bounds)) = (w.current.clone(), w.more_btn_bounds.get()) {
@@ -1066,7 +1065,7 @@ impl Workspace {
                     )
                     .child(
                         // Straight to a new document: no 新建 menu, as 导入 is rare.
-                        seg("doc-new", "plus").tip(crate::settings::tr("导入 PDF", "Import PDF"), None).on_click(cx.listener(|w, _, window, cx| w.new_doc(window, cx))),
+                        seg("doc-new", "plus").tip(crate::i18n::tr3("导入 PDF", "Import PDF", "Nhập PDF"), None).on_click(cx.listener(|w, _, window, cx| w.new_doc(window, cx))),
                     ).into_any_element()
             )
     }

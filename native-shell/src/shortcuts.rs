@@ -1,7 +1,7 @@
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use std::collections::BTreeMap;
-use crate::{app::Workspace, settings::{english, tr}, theme::Theme};
+use crate::{app::Workspace, settings::english, theme::Theme};
 
 pub struct Shortcuts { base: Vec<KeyBinding>, custom: BTreeMap<String, String> }
 impl Global for Shortcuts {}
@@ -87,7 +87,7 @@ pub fn windows_keys(s: &str) -> String {
 }
 
 fn first_group_hint() -> &'static str {
-    if cfg!(not(target_os = "macos")) { tr("第一组请包含 Ctrl 或 Alt", "Start with Ctrl or Alt") } else { tr("第一组请包含 ⌘、⌃ 或 ⌥", "Start with ⌘, ⌃ or ⌥") }
+    if cfg!(not(target_os = "macos")) { crate::i18n::tr3("第一组请包含 Ctrl 或 Alt", "Start with Ctrl or Alt", "Bắt đầu bằng Ctrl hoặc Alt") } else { crate::i18n::tr3("第一组请包含 ⌘、⌃ 或 ⌥", "Start with ⌘, ⌃ or ⌥", "Bắt đầu bằng ⌘, ⌃ hoặc ⌥") }
 }
 
 /// A UI label's keys for this platform: `windows_keys` on non-macOS platforms (cached,
@@ -218,7 +218,7 @@ pub fn rows(cx: &App) -> Vec<(String, String, String)> {
     rows.into_iter().map(|(_, id, t, k)| (id, t, k)).collect()
 }
 pub fn pretty(key: &str) -> String {
-    if key.is_empty() { return tr("未设置", "Not set").into(); }
+    if key.is_empty() { return crate::i18n::tr3("未设置", "Not set", "Chưa đặt").into(); }
     key.split(' ').map(|stroke| {
         let Ok(ks) = Keystroke::parse(stroke) else { return stroke.to_string() };
         let m = ks.modifiers;
@@ -264,7 +264,7 @@ fn change(id: &str, key: Option<String>, cx: &mut App) -> anyhow::Result<()> {
     let key = key.unwrap_or_else(|| default_key(s, id));
     let parsed = sequence(&key)?;
     if !parsed.is_empty() {
-        anyhow::ensure!(parsed.len() <= 4, tr("应用快捷键最多四组", "Use up to four strokes"));
+        anyhow::ensure!(parsed.len() <= 4, crate::i18n::tr3("应用快捷键最多四组", "Use up to four strokes", "Dùng tối đa bốn tổ hợp phím"));
         let m = parsed[0].modifiers;
         anyhow::ensure!(m.platform || m.control || m.alt, first_group_hint());
     }
@@ -350,7 +350,7 @@ impl Workspace {
         if self.shortcut_strokes.is_empty() && !(m.platform || m.control || m.alt) {
             self.shortcut_error = Some((id, first_group_hint().into()));
         } else if self.shortcut_strokes.len() >= 4 {
-            self.shortcut_error = Some((id, tr("已达到组合键上限，请保存或按退格修改", "Save or press Backspace to edit the sequence").into()));
+            self.shortcut_error = Some((id, crate::i18n::tr3("已达到组合键上限，请保存或按退格修改", "Save or press Backspace to edit the sequence", "Lưu hoặc nhấn Backspace để sửa chuỗi phím").into()));
         } else { self.shortcut_strokes.push(ev.keystroke.unparse()); }
         cx.notify(); true
     }
@@ -360,11 +360,11 @@ impl Workspace {
         let id = self.shortcut_recording.as_deref().unwrap_or("");
         let replaced = conflicts(cx.global::<Shortcuts>(), id, &key).iter().map(|n| label(n).unwrap_or(n).to_string()).collect::<Vec<_>>();
         div().flex().flex_col().gap(px(6.)).py(px(6.))
-            .child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(tr("连续输入最多四组，回车保存 · Esc 取消 · 退格修改", "Record up to four strokes, Enter to save · Esc to cancel · Backspace to edit")))
-            .when(!replaced.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(format!("{}{}", tr("保存后将取消以下快捷键绑定：", "Saving will unbind: "), replaced.join("、")))))
+            .child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(crate::i18n::tr3("连续输入最多四组，回车保存 · Esc 取消 · 退格修改", "Record up to four strokes, Enter to save · Esc to cancel · Backspace to edit", "Ghi tối đa bốn tổ hợp, Enter để lưu · Esc để huỷ · Backspace để sửa")))
+            .when(!replaced.is_empty(), |d| d.child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(format!("{}{}", crate::i18n::tr3("保存后将取消以下快捷键绑定：", "Saving will unbind: ", "Khi lưu sẽ bỏ liên kết: "), replaced.join("、")))))
             .child(div().flex().gap(px(8.))
-                .when(!key.is_empty(), |d| d.child(crate::settings::link_button("shortcut-save", tr("保存", "Save")).on_click(cx.listener(|w, _, _, cx| w.save_recorded_shortcut(cx)))))
-                .child(crate::settings::link_button("shortcut-cancel", tr("取消", "Cancel")).on_click(cx.listener(|w, _, _, cx| { w.cancel_shortcut_recording(cx); cx.notify(); }))))
+                .when(!key.is_empty(), |d| d.child(crate::settings::link_button("shortcut-save", crate::i18n::tr3("保存", "Save", "Lưu")).on_click(cx.listener(|w, _, _, cx| w.save_recorded_shortcut(cx)))))
+                .child(crate::settings::link_button("shortcut-cancel", crate::i18n::tr3("取消", "Cancel", "Huỷ")).on_click(cx.listener(|w, _, _, cx| { w.cancel_shortcut_recording(cx); cx.notify(); }))))
             .into_any_element()
     }
 
@@ -373,7 +373,7 @@ impl Workspace {
     pub(crate) fn shortcut_actions(&self, cx: &mut Context<Self>) -> AnyElement {
         let customized = cx.try_global::<Shortcuts>().is_some_and(|s| !s.custom.is_empty());
         div().flex_none().flex().items_center().gap(px(8.))
-            .when(customized, |d| d.child(crate::settings::link_button("shortcuts-reset-all", tr("全部恢复默认", "Reset all")).on_click(cx.listener(|w, _, _, cx| w.reset_all_shortcuts(cx)))))
+            .when(customized, |d| d.child(crate::settings::link_button("shortcuts-reset-all", crate::i18n::tr3("全部恢复默认", "Reset all", "Đặt lại tất cả")).on_click(cx.listener(|w, _, _, cx| w.reset_all_shortcuts(cx)))))
             .child(div().w(px(200.)).h(px(28.)).px(px(8.)).flex().items_center().gap(px(6.)).rounded(px(8.)).bg(Theme::fill_hover())
                 .child(crate::ui::icon("search", 14., Theme::text_caption()))
                 .child(div().flex_1().min_w_0().child(self.settings_filter.clone())))
@@ -396,9 +396,9 @@ impl Workspace {
                 .child(div().w_full().min_h(px(28.)).flex().items_center().gap(px(12.))
                     .child(div().flex_1().min_w_0().text_size(px(13.)).line_height(px(20.)).child(title))
                     .when(is_custom && !recording, |d| d.child(div().id(SharedString::from(format!("reset-{reset}"))).h(px(26.)).px(px(8.)).flex().items_center().rounded(px(7.)).cursor_pointer()
-                        .text_size(px(12.)).text_color(Theme::primary()).hover(|s| s.bg(Theme::fill_hover())).child(tr("恢复默认", "Reset"))
+                        .text_size(px(12.)).text_color(Theme::primary()).hover(|s| s.bg(Theme::fill_hover())).child(crate::i18n::tr3("恢复默认", "Reset", "Đặt lại"))
                         .on_click(cx.listener(move |w, _, _, cx| w.reset_shortcut(&reset, cx)))))
-                    .when(!recording && !key.is_empty(), |d| d.child(crate::settings::link_button(SharedString::from(format!("clear-{clear}")), tr("移除", "Remove")).invisible().group_hover("shortcut-row", |s| s.visible()).on_click(cx.listener(move |w, _, _, cx| w.clear_shortcut(&clear, cx)))))
+                    .when(!recording && !key.is_empty(), |d| d.child(crate::settings::link_button(SharedString::from(format!("clear-{clear}")), crate::i18n::tr3("移除", "Remove", "Gỡ bỏ")).invisible().group_hover("shortcut-row", |s| s.visible()).on_click(cx.listener(move |w, _, _, cx| w.clear_shortcut(&clear, cx)))))
                     .child(crate::settings::keycap(SharedString::from(id.clone()), &shown_key, recording)
                         .on_click(cx.listener(move |w, _, window, cx| w.start_recording(&rec, window, cx)))))
                 .when(recording, |d| d.child(self.shortcut_recorder(cx)))
@@ -409,7 +409,7 @@ impl Workspace {
         let general_error = self.shortcut_error.as_ref().filter(|(id, _)| id.is_empty()).map(|(_, e)| e.clone());
         div().w_full().flex().flex_col().gap(px(28.))
             .children(general_error.map(|e| div().px(px(4.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::danger()).child(e)))
-            .when(empty, |d| d.child(div().py(px(40.)).flex().justify_center().text_size(px(13.)).text_color(Theme::text_caption()).child(tr("没有匹配的快捷键", "No matching shortcuts"))))
+            .when(empty, |d| d.child(div().py(px(40.)).flex().justify_center().text_size(px(13.)).text_color(Theme::text_caption()).child(crate::i18n::tr3("没有匹配的快捷键", "No matching shortcuts", "Không có phím tắt phù hợp"))))
             .children(groups.into_iter().enumerate().filter(|(_, rows)| !rows.is_empty()).map(|(g, rows)| {
                 let n = rows.len();
                 div().w_full().flex().flex_col().gap(px(8.))

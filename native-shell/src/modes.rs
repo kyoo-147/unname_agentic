@@ -125,7 +125,7 @@ impl Workspace {
                         .items_center()
                         .border_b_1()
                         .border_color(Theme::line_divider())
-                        .child(div().flex_1().text_size(px(15.)).line_height(px(22.)).font_weight(FontWeight::SEMIBOLD).child(crate::settings::tr("快捷键", "Keyboard shortcuts")))
+                        .child(div().flex_1().text_size(px(15.)).line_height(px(22.)).font_weight(FontWeight::SEMIBOLD).child(crate::i18n::tr3("快捷键", "Keyboard shortcuts", "Phím tắt")))
                         .child(crate::trash::close_button("shortcuts-close").mr(px(5.)).on_click(cx.listener(|w, _, _, cx| {
                             w.shortcuts = false;
                             cx.notify();

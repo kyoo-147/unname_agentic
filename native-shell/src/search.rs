@@ -155,7 +155,7 @@ fn extra_segment(glyph: Option<&'static str>, text: String) -> Div {
 
 /// A result's extra line: 所有者 and the opened / modified times.
 pub(crate) fn extra_line(e: &Entry) -> Div {
-    let mut extra = vec![extra_segment(None, crate::settings::tr("所有者：我", "Owner: me").into())];
+    let mut extra = vec![extra_segment(None, crate::i18n::tr3("所有者：我", "Owner: me", "Chủ sở hữu: tôi").into())];
     if e.meta.opened > 0 {
         extra.push(extra_segment(Some("eye"), if crate::settings::english() { format!("Opened {}", format_visit(e.meta.opened)) } else { format!("你在 {}打开过", format_visit(e.meta.opened)) }));
     }
@@ -370,7 +370,7 @@ impl Workspace {
                     .text_size(px(12.))
                     .line_height(px(18.))
                     .text_color(Theme::text_caption())
-                    .child(crate::settings::tr("最近浏览", "Recently viewed")),
+                    .child(crate::i18n::tr3("最近浏览", "Recently viewed", "Xem gần đây")),
             );
         }
         if results.is_empty() && !q.is_empty() {
@@ -406,7 +406,7 @@ impl Workspace {
             .text_color(Theme::text_caption())
             .whitespace_nowrap()
             .overflow_hidden()
-            .child(ui_text(crate::settings::tr("支持 ↑↓ 键选择、Enter 键打开", "Use ↑↓ to select, Enter to open")));
+            .child(ui_text(crate::i18n::tr3("支持 ↑↓ 键选择、Enter 键打开", "Use ↑↓ to select, Enter to open", "Dùng ↑↓ để chọn, Enter để mở")));
 
         let modal = div()
             .id("search-dialog")

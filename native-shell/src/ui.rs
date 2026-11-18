@@ -439,10 +439,10 @@ pub(crate) fn window_controls(window: &Window) -> Option<Div> {
     // Native hit-test areas preserve Snap Layouts and the normal WM_CLOSE save guard.
     Some(div().absolute().top_0().right_0().h(px(crate::app::HEADER_H)).flex().items_center().title_bar()
         .child(div().mx(px(12.)).w(px(1.)).h(px(18.)).bg(Theme::line_divider()))
-        .child(button("window-minimize", WindowControlArea::Min, crate::settings::tr("最小化", "Minimize"))
+        .child(button("window-minimize", WindowControlArea::Min, crate::i18n::tr3("最小化", "Minimize", "Thu nhỏ"))
             .child(icon("minus", 18., Theme::icon())))
-        .child(button("window-maximize", WindowControlArea::Max, if maximized { crate::settings::tr("还原", "Restore") } else { crate::settings::tr("最大化", "Maximize") }).child(icon(if maximized { "copy" } else { "expand" }, 18., Theme::icon())))
-        .child(button("window-close", WindowControlArea::Close, crate::settings::tr("关闭", "Close"))
+        .child(button("window-maximize", WindowControlArea::Max, if maximized { crate::i18n::tr3("还原", "Restore", "Khôi phục") } else { crate::i18n::tr3("最大化", "Maximize", "Phóng to") }).child(icon(if maximized { "copy" } else { "expand" }, 18., Theme::icon())))
+        .child(button("window-close", WindowControlArea::Close, crate::i18n::tr3("关闭", "Close", "Đóng"))
             .child(icon("x", 18., Theme::icon()))))
 }
 
@@ -525,7 +525,7 @@ pub fn format_visit(secs: u64) -> String {
     let now = crate::time::now();
     let ago = now.saturating_sub(secs);
     if ago < 60 {
-        return crate::settings::tr("刚刚", "just now").into();
+        return crate::i18n::tr3("刚刚", "just now", "vừa xong").into();
     }
     if ago < 3600 {
         return if crate::settings::english() { format!("{} min ago", ago / 60) } else { format!("{} 分钟前", ago / 60) };

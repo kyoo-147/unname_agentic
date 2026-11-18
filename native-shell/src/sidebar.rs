@@ -178,7 +178,7 @@ impl Workspace {
                     .rounded(px(8.))
                     .cursor_pointer()
                     .hover(|s| s.bg(Theme::sidebar_hover()))
-                    .tip(crate::settings::tr("收起侧栏", "Hide sidebar"), Some(crate::shortcuts::hint("workspace::ToggleSidebar", "⌘ + ]")))
+                    .tip(crate::i18n::tr3("收起侧栏", "Hide sidebar", "Ẩn thanh bên"), Some(crate::shortcuts::hint("workspace::ToggleSidebar", "⌘ + ]")))
                     .child(icon("panel-left-close", 17., Theme::icon()))
                     .on_click(cx.listener(|w, _, _, cx| {
                         w.sidebar_open = false;
@@ -480,7 +480,7 @@ impl Workspace {
                             cx.notify();
                         })),
                 )
-                .child(trigger("section-add", "plus").ml(px(2.)).mr(px(4.)).tip(crate::settings::tr("导入 PDF", "Import PDF"), None).on_click(cx.listener(|w, _, window, cx| w.open_import(window, cx))));
+                .child(trigger("section-add", "plus").ml(px(2.)).mr(px(4.)).tip(crate::i18n::tr3("导入 PDF", "Import PDF", "Nhập PDF"), None).on_click(cx.listener(|w, _, window, cx| w.open_import(window, cx))));
         }
         row.child(
             div()
@@ -513,7 +513,7 @@ impl Workspace {
                 w.row_menu = None;
                 cx.notify();
             })))
-            .child(trigger("section-add", "plus").ml(px(2.)).mr(px(4.)).tip(crate::settings::tr("导入 PDF", "Import PDF"), None).on_click(cx.listener(|w, _, window, cx| w.open_import(window, cx))))
+            .child(trigger("section-add", "plus").ml(px(2.)).mr(px(4.)).tip(crate::i18n::tr3("导入 PDF", "Import PDF", "Nhập PDF"), None).on_click(cx.listener(|w, _, window, cx| w.open_import(window, cx))))
         })
     }
 
@@ -875,7 +875,7 @@ impl Workspace {
                     .on_click(cx.listener(move |w, _, _, cx| w.toggle_pin(&pin, cx))),
             )
             .child(
-                item("rm-star", if starred { "star-off" } else { "star" }, if starred { crate::settings::text("取消收藏") } else { crate::settings::tr("收藏", "Add to favorites") })
+                item("rm-star", if starred { "star-off" } else { "star" }, if starred { crate::settings::text("取消收藏") } else { crate::i18n::tr3("收藏", "Add to favorites", "Thêm vào yêu thích") })
                     .on_hover(set_sub(false))
                     .on_click(cx.listener(move |w, _, _, cx| w.toggle_star(&star, cx))),
             )

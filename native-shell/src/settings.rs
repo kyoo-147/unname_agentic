@@ -149,7 +149,7 @@ pub(crate) fn save(p: &Preferences) -> anyhow::Result<()> {
 /// Redraw every window's document after the theme or language changed.
 pub(crate) fn refresh_all(this: &mut Workspace, cx: &mut Context<Workspace>) {
     fn refresh(ws: &mut Workspace, cx: &mut Context<Workspace>) {
-        ws.settings_filter.update(cx, |f, cx| { f.placeholder_color = Theme::text_disabled(); f.set_placeholder(tr("搜索快捷键", "Search shortcuts"), cx) });
+        ws.settings_filter.update(cx, |f, cx| { f.placeholder_color = Theme::text_disabled(); f.set_placeholder(crate::i18n::tr3("搜索快捷键", "Search shortcuts", "Tìm phím tắt"), cx) });
         ws.search.update(cx, |f, _| f.placeholder_color = Theme::text_disabled());
         cx.notify();
     }
@@ -198,11 +198,11 @@ pub enum Page { #[default] General, Appearance, Shortcuts, Library, About }
 impl Page {
     fn title(self) -> &'static str {
         match self {
-            Page::General => tr("通用", "General"),
-            Page::Appearance => tr("外观", "Appearance"),
-            Page::Shortcuts => tr("快捷键", "Shortcuts"),
-            Page::Library => tr("文档库", "Documents"),
-            Page::About => tr("关于", "About"),
+            Page::General => crate::i18n::tr3("通用", "General", "Chung"),
+            Page::Appearance => crate::i18n::tr3("外观", "Appearance", "Giao diện"),
+            Page::Shortcuts => crate::i18n::tr3("快捷键", "Shortcuts", "Phím tắt"),
+            Page::Library => crate::i18n::tr3("文档库", "Documents", "Tài liệu"),
+            Page::About => crate::i18n::tr3("关于", "About", "Giới thiệu"),
         }
     }
     fn icon(self) -> &'static str {
@@ -276,7 +276,7 @@ fn segmented(id: &'static str, labels: &[&'static str], selected: usize, on: imp
 pub(crate) fn keycap(id: impl Into<ElementId>, key: &str, recording: bool) -> Stateful<Div> {
     div().id(id).flex_none().min_w(px(144.)).min_h(px(28.)).px(px(14.)).py(px(4.)).flex().items_center().justify_center().rounded(px(7.)).cursor_pointer()
         .text_size(px(12.)).line_height(px(16.))
-        .when(recording, |d| d.bg(crate::theme::raised(Theme::bg_body())).border_1().border_color(Theme::primary()).text_color(Theme::primary()).child(if key.is_empty() { tr("按下新的组合键…", "Press keys…").to_string() } else { crate::shortcuts::pretty(key) }))
+        .when(recording, |d| d.bg(crate::theme::raised(Theme::bg_body())).border_1().border_color(Theme::primary()).text_color(Theme::primary()).child(if key.is_empty() { crate::i18n::tr3("按下新的组合键…", "Press keys…", "Nhấn phím…").to_string() } else { crate::shortcuts::pretty(key) }))
         .when(!recording, |d| d.bg(Theme::fill_hover()).border_1().border_color(transparent_black()).text_color(Theme::text()).hover(|s| s.bg(Theme::fill_hover_strong())).child(crate::shortcuts::pretty(key)))
 }
 
@@ -319,13 +319,13 @@ fn sample_page(t: &themes::Theme, s: f32) -> Div {
     let chip = |s: &'static str| div().px(sc(st.num("code.pad")).max(px(2.))).rounded(sc(st.num("code.radius"))).bg(st.color("code.bg").unwrap_or_else(|| st.token("code_chip")))
         .border_1().border_color(st.color("code.border").unwrap_or_else(|| st.token("code_chip_border"))).font_family(mono.clone()).text_color(st.color("code.color").unwrap_or(text)).child(s);
     let para = p(div().flex().flex_wrap().items_center())
-        .child(tr("这是所选主题的样例排版", "This is sample typography in the selected theme"))
-        .child(tr("，", ", "))
-        .child(tr("用来说明正文、强调与链接的观感。", "shown for body text, emphasis and links. "))
-        .child(tr("界面设置见 ", "Interface settings are under "))
+        .child(crate::i18n::tr3("这是所选主题的样例排版", "This is sample typography in the selected theme", "Đây là kiểu chữ mẫu của chủ đề đang chọn"))
+        .child(crate::i18n::tr3("，", ", ", ", "))
+        .child(crate::i18n::tr3("用来说明正文、强调与链接的观感。", "shown for body text, emphasis and links. ", "dùng để minh hoạ văn bản thường, phần nhấn mạnh và liên kết. "))
+        .child(crate::i18n::tr3("界面设置见 ", "Interface settings are under ", "Cài đặt giao diện nằm trong "))
         .child(chip("Settings"))
-        .child(tr("，", ", "))
-        .child(tr("主题细节以当前代码为准。", "theme details follow the current code."));
+        .child(crate::i18n::tr3("，", ", ", ", "))
+        .child(crate::i18n::tr3("主题细节以当前代码为准。", "theme details follow the current code.", "chi tiết chủ đề theo mã hiện tại."));
     let indent = sc(st.num("list.indent")).max(px(10.));
     let marker = |m: Div| div().flex_none().w(indent).flex().justify_center().child(m);
     let bullet_c = st.color("bullet.color").unwrap_or(text);
@@ -341,18 +341,18 @@ fn sample_page(t: &themes::Theme, s: f32) -> Div {
         .child(p(div()).child(label).when(done, |d| d.text_color(st.color("done.color").unwrap_or_else(|| st.token("todo_done"))).when(st.flag("done.strike"), |d| d.line_through())));
     let quote = div().flex().gap(sc((st.num("quote.indent") - st.num("quote.bar")).max(4.)))
         .child(div().flex_none().w(sc(st.num("quote.bar")).max(px(1.))).rounded(px(1.)).bg(st.color("quote.bar-color").unwrap_or_else(|| st.token("quote_bar"))))
-        .child(p(div()).text_color(st.color("quote.color").unwrap_or(text)).when(st.flag("quote.italic"), |d| d.italic()).child(tr("引用块的样例：文字保留原意，样式跟随主题。", "Quote sample: the wording stays, the styling follows the theme.")));
+        .child(p(div()).text_color(st.color("quote.color").unwrap_or(text)).when(st.flag("quote.italic"), |d| d.italic()).child(crate::i18n::tr3("引用块的样例：文字保留原意，样式跟随主题。", "Quote sample: the wording stays, the styling follows the theme.", "Ví dụ trích dẫn: giữ nguyên nội dung, kiểu dáng theo chủ đề.")));
     let callout = div().px(sc(st.num("callout.pad-x"))).py(sc(st.num("callout.pad-y"))).rounded(sc(st.num("callout.radius")))
         .bg(st.named("callout", "light-yellow").unwrap_or_else(|| st.token("code_chip")))
         .when(st.num("callout.border") > 0., |d| d.border(sc(st.num("callout.border")).max(px(1.))).border_color(st.named("border", "yellow").unwrap_or_else(|| st.token("code_chip_border"))))
-        .child(p(div().flex().gap(px(6.))).child("💡").child(tr("一边读一边动手试，记得最快。", "Try things as you read; it sticks faster.")));
+        .child(p(div().flex().gap(px(6.))).child("💡").child(crate::i18n::tr3("一边读一边动手试，记得最快。", "Try things as you read; it sticks faster.", "Vừa đọc vừa thử, nhớ nhanh hơn.")));
     let line_c = st.color("table.line").unwrap_or_else(|| st.token("table_line"));
     let cell = |s: &'static str, head: bool| div().flex_1().px(px(6.)).py(px(3.)).when(head, |d| d.bg(st.color("th.bg").unwrap_or_else(|| st.token("table_header"))).font_weight(FontWeight::SEMIBOLD)).child(s);
     let row = |a: &'static str, b: &'static str, head: bool, last: bool| div().flex().when(!last, |d| d.border_b_1().border_color(line_c))
         .child(cell(a, head).border_r_1().border_color(line_c)).child(cell(b, head));
     let table = div().w_full().rounded(sc(st.num("table.radius"))).border_1().border_color(line_c).overflow_hidden()
         .text_size(sc(st.num("table.size"))).line_height(sc(st.num("table.line-height")))
-        .child(row(tr("按键", "Keys"), tr("作用", "Does"), true, false)).child(row(crate::shortcuts::keys("⌘ N"), tr("新建文档", "New document"), false, false)).child(row(crate::shortcuts::keys("⌘ J"), tr("搜索所有文档", "Search documents"), false, true));
+        .child(row(crate::i18n::tr3("按键", "Keys", "Phím"), crate::i18n::tr3("作用", "Does", "Tác dụng"), true, false)).child(row(crate::shortcuts::keys("⌘ N"), crate::i18n::tr3("新建文档", "New document", "Tài liệu mới"), false, false)).child(row(crate::shortcuts::keys("⌘ J"), crate::i18n::tr3("搜索所有文档", "Search documents", "Tìm tài liệu"), false, true));
     let (hr_c, hr_w) = (st.color("hr.color").unwrap_or_else(|| st.token("separator_dots")), (st.num("hr.width") * s).max(0.6));
     // Painted to the column's width: a row of fixed-size dots would set the
     // column's minimum width and squeeze its neighbour.
@@ -373,7 +373,7 @@ fn sample_page(t: &themes::Theme, s: f32) -> Div {
     let code = div().w_full().overflow_hidden().px(px(10.)).py(px(7.)).rounded(sc(st.num("pre.radius"))).bg(st.color("pre.bg").unwrap_or_else(|| st.token("code_bg")))
         .border_1().border_color(st.color("pre.border").unwrap_or_else(|| st.token("code_border")))
         .font_family(mono.clone()).text_size(sc(st.num("pre.size"))).line_height(sc(st.num("pre.line"))).text_color(st.color("pre.color").unwrap_or_else(|| st.token("code_text")))
-        .child(code_line("1", vec![tok("# ", syn("comment")), tok(tr("备份文档库", "back up your documents"), syn("comment"))]))
+        .child(code_line("1", vec![tok("# ", syn("comment")), tok(crate::i18n::tr3("备份文档库", "back up your documents", "sao lưu tài liệu của bạn"), syn("comment"))]))
         .child(code_line("2", vec![tok("cd ", syn("function")), tok("~/Documents ", text), tok("&& ", syn("keyword")), tok("tar ", syn("function")), tok("-czf ", syn("attr")), tok("\"backup.tar.gz\" ", syn("string")), tok("PdfWorkspace", text)]))
         .child(code_line("3", vec![tok("echo ", syn("function")), tok("\"done\"", syn("string"))]));
     // One column, like a page: a centred text column (the theme's width, scaled,
@@ -387,16 +387,16 @@ fn sample_page(t: &themes::Theme, s: f32) -> Div {
         // min_w_0: the column follows the frame, not its widest unbreakable line.
         .child(div().w_full().min_w_0().overflow_hidden().max_w((sc(st.num("page.width")) * 1.35).min(px(760.))).px(px(32.)).pt(px(22.)).flex().flex_col().gap(gap)
             .child(div().text_size(sc(st.num("title.size"))).line_height(sc(st.num("title.size") * 1.25)).font_weight(FontWeight(st.num("title.weight")))
-                .font_family(SharedString::from(st.font("title.font"))).text_color(st.color("title.color").unwrap_or(text)).child(tr("开始指南", "Getting started")))
+                .font_family(SharedString::from(st.font("title.font"))).text_color(st.color("title.color").unwrap_or(text)).child(crate::i18n::tr3("开始指南", "Getting started", "Bắt đầu")))
             .child(para)
             .child(callout)
-            .child(heading(1, tr("五分钟上手", "Five minutes")))
-            .child(div().flex().flex_col().child(task(true, tr("打开这份指南", "Open this guide"))).child(task(false, crate::shortcuts::keys(tr("按 ⌘ N 新建一篇文档", "Press ⌘ N for a new document")))))
-            .child(heading(2, tr("三种输入方式", "Three ways to write")))
-            .child(div().flex().flex_col().child(bullet(tr("斜杠菜单：输入 / 插入任意内容块", "Slash menu: type / to insert any block"))).child(bullet(tr("Markdown：# 加空格变标题", "Markdown: # and a space make a heading"))))
-            .child(div().flex().flex_col().child(number("1.", tr("先读「写作基础」", "Read Writing basics first"))).child(number("2.", tr("再看「内容块」", "Then Content blocks"))))
+            .child(heading(1, crate::i18n::tr3("五分钟上手", "Five minutes", "Năm phút làm quen")))
+            .child(div().flex().flex_col().child(task(true, crate::i18n::tr3("打开这份指南", "Open this guide", "Mở hướng dẫn này"))).child(task(false, crate::shortcuts::keys(crate::i18n::tr3("按 ⌘ N 新建一篇文档", "Press ⌘ N for a new document", "Nhấn ⌘ N để tạo tài liệu mới")))))
+            .child(heading(2, crate::i18n::tr3("三种输入方式", "Three ways to write", "Ba cách nhập nội dung")))
+            .child(div().flex().flex_col().child(bullet(crate::i18n::tr3("斜杠菜单：输入 / 插入任意内容块", "Slash menu: type / to insert any block", "Menu gạch chéo: gõ / để chèn bất kỳ khối nào"))).child(bullet(crate::i18n::tr3("Markdown：# 加空格变标题", "Markdown: # and a space make a heading", "Markdown: # và một dấu cách tạo tiêu đề"))))
+            .child(div().flex().flex_col().child(number("1.", crate::i18n::tr3("先读「写作基础」", "Read Writing basics first", "Đọc phần “Cơ bản về viết” trước"))).child(number("2.", crate::i18n::tr3("再看「内容块」", "Then Content blocks", "Sau đó xem “Khối nội dung”"))))
             .child(quote)
-            .child(heading(3, tr("最常用的快捷键", "Shortcuts to know")))
+            .child(heading(3, crate::i18n::tr3("最常用的快捷键", "Shortcuts to know", "Phím tắt thường dùng")))
             .child(table)
             .child(div().w_full().py(px(2.)).child(hr))
             .child(code))
@@ -404,7 +404,7 @@ fn sample_page(t: &themes::Theme, s: f32) -> Div {
 }
 
 fn badge(t: &themes::Theme) -> Option<&'static str> {
-    if t.customized() { Some(tr("已修改", "Edited")) } else if t.bundled.is_none() { Some(tr("自定义", "Custom")) } else { None }
+    if t.customized() { Some(crate::i18n::tr3("已修改", "Edited", "Đã sửa")) } else if t.bundled.is_none() { Some(crate::i18n::tr3("自定义", "Custom", "Tự tạo")) } else { None }
 }
 
 /// A pop-up button (macOS): the current choice and a chevron on `button`'s white pill.
@@ -480,7 +480,7 @@ impl Workspace {
         f(&mut p);
         if crate::UI_PREVIEW { p.quick_hotkey = false; p.auto_update = false; p.remote_images = false; }
         if let Err(e) = save(&p) {
-            self.show_toast_kind(ui::ToastKind::Error, &format!("{}: {e}", tr("设置保存失败", "Could not save settings")), cx);
+            self.show_toast_kind(ui::ToastKind::Error, &format!("{}: {e}", crate::i18n::tr3("设置保存失败", "Could not save settings", "Không lưu được cài đặt")), cx);
             return;
         }
         if p.appearance != old.appearance { apply_appearance(&p.appearance); }
@@ -542,7 +542,7 @@ impl Workspace {
         let in_trash = self.view == View::Trash;
         let nav_row = |page: Option<Page>, cx: &mut Context<Self>| {
             let on = if page.is_some() { page == current } else { in_trash };
-            let (title, icon) = page.map_or((tr("回收站", "Trash"), "bin"), |p| (p.title(), p.icon()));
+            let (title, icon) = page.map_or((crate::i18n::tr3("回收站", "Trash", "Thùng rác"), "bin"), |p| (p.title(), p.icon()));
             div().id(SharedString::from(format!("settings-nav-{page:?}"))).h(px(sb::ROW_H)).flex().items_center().pl(px(6.)).pr(px(4.)).rounded(px(sb::ROW_R))
                 .text_size(px(13.)).line_height(px(20.)).cursor_pointer()
                 .when(on, |d| d.bg(Theme::sidebar_selected()).text_color(Theme::text()))
@@ -559,11 +559,11 @@ impl Workspace {
             // 主页's, not a section header's: the 34pt box keeps the rows below.
             .child(div().pt(px(8.)).px(px(sb::SB_X)).flex().flex_col()
                 .child(div().h(px(sb::SECTION_H)).pl(px(4.)).pt(px((sb::SECTION_TOP + sb::SECTION_H) / 2. - sb::ROW_H / 2.))
-                    .child(div().px(px(4.)).text_size(px(13.)).line_height(px(20.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::sidebar_section()).child(tr("设置", "Settings"))))
+                    .child(div().px(px(4.)).text_size(px(13.)).line_height(px(20.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::sidebar_section()).child(crate::i18n::tr3("设置", "Settings", "Cài đặt"))))
                 .child(div().flex().flex_col().gap(px(sb::ROW_GAP)).children(NAV.iter().map(|p| nav_row(*p, cx)).collect::<Vec<_>>())))
             // Where 设置 was: 返回, back to the page 设置 was opened from.
             .child(div().flex_1())
-            .child(sb::footer_slot(sb::footer_row("ft-back", "arrow-left", tr("返回", "Back")).tip(tr("返回", "Back"), Some("Esc"))
+            .child(sb::footer_slot(sb::footer_row("ft-back", "arrow-left", crate::i18n::tr3("返回", "Back", "Quay lại")).tip(crate::i18n::tr3("返回", "Back", "Quay lại"), Some("Esc"))
                 .on_click(cx.listener(|w, _, _, cx| w.close_settings(cx)))))
             .into_any_element()
     }
@@ -580,9 +580,9 @@ impl Workspace {
         };
         div().flex().items_center().ml(px(4.)).gap(px(4.))
             .child(bar_button("settings-collapse", if open { "panel-left-close" } else { "panel-left-open" })
-                .tip(if open { tr("收起侧栏", "Hide sidebar") } else { tr("展开侧栏", "Show sidebar") }, Some(crate::shortcuts::hint("workspace::ToggleSidebar", "⌘ + ]")))
+                .tip(if open { crate::i18n::tr3("收起侧栏", "Hide sidebar", "Ẩn thanh bên") } else { crate::i18n::tr3("展开侧栏", "Show sidebar", "Hiện thanh bên") }, Some(crate::shortcuts::hint("workspace::ToggleSidebar", "⌘ + ]")))
                 .on_click(cx.listener(|w, _, _, cx| { w.sidebar_open = !w.sidebar_open; cx.notify(); })))
-            .child(bar_button("settings-home", "home").tip(tr("返回主页", "Home"), Some(crate::shortcuts::hint("workspace::GoHome", "⌘ + ⌥ + Home")))
+            .child(bar_button("settings-home", "home").tip(crate::i18n::tr3("返回主页", "Home", "Trang chủ"), Some(crate::shortcuts::hint("workspace::GoHome", "⌘ + ⌥ + Home")))
                 .on_click(cx.listener(|w, _, _, cx| w.show_view(View::Home, cx))))
             .into_any_element()
     }
@@ -622,7 +622,7 @@ impl Workspace {
             .child(group(None, vec![
                 row(crate::i18n::tr3("界面语言", "Interface language", "Ngôn ngữ giao diện"), None,
                     segmented("lang", &Lang::ALL.map(Lang::label), p.lang().index(), |w, i, cx| w.set_pref(|p| p.lang = Lang::ALL[i].code().into(), cx), cx)).into_any_element(),
-                row(tr("本地工作区", "Local workspace"),
+                row(crate::i18n::tr3("本地工作区", "Local workspace", "Không gian cục bộ"),
                     desc(crate::i18n::en_or_vi("Imported PDFs and thumbnails stay in this workspace. Open a document to choose a translation provider. Cloud text transfer is opt-in.")),
                     div().text_size(px(12.)).text_color(Theme::text_caption()).child(crate::i18n::en_or_vi("Local PDF library")),
                 ).into_any_element(),
@@ -647,13 +647,13 @@ impl Workspace {
             }
             return div().w_full().flex().flex_col().gap(px(16.))
                 .child(group(None, vec![
-                    row(tr("外观", "Appearance"), None,
-                        segmented("appearance", &[tr("跟随系统", "System"), tr("浅色", "Light"), tr("深色", "Dark")], at,
+                    row(crate::i18n::tr3("外观", "Appearance", "Giao diện"), None,
+                        segmented("appearance", &[crate::i18n::tr3("跟随系统", "System", "Hệ thống"), crate::i18n::tr3("浅色", "Light", "Sáng"), crate::i18n::tr3("深色", "Dark", "Tối")], at,
                             |w, i, cx| w.set_pref(|p| p.appearance = ["", "light", "dark"][i].into(), cx), cx)).into_any_element(),
                 ]))
                 .child(group(None, vec![
                     div().w_full().px(px(16.)).py(px(12.)).flex().flex_col().gap(px(10.))
-                        .child(div().text_size(px(13.)).line_height(px(20.)).text_color(Theme::text()).child(tr("Bảng màu", "Colour palette")))
+                        .child(div().text_size(px(13.)).line_height(px(20.)).text_color(Theme::text()).child(crate::i18n::tr3("Bảng màu", "Colour palette", "Bảng màu")))
                         .child(palettes)
                         .into_any_element(),
                 ]))
@@ -671,7 +671,7 @@ impl Workspace {
         let where_: SharedString = match &sel_path {
             // Inside the library: the short path (the full one wraps on narrow windows).
             Some(p) => p.strip_prefix(crate::store::Store::root_dir()).unwrap_or(p).display().to_string().into(),
-            None => tr("内置主题", "Built in").into(),
+            None => crate::i18n::tr3("内置主题", "Built in", "Có sẵn").into(),
         };
         let (edit_id, dup_id, rm_id, open_id) = (sel_id.clone(), sel_id.clone(), sel_id.clone(), sel_id);
         let anchor = self.theme_anchor.clone();
@@ -693,21 +693,21 @@ impl Workspace {
         div().w_full().flex().flex_col().gap(px(28.))
             .child(div().w_full().flex().flex_col().gap(px(8.))
                 .child(group(None, vec![
-                    row(tr("外观", "Appearance"), None, {
+                    row(crate::i18n::tr3("外观", "Appearance", "Giao diện"), None, {
                         let at = match prefs().appearance.as_str() { "light" => 1, "dark" => 2, _ => 0 };
-                        segmented("appearance", &[tr("跟随系统", "System"), tr("浅色", "Light"), tr("深色", "Dark")], at,
+                        segmented("appearance", &[crate::i18n::tr3("跟随系统", "System", "Hệ thống"), crate::i18n::tr3("浅色", "Light", "Sáng"), crate::i18n::tr3("深色", "Dark", "Tối")], at,
                             |w, i, cx| w.set_pref(|p| p.appearance = ["", "light", "dark"][i].into(), cx), cx)
                     }).into_any_element(),
-                    row(tr("文档主题", "Document theme"), None, picker).into_any_element(),
+                    row(crate::i18n::tr3("文档主题", "Document theme", "Chủ đề tài liệu"), None, picker).into_any_element(),
                     sample.into_any_element(),
-                    row(tr("主题 CSS", "Theme CSS"), Some(where_),
+                    row(crate::i18n::tr3("主题 CSS", "Theme CSS", "CSS của chủ đề"), Some(where_),
                         div().flex().items_center().gap(px(8.))
-                            .when(customized || own, |d| d.child(link_button("theme-remove", if customized { tr("恢复默认", "Restore") } else { tr("删除", "Delete") })
+                            .when(customized || own, |d| d.child(link_button("theme-remove", if customized { crate::i18n::tr3("恢复默认", "Restore", "Khôi phục") } else { crate::i18n::tr3("删除", "Delete", "Xoá") })
                                 .on_click(cx.listener(move |w, _, _, cx| w.remove_theme(&rm_id, cx)))))
-                            .child(button("theme-duplicate", tr("复制为新主题", "Duplicate")).on_click(cx.listener(move |w, _, _, cx| w.duplicate_theme(&dup_id, cx))))
-                            .child(button("theme-edit", tr("编辑 CSS", "Edit CSS")).on_click(cx.listener(move |w, _, _, cx| w.edit_theme(&edit_id, cx))))).into_any_element(),
+                            .child(button("theme-duplicate", crate::i18n::tr3("复制为新主题", "Duplicate", "Tạo bản sao")).on_click(cx.listener(move |w, _, _, cx| w.duplicate_theme(&dup_id, cx))))
+                            .child(button("theme-edit", crate::i18n::tr3("编辑 CSS", "Edit CSS", "Sửa CSS")).on_click(cx.listener(move |w, _, _, cx| w.edit_theme(&edit_id, cx))))).into_any_element(),
                 ]))
-                .children(errors.into_iter().chain(warnings.into_iter().take(8).map(|w| format!("{}：{w}", tr("未生效", "Ignored")))).map(|e| div().px(px(4.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::danger()).child(e)))
+                .children(errors.into_iter().chain(warnings.into_iter().take(8).map(|w| format!("{}：{w}", crate::i18n::tr3("未生效", "Ignored", "Bị bỏ qua")))).map(|e| div().px(px(4.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::danger()).child(e)))
                 )
             .into_any_element()
     }
@@ -717,15 +717,15 @@ impl Workspace {
         let location = if cfg!(target_os = "windows") { root.display().to_string() } else {
             dirs::home_dir().and_then(|h| root.strip_prefix(h).ok().map(|r| format!("~/{}", r.display()))).unwrap_or_else(|| root.display().to_string())
         };
-        let reveal = if cfg!(target_os = "macos") { tr("在访达中显示", "Show in Finder") } else if cfg!(target_os = "windows") {
-            tr("在文件资源管理器中显示", "Show in File Explorer")
-        } else { tr("在文件管理器中显示", "Show in File Manager") };
+        let reveal = if cfg!(target_os = "macos") { crate::i18n::tr3("在访达中显示", "Show in Finder", "Hiện trong Finder") } else if cfg!(target_os = "windows") {
+            crate::i18n::tr3("在文件资源管理器中显示", "Show in File Explorer", "Hiện trong File Explorer")
+        } else { crate::i18n::tr3("在文件管理器中显示", "Show in File Manager", "Hiện trong trình quản lý tệp") };
         div().w_full().flex().flex_col().gap(px(8.))
             .child(group(None, vec![
-                row(tr("文档库文件夹", "Documents folder"), Some(location.into()),
+                row(crate::i18n::tr3("文档库文件夹", "Documents folder", "Thư mục tài liệu"), Some(location.into()),
                     button("reveal-library", reveal).on_click(|_, _, cx| cx.reveal_path(&crate::store::Store::root_dir()))).into_any_element(),
-                row(tr("回收站", "Trash"), Some(if english() { format!("Deleted documents are kept for {} days.", crate::store::TRASH_DAYS) } else { format!("删除的文档保留 {} 天后自动清除。", crate::store::TRASH_DAYS) }.into()),
-                    button("open-trash", tr("打开", "Open")).on_click(cx.listener(|w, _, _, cx| w.show_view(View::Trash, cx)))).into_any_element(),
+                row(crate::i18n::tr3("回收站", "Trash", "Thùng rác"), Some(if english() { format!("Deleted documents are kept for {} days.", crate::store::TRASH_DAYS) } else { format!("删除的文档保留 {} 天后自动清除。", crate::store::TRASH_DAYS) }.into()),
+                    button("open-trash", crate::i18n::tr3("打开", "Open", "Mở")).on_click(cx.listener(|w, _, _, cx| w.show_view(View::Trash, cx)))).into_any_element(),
             ]))
             .into_any_element()
     }
@@ -733,8 +733,8 @@ impl Workspace {
     fn about_page(&self, _cx: &mut Context<Self>) -> AnyElement {
         div().w_full().flex().flex_col().gap(px(28.))
             .child(group(None, vec![
-                row("Workspace", desc(tr("原生 PDF 工作区界面预览。产品名称尚未确定。", "Native PDF reading and translation workspace. No product name has been chosen.")), div()).into_any_element(),
-                row(tr("实现", "Interface"), desc("Rust + GPUI"), div()).into_any_element(),
+                row("Workspace", desc(crate::i18n::tr3("原生 PDF 工作区界面预览。产品名称尚未确定。", "Native PDF reading and translation workspace. No product name has been chosen.", "Không gian đọc và dịch PDF gốc. Chưa chọn tên sản phẩm.")), div()).into_any_element(),
+                row(crate::i18n::tr3("实现", "Interface", "Giao diện"), desc("Rust + GPUI"), div()).into_any_element(),
             ]))
             .into_any_element()
     }
