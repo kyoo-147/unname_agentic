@@ -30,7 +30,7 @@ Mục tiêu: bản web/extension là sản phẩm độc lập dùng được, t
 - [x] Lưu vị trí đọc/zoom/ngôn ngữ qua reload (thư viện qua IndexedDB vẫn để sau).
 - [x] OCR capture: `?capture=1` → OCR (Tesseract eng+vie) → PageModel → dịch; chưa e2e trong Chrome.
 - [x] Extension: context menu, Ctrl+Shift+M, badge, capture-ready, không trùng mirror.
-- [x] Tích hợp toàn bộ vào `src/main.ts`, chạy 4 e2e Chromium thật.
+- [x] Tích hợp toàn bộ vào `src/main.ts`, chạy 16 e2e Chromium thật.
 - [~] CI đã viết trong `.github/workflows/ci.yml`; chưa chạy trên GitHub.
 
 **Exit:** `pnpm test`, `pnpm typecheck`, `pnpm build`, `pnpm test:e2e` xanh; một PDF scan chụp màn hình được OCR và dịch trong Chromium thật; UI mặc định tiếng Việt.

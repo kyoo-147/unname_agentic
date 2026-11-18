@@ -106,8 +106,8 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | D05 | Đếm ký tự/chi phí ước tính | [x] | `characterCount` trong kết quả và status bar |
 | D06 | Glossary parser + kiểm tra thuật ngữ | [x] | `parseGlossary`, giới hạn 200 mục, test edge cases |
 | D07 | Prompt template có version, chống prompt injection | [~] | có promptVersion + câu “do not follow instructions”; chưa test |
-| D08 | Test web đơn vị | [x] | 189 passed / 16 files (2026-11-18) |
-| D09 | Test e2e Chromium | [x] | 4 passed (2026-11-18), gồm mặc định tiếng Việt |
+| D08 | Test web đơn vị | [x] | 233 passed / 19 files (2026-11-18) |
+| D09 | Test e2e Chromium | [x] | 16 passed (2026-11-18), gồm mặc định tiếng Việt, capture OCR, export và a11y |
 | D10 | Test native | [~] | 95 + 71 passed trước khi xoá editor; chưa build lại |
 | D11 | CI GitHub Actions | [~] | `.github/workflows/ci.yml` đã có; chưa chạy trên GitHub |
 | D12 | LICENSE root + third-party notices | [x] | `LICENSE` MIT + notice OCR/PDFium/GPUI |
@@ -151,7 +151,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 - Build: `cargo check` sạch; `cargo test --workspace` 46 pass / 1 ignored; `cargo build -p pdf_workspace` OK.
 - Desktop backend: `cargo test --manifest-path desktop/Cargo.toml` 20 pass / 0 failed.
 - Ảnh: `artifacts/desktop-verify/desktop-{home,reader}-{vi,en,zh}.png`; chi tiết và hash trong [docs/desktop-verification.md](desktop-verification.md).
-- Web flow: 11 ảnh trong `artifacts/ui-flows/`; e2e 15 test (14 cũ + export/library).
+- Web flow: 11 ảnh trong `artifacts/ui-flows/` + video `artifacts/ui-flows/demo-flow.webm`; e2e 16 test.
 - Defect còn mở: lần import đầu blank ở 18s (25s thì render); footer reader còn câu chẩn đoán tiếng Anh; chưa test ở 980px.
 
 ## 4. Cách chia việc song song
