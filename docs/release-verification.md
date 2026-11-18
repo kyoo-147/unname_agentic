@@ -18,12 +18,12 @@ cargo build --release --manifest-path native-shell/Cargo.toml -p pdf_workspace -
 
 Result: exit 0, 36 pre-existing warnings, 6m 38s cold build (31.7s after the first-import fix).
 
-- Executable: `pdf_workspace.exe`, 21,796,864 bytes
-- SHA-256: `4E5CDB48A3F53A1F3480139316180335F49E82E2C4EC1578264C8B1F60AC969D`
+- Executable: `pdf_workspace.exe`, 21,805,056 bytes
+- SHA-256: `6EAB676D4DF02E4FEAFE119CE445BE7EBA2BA70BEC5DF7A23F3067435BB31C1E`
 - Package: `dist/pdf-workspace-windows-x64-release-20261118-110746/`
 - Native-messaging host: `pdf-workspace-host.exe`, 478,208 bytes, SHA-256 `79713585756FC360B2CC9590C3FBE1B5769030DFDBAFBF4E841358BDC95AAF1C`
 - Zip: `dist/pdf-workspace-windows-x64-release-20261118-110746.zip`, 11.36 MB
-- Zip SHA-256: `0540DE0065875FD72EEF624755ED21ED2D15180579F5088A6D71962058EE69F3`
+- Zip SHA-256: `3F4012BB59F0980EF6ADDE1565E5DC1F4188B0D866CF1001A6E50DB588939535`
 
 Package contents: executable, `pdfium.dll`, `pdf-workspace-host.exe`, `install-native-host.ps1`,
 root and upstream licenses, Lucide license, PDFium version and component licenses. The package is
@@ -86,6 +86,9 @@ the restart was verified with the same two-message exchange and screenshot `arti
 Answers stream through `provider::chat_stream` (SSE `delta.content` frames) and the assistant bubble grows
 while the stream is open; the fixture provider was extended to emit SSE and the packaged build rendered
 `Bản dịch kiểm thử: Chào anh, đây là kiểm tra streaming` (`artifacts/desktop-chat-stream3.png`).
+The chat also offers three contextual prompts (`Tóm tắt trang này`, `Liệt kê số liệu`, `Giải thích thuật ngữ`)
+when a page is attached; screenshot `artifacts/desktop-chat-suggestions.png`. `parse_sse_delta` has a unit test
+for real deltas, `[DONE]`, ping and non-JSON lines.
 Still open: tool calls, selecting another page, and a provider/model picker inside chat. Without a
 configured provider the view shows the provider error inline.
 

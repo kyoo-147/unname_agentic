@@ -143,6 +143,21 @@ impl Chat {
         }).detach();
     }
 
+    fn suggestions(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let prompts = if self.context.is_some() {
+            [tr3("Tóm tắt trang này", "Summarize this page", "Tóm tắt trang này"), tr3("Liệt kê số liệu", "List the numbers", "Liệt kê số liệu"), tr3("Giải thích thuật ngữ", "Explain the terms", "Giải thích thuật ngữ")]
+        } else {
+            [tr3("Workspace này dùng thế nào?", "How do I use this workspace?", "Workspace này dùng thế nào?"), tr3("Dịch một PDF thế nào?", "How do I translate a PDF?", "Dịch một PDF thế nào?"), tr3("Dữ liệu ở đâu?", "Where is my data stored?", "Dữ liệu ở đâu?")]
+        };
+        prompts.into_iter().enumerate().map(|(index, prompt)| {
+            div().id(("chat-suggestion", index)).px(px(10.)).h(px(28.)).rounded(px(8.)).border_1().border_color(Theme::line_border()).flex().items_center().cursor_pointer()
+                .text_size(px(12.)).text_color(Theme::text_caption()).hover(|s| s.bg(Theme::fill_hover()))
+                .child(prompt)
+                .on_click(cx.listener(move |chat, _, _, cx| chat.ask(prompt.to_string(), cx)))
+                .into_any_element()
+        }).collect()
+    }
+
     fn message_bubble(&self, message: &ChatMessage) -> AnyElement {
         let (background, text_color) = if message.user {
             (Theme::fill_hover_strong(), Theme::text())
@@ -185,11 +200,11 @@ impl Render for Chat {
                             .on_click(cx.listener(|chat, _, _, cx| chat.set_context(None, cx))))))
             .child(div().id("chat-messages").flex_1().min_h_0().overflow_y_scroll().px(px(24.)).py(px(20.))
                 .flex().flex_col().gap(px(10.))
-                .when(messages.is_empty(), |element| element.child(div().text_color(Theme::text_caption()).text_size(px(13.)).child(tr3(
+                .when(messages.is_empty(), |element| element.child(div().flex().flex_col().gap(px(10.)).child(div().text_color(Theme::text_caption()).text_size(px(13.)).child(tr3(
                     "Hỏi về cách dùng, hoặc mở một PDF để đọc song song.",
                     "Ask how to use the workspace, or open a PDF to read side by side.",
                     "Hỏi về cách dùng, hoặc mở một PDF để đọc song song.",
-                ))))
+                ))).children(self.suggestions(cx))))
                 .children(messages)
                 .when(self.busy, |element| element.child(div().text_color(Theme::text_caption()).text_size(px(12.)).child(tr3("Đang trả lời…", "Answering…", "Đang trả lời…"))))
                 .when_some(self.error.clone(), |element, error| element.child(div().text_color(Theme::danger()).text_size(px(12.)).child(error))))

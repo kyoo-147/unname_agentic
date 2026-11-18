@@ -60,6 +60,14 @@ pub fn chat(settings: &ProviderSettings, messages: &[(bool, String)], context: O
     Ok(content.trim().to_string())
 }
 
+/// One SSE line from an OpenAI-compatible stream.
+pub fn parse_sse_delta(line: &str) -> Option<String> {
+    let data = line.trim().strip_prefix("data:")?.trim();
+    if data.is_empty() || data == "[DONE]" { return None; }
+    let value: Value = serde_json::from_str(data).ok()?;
+    value.pointer("/choices/0/delta/content").and_then(Value::as_str).filter(|delta| !delta.is_empty()).map(str::to_string)
+}
+
 /// A streaming chat completion. `on_delta` receives each text fragment; the
 /// complete answer is returned once the stream ends.
 pub fn chat_stream(settings: &ProviderSettings, messages: &[(bool, String)], context: Option<(&str, &str)>, mut on_delta: impl FnMut(&str)) -> Result<String> {
@@ -84,13 +92,10 @@ pub fn chat_stream(settings: &ProviderSettings, messages: &[(bool, String)], con
     loop {
         line.clear();
         if reader.read_line(&mut line)? == 0 { break; }
-        let Some(data) = line.trim().strip_prefix("data:") else { continue };
-        let data = data.trim();
-        if data == "[DONE]" { break; }
-        let Ok(value) = serde_json::from_str::<Value>(data) else { continue };
-        if let Some(delta) = value.pointer("/choices/0/delta/content").and_then(Value::as_str) {
-            answer.push_str(delta);
-            on_delta(delta);
+        if line.trim() == "data: [DONE]" { break; }
+        if let Some(delta) = parse_sse_delta(&line) {
+            answer.push_str(&delta);
+            on_delta(&delta);
         }
     }
     anyhow::ensure!(!answer.trim().is_empty(), "The assistant returned an empty answer");
@@ -199,7 +204,7 @@ pub fn save_key(_: ProviderKind, _: &str) -> Result<()> { anyhow::bail!("Credent
 
 #[cfg(test)]
 mod chat_tests {
-    use super::chat_system;
+    use super::{chat_system, parse_sse_delta};
 
     #[test]
     fn document_context_is_fenced_as_data() {
@@ -214,5 +219,14 @@ mod chat_tests {
         let system = chat_system(None);
         assert!(!system.contains("<document>"));
         assert!(system.contains("never claim to have read a document"));
+    }
+
+    #[test]
+    fn sse_deltas_are_extracted_and_done_is_ignored() {
+        assert_eq!(parse_sse_delta("data: {\"choices\":[{\"delta\":{\"content\":\"Xin \"}}]}"), Some("Xin ".to_string()));
+        assert_eq!(parse_sse_delta("data: [DONE]"), None);
+        assert_eq!(parse_sse_delta("event: ping"), None);
+        assert_eq!(parse_sse_delta("data: not-json"), None);
+        assert_eq!(parse_sse_delta("data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}"), None);
     }
 }
