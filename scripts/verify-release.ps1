@@ -11,6 +11,7 @@ build output itself:
   * dist/web/index.html references only files that exist in dist/web.
 
 The first failing check stops the gate, prints the table, and exits 1.
+Runs unchanged in Windows PowerShell 5.1 and PowerShell 7 (CI uses pwsh).
 
 .PARAMETER ArtifactsOnly
 Check the existing dist output without running unit, typecheck, build or e2e.
@@ -40,9 +41,15 @@ try {
         }
     }
 
+    function Get-RelativePath([string]$Base, [string]$Full) {
+        $prefix = $Base.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+        if (-not $Full.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { throw "$Full is not inside $Base" }
+        return $Full.Substring($prefix.Length)
+    }
+
     function Assert-ExtensionOutput {
-        $output = Join-Path $root 'dist/extension'
-        $web = Join-Path $root 'dist/web'
+        $output = [System.IO.Path]::GetFullPath((Join-Path $root 'dist/extension'))
+        $web = [System.IO.Path]::GetFullPath((Join-Path $root 'dist/web'))
         if (-not (Test-Path -LiteralPath $output)) { throw 'dist/extension is missing; run pnpm build first.' }
         $manifestPath = Join-Path $output 'manifest.json'
         if (-not (Test-Path -LiteralPath $manifestPath)) { throw 'dist/extension/manifest.json is missing.' }
@@ -56,7 +63,7 @@ try {
         $stale = [System.Collections.Generic.List[string]]::new()
         $bundles = @(Get-ChildItem -LiteralPath $output -Recurse -File | Where-Object { $_.Extension -in '.js', '.css', '.map' })
         foreach ($bundle in $bundles) {
-            $relative = [System.IO.Path]::GetRelativePath($output, $bundle.FullName)
+            $relative = Get-RelativePath $output $bundle.FullName
             if ($own -contains $relative) { continue }
             # Anything else is a copy of dist/web; a leftover from an earlier build is not.
             if (-not (Test-Path -LiteralPath (Join-Path $web $relative))) { $stale.Add($relative) }
@@ -65,21 +72,20 @@ try {
     }
 
     function Assert-WebReferences {
-        $web = Join-Path $root 'dist/web'
+        $web = [System.IO.Path]::GetFullPath((Join-Path $root 'dist/web'))
         $indexPath = Join-Path $web 'index.html'
         if (-not (Test-Path -LiteralPath $indexPath)) { throw 'dist/web/index.html is missing; run pnpm build first.' }
         $html = Get-Content -LiteralPath $indexPath -Raw
         $references = [regex]::Matches($html, '(?:src|href)\s*=\s*"([^"]+)"') | ForEach-Object { $_.Groups[1].Value }
         $missing = [System.Collections.Generic.List[string]]::new()
         $checked = 0
-        $prefix = $web.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
         foreach ($reference in $references) {
             # Absolute URLs, protocol-relative URLs and fragments are not build output.
             if ($reference -match '^(?:[a-z][a-z0-9+.-]*:|//|#)') { continue }
             $relative = [System.Uri]::UnescapeDataString(($reference -split '[?#]')[0])
-            $checked++
             $resolved = [System.IO.Path]::GetFullPath((Join-Path $web $relative))
-            if (-not $resolved.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { throw "dist/web/index.html references a path outside dist/web: $reference" }
+            $null = Get-RelativePath $web $resolved
+            $checked++
             if (-not (Test-Path -LiteralPath $resolved)) { $missing.Add($reference) }
         }
         if ($checked -eq 0) { throw 'dist/web/index.html references no local files; the build output looks wrong.' }

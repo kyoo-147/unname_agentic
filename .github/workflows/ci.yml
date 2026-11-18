@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -12,36 +16,106 @@ concurrency:
 jobs:
   web:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        timeout-minutes: 5
       - uses: pnpm/action-setup@v4
+        timeout-minutes: 5
         with:
           version: 10
       - uses: actions/setup-node@v4
+        timeout-minutes: 5
         with:
           node-version: 24
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm test
-      - run: pnpm typecheck
-      - run: pnpm build
-      - run: pnpm exec playwright install chromium
-      - run: pnpm test:e2e
+      - name: Install dependencies
+        timeout-minutes: 10
+        run: pnpm install --frozen-lockfile
+      - name: Unit tests
+        timeout-minutes: 10
+        run: pnpm test
+      - name: Typecheck
+        timeout-minutes: 5
+        run: pnpm typecheck
+      - name: Build reader and extension
+        timeout-minutes: 10
+        run: pnpm build
+      - name: Install Chromium for Playwright
+        timeout-minutes: 15
+        run: pnpm exec playwright install --with-deps chromium
+      - name: End-to-end journeys
+        timeout-minutes: 25
+        # `pnpm test:e2e` would inherit whatever retries playwright.config.ts grows.
+        # A release gate must see the first run, so pin retries to 0 here.
+        run: pnpm exec playwright test --retries=0
+      - name: Check shipped artifacts
+        timeout-minutes: 5
+        run: pwsh -File scripts/verify-release.ps1 -ArtifactsOnly
       - name: Upload Playwright failures
         if: failure()
+        timeout-minutes: 5
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: playwright-failures
           path: |
             playwright-report
             test-results
           if-no-files-found: ignore
+      - name: Upload journey screenshots
+        if: success()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: journey-screenshots
+          path: |
+            artifacts/ui-flows
+            artifacts/*.png
+          if-no-files-found: ignore
 
   native:
-    # Native is documented as a separate gate: the GPUI target needs a large
-    # disk and a full Windows MSVC build, so it is not run on every push yet.
-    if: false
+    # Manual only, and honest about what it does. The GPUI shell needs tens of GB
+    # of free disk (docs/roadmap.md: the D: drive had ~3.2 GB free and could not
+    # build the target) plus a Visual Studio C++ Build Tools install carrying the
+    # MSVC x64 toolchain and the Windows SDK, entered through VsDevCmd
+    # -arch=x64 -host_arch=x64 as scripts/build-shell.ps1 does. Hosted runners do
+    # not ship that combination, so this job checks the preconditions and names
+    # what is missing instead of pretending the shell was built.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
-      - run: echo "Enable when the native build gate has a dedicated runner."
+      - uses: actions/checkout@v4
+        timeout-minutes: 5
+      - name: Check native build preconditions
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $problems = [System.Collections.Generic.List[string]]::new()
+
+          $workspace = if ($env:RUNNER_WORKSPACE) { $env:RUNNER_WORKSPACE } elseif ($env:GITHUB_WORKSPACE) { $env:GITHUB_WORKSPACE } else { (Get-Location).Path }
+          $drive = (Split-Path -Qualifier $workspace).TrimEnd(':')
+          $freeGb = [math]::Round((Get-PSDrive -Name $drive).Free / 1GB, 1)
+          if ($freeGb -lt 20) { $problems.Add("only $freeGb GB free on ${drive}:; the GPUI target needs tens of GB") }
+
+          $cargo = Get-Command cargo -ErrorAction SilentlyContinue
+          if (-not $cargo) { $problems.Add('cargo is not on PATH; install the pinned Rust toolchain') }
+
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $msvc = $null
+          if (Test-Path -LiteralPath $vswhere) {
+              $msvc = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          }
+          if (-not $msvc) { $problems.Add('no Visual Studio install with Microsoft.VisualStudio.Component.VC.Tools.x86.x64') }
+
+          $cargoVersion = if ($cargo) { (& cargo --version | Out-String).Trim() } else { 'missing' }
+          $msvcPath = if ($msvc) { $msvc } else { 'missing' }
+          [pscustomobject]@{ FreeDiskGb = $freeGb; Cargo = $cargoVersion; Msvc = $msvcPath } | Format-List | Out-String | Write-Output
+
+          if ($problems.Count -gt 0) {
+              foreach ($problem in $problems) { Write-Output "::error::$problem" }
+              Write-Output 'Preconditions are not met. This job reports them; it never builds the shell.'
+              exit 1
+          }
+          Write-Output 'Preconditions look met. This job still does not build the shell: run pwsh -File scripts/build-shell.ps1 -Release on a provisioned Windows machine for the gate evidence.'

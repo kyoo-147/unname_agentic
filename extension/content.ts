@@ -1,3 +1,5 @@
+export {};
+
 const seen = new Set<string>();
 let lastState = '';
 let applying = false;

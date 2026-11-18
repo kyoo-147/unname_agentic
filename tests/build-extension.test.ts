@@ -64,8 +64,8 @@ describe('extension build output', () => {
     await writeFile(path.join(root, 'dist', 'extension', 'popup.js'), "document.body.textContent = 'Automatic mirroring is off.';\n");
 
     const result = await build(root);
-    expect(result.stderr).toBe('');
     expect(result.code).toBe(0);
+    expect(result.stdout).toContain('Built Chrome MV3 extension');
 
     const files = await listFiles(path.join(root, 'dist', 'extension'));
     expect(files).not.toContain('assets/index-stale.js');

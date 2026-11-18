@@ -18,7 +18,7 @@
  *   nativeMessaging  Optional local desktop companion; never connected during detection,
  *                    translation, or ordinary reader acquisition.
  *   contextMenus     "Mở bản dịch Mirror" for a page or for a link target.
- *   host_permissions http://*/*, https://*/*, file:///* — the detector inspects response
+ *   host_permissions  every http/https host and file:/// — the detector inspects response
  *                    headers and embedded objects on whatever page the user browses.
  *                    Nothing is uploaded; the only fetch is the detected PDF, with the
  *                    user's own cookies, into the extension reader.

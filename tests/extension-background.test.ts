@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import manifest from '../extension/manifest.json';
 
@@ -186,6 +187,16 @@ describe('context menu, commands, badge and capture contract', () => {
     expect(manifest.host_permissions).toEqual(['http://*/*', 'https://*/*', 'file:///*']);
     expect(manifest.description).toMatch(/chụp/i);
   });
+  it('pins the exact permission list and requires a written justification for each entry', () => {
+    expect(manifest.permissions).toEqual(['storage', 'tabs', 'webRequest', 'scripting', 'activeTab', 'nativeMessaging', 'contextMenus']);
+    expect(manifest.host_permissions).toEqual(['http://*/*', 'https://*/*', 'file:///*']);
+    const source = readFileSync(new URL('../extension/background.ts', import.meta.url), 'utf8');
+    const justification = /^\/\*[\s\S]*?\*\//.exec(source)?.[0] ?? '';
+    expect(justification).toContain('Manifest permission justification');
+    for (const permission of manifest.permissions) expect(justification, permission).toMatch(new RegExp(`^\\s*\\*\\s+${permission}\\s`, 'm'));
+    const hosts = justification.split('\n').find(line => /^\s*\*\s+host_permissions\s/.test(line)) ?? '';
+    for (const host of manifest.host_permissions) expect(hosts, host).toContain(host);
+  });
   it('registers the Vietnamese PDF context menu on install', async () => {
     const h = await install();
     h.chrome.runtime.onInstalled.fire({ reason: 'install' });
@@ -201,6 +212,32 @@ describe('context menu, commands, badge and capture contract', () => {
   it('notifies instead of mirroring a page that is not a PDF source', async () => {
     const h = await install();
     h.chrome.contextMenus.onClicked.fire({ menuItemId: 'mirror-open', tabId: 3, pageUrl: 'https://example.com/article' }, { id: 3, url: 'https://example.com/article', index: 0, active: true });
+    await vi.waitFor(() => expect(h.chrome.tabs.sendMessage).toHaveBeenCalledWith(3, expect.objectContaining({ type: 'mirror:notice', message: expect.stringContaining('PDF') })));
+    expect(h.chrome.tabs.create).not.toHaveBeenCalled();
+  });
+  it('opens a mirror for a PDF link target even though the page itself is not a PDF', async () => {
+    const h = await install();
+    h.chrome.contextMenus.onClicked.fire({ menuItemId: 'mirror-open', tabId: 3, pageUrl: 'https://example.com/article', linkUrl: 'https://example.com/paper.pdf' }, { id: 3, url: 'https://example.com/article', index: 0, active: true });
+    await vi.waitFor(() => expect(h.chrome.tabs.create).toHaveBeenCalledTimes(1));
+    expect(h.chrome.tabs.create).toHaveBeenCalledWith(expect.objectContaining({ url: 'chrome-extension://test/index.html?file=https%3A%2F%2Fexample.com%2Fpaper.pdf&sourceTab=3', openerTabId: 3 }));
+    expect(h.session['mirror:session:3']).toMatchObject({ documentUrl: 'https://example.com/article', pdfUrl: 'https://example.com/paper.pdf' });
+    expect(h.chrome.tabs.sendMessage).not.toHaveBeenCalled();
+  });
+  it('opens a mirror for a tab whose response type alone is PDF, then stops trusting it after navigation', async () => {
+    const h = await install();
+    h.chrome.webRequest.onHeadersReceived.fire({ tabId: 3, url: 'https://example.com/download', type: 'main_frame', responseHeaders: [{ name: 'content-type', value: 'application/pdf' }] });
+    h.chrome.contextMenus.onClicked.fire({ menuItemId: 'mirror-open', tabId: 3, pageUrl: 'https://example.com/download' }, { id: 3, url: 'https://example.com/download', index: 0, active: true });
+    await vi.waitFor(() => expect(h.chrome.tabs.create).toHaveBeenCalledTimes(1));
+    expect(h.chrome.tabs.create).toHaveBeenCalledWith(expect.objectContaining({ url: 'chrome-extension://test/index.html?file=https%3A%2F%2Fexample.com%2Fdownload&sourceTab=3' }));
+    delete h.session['mirror:session:3'];
+    h.chrome.tabs.onUpdated.fire(3, { url: 'https://example.com/download' }, { id: 3, url: 'https://example.com/download', index: 0 });
+    h.chrome.contextMenus.onClicked.fire({ menuItemId: 'mirror-open', tabId: 3, pageUrl: 'https://example.com/download' }, { id: 3, url: 'https://example.com/download', index: 0, active: true });
+    await vi.waitFor(() => expect(h.chrome.tabs.sendMessage).toHaveBeenCalledWith(3, expect.objectContaining({ type: 'mirror:notice' })));
+    expect(h.chrome.tabs.create).toHaveBeenCalledTimes(1);
+  });
+  it('notifies instead of mirroring the same URL when neither the path nor the response is PDF', async () => {
+    const h = await install();
+    h.chrome.contextMenus.onClicked.fire({ menuItemId: 'mirror-open', tabId: 3, pageUrl: 'https://example.com/download' }, { id: 3, url: 'https://example.com/download', index: 0, active: true });
     await vi.waitFor(() => expect(h.chrome.tabs.sendMessage).toHaveBeenCalledWith(3, expect.objectContaining({ type: 'mirror:notice', message: expect.stringContaining('PDF') })));
     expect(h.chrome.tabs.create).not.toHaveBeenCalled();
   });

@@ -89,7 +89,7 @@ export function saveBlob(name: string, blob: Blob, opts: SaveOptions = {}): stri
 /** Saves UTF-8 text as a download and returns the sanitised name it used. */
 export function saveTextFile(name: string, text: string, mime: string = TEXT_MIME, opts: SaveOptions = {}): string {
   const type = typeof mime === 'string' && mime.trim() ? mime.trim() : TEXT_MIME;
-  return saveBlob(name, new Blob([text], { type }), { extension: TEXT_EXTENSION, ...opts });
+  return saveBlob(name, new Blob([text], { type }), { ...opts, extension: opts.extension ?? TEXT_EXTENSION });
 }
 
 /** The browser sink: object URL, a synthetic anchor click, then revoke. */
