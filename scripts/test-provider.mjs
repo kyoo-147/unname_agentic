@@ -36,8 +36,13 @@ const server = createServer(async (request, response) => {
       requests++;
       response.setHeader('Content-Type', 'application/json');
       let content = translations.get(text) ?? `Bản dịch kiểm thử: ${text}`;
-      if (payload.response_format?.type === 'json_object') {
-        const blocks = JSON.parse(text);
+      let parsed = undefined;
+      try { parsed = JSON.parse(text); } catch { parsed = undefined; }
+      // Batch envelope: [{ id, text }] in, [{ id, text }] out with the ids preserved.
+      if (Array.isArray(parsed) && parsed.every(item => item && typeof item === 'object' && typeof item.id === 'string' && typeof item.text === 'string')) {
+        content = JSON.stringify(parsed.map(item => ({ id: item.id, text: translations.get(item.text) ?? `Bản dịch kiểm thử: ${item.text}` })));
+      } else if (payload.response_format?.type === 'json_object') {
+        const blocks = parsed;
         if (!Array.isArray(blocks) || !blocks.every(item => typeof item === 'string')) throw new Error('Expected text blocks');
         content = JSON.stringify({ translations: blocks.map(block => translations.get(block) ?? `Bản dịch kiểm thử: ${block}`) });
       }

@@ -77,7 +77,7 @@ const service = new TranslationService(browserTransport());
 const translationQueue = new ViewportScheduler<void>(2);
 const renderQueue = new ViewportScheduler<void>(2);
 let pdf: PDFDocumentProxy | null = null;
-let revision = 0, profile = 0, paused = false, full = false, zoom = 1, split = 50;
+let revision = 0, profile = 0, paused = false, full = false, batching = false, zoom = 1, split = 50;
 let rotation: PageRotation = 0;
 let fit: FitMode = 'width';
 let rotating = false;
@@ -161,7 +161,7 @@ function updateCurrentMarkers() {
 function resetWork() {
   revision++; profile++; requestController.abort(); requestController=new AbortController();
   translationQueue.reset(); renderQueue.reset(); rendered.clear(); translations.clear(); errors.clear(); visible.clear();
-  observer?.disconnect(); observer=null; full=false; paused=false; translationQueue.resume(); refreshTransportLabels();
+  observer?.disconnect(); observer=null; full=false; batching=false; paused=false; translationQueue.resume(); refreshTransportLabels();
   rotation=0; fit='width'; zoom=1; rotating=false; pageNumber=1; pageTotal=0; readingPosition={page:1,fraction:0}; activeDocKey='';
   outlineEntries=[]; outlineReady=false; outlineLoading=false;
   panelKind=null; $('reader-panel').hidden=true; $('outline-toggle').setAttribute('aria-expanded','false'); $('search-toggle').setAttribute('aria-expanded','false');
@@ -341,8 +341,18 @@ function schedulePage(number: number,priority: number) {
   const result=rendered.get(number); if(!result || !canTranslate()) return;
   for(const block of result.model.blocks) scheduleBlock(block,priority);
 }
+function renderTranslationStatus() {
+  setStatusText(() => {
+    const base=t('statusTranslated', {count:translations.size, chars:service.characterCount, mode:t(paused?'modePaused':full?'modeFull':'modeVisible'), provider:providerName()});
+    const cost=estimateCost({characters:service.characterCount,model:settings.model,direction:'both'});
+    return `${base} · ${t('costEstimate')} ${cost?formatUsd(cost.usd):t('costUnknownModel')}`;
+  });
+}
 function scheduleBlock(block: TextBlock,priority: number) {
   if(translations.has(block.id)||errors.has(block.id)||!canTranslate()) return;
+  // Translate-all sends whole pages at once; a per-block request would duplicate it.
+  // Selection (priority < 0) always keeps the fast single-block path.
+  if(batching && priority >= 0) return;
   const generation=revision, currentProfile=profile, snapshot={...settings}, signal=requestController.signal;
   void translationQueue.enqueue(`${profile}:${block.id}`,priority,async()=>{
     try {
@@ -351,11 +361,7 @@ function scheduleBlock(block: TextBlock,priority: number) {
       translations.set(block.id,result.text); errors.delete(block.id);
       const page=rendered.get(block.page); if(page) paintMirror(page);
       if(selected?.id===block.id) renderSelectedTranslation();
-      setStatusText(() => {
-        const base=t('statusTranslated', {count:translations.size, chars:service.characterCount, mode:t(paused?'modePaused':full?'modeFull':'modeVisible'), provider:providerName()});
-        const cost=estimateCost({characters:service.characterCount,model:settings.model,direction:'both'});
-        return `${base} · ${t('costEstimate')} ${cost?formatUsd(cost.usd):t('costUnknownModel')}`;
-      });
+      renderTranslationStatus();
     } catch(error) {
       if(generation!==revision||currentProfile!==profile||signal.aborted) return;
       const message=userMessage(error); errors.set(block.id,message); statusText(message,true);
@@ -363,6 +369,32 @@ function scheduleBlock(block: TextBlock,priority: number) {
       if(selected?.id===block.id) renderSelectedTranslation();
     }
   }).catch(()=>undefined);
+}
+/**
+ * Translates every untranslated block of one rendered page in a single provider
+ * round trip when the provider can batch. Returns false when the page has too
+ * little to gain, so the caller can fall back to the per-block queue.
+ */
+async function translatePageInBatch(number: number): Promise<boolean> {
+  const result=rendered.get(number);
+  if(!result||!canTranslate()) return false;
+  const pending=result.model.blocks.filter(block=>!translations.has(block.id)&&!errors.has(block.id));
+  if(pending.length<2) return false;
+  const generation=revision, currentProfile=profile, snapshot={...settings}, signal=requestController.signal;
+  try {
+    const batch=await service.translateBatch(pending,snapshot,signal);
+    if(generation!==revision||currentProfile!==profile) return true;
+    for(const entry of batch.translations) { translations.set(entry.id,entry.text); errors.delete(entry.id); }
+    const page=rendered.get(number); if(page) paintMirror(page);
+    if(selected&&translations.has(selected.id)) renderSelectedTranslation();
+    renderTranslationStatus();
+    return true;
+  } catch(error) {
+    if(generation!==revision||currentProfile!==profile||signal.aborted) return true;
+    for(const block of pending) scheduleBlock(block,5);
+    statusText(userMessage(error),true);
+    return false;
+  }
 }
 function highlight(id: string) { document.querySelectorAll<HTMLElement>('[data-region]').forEach(element=>element.classList.toggle('paired-highlight',element.dataset.region===id)); }
 function selectBlock(block: TextBlock,opener?: HTMLElement) {
@@ -489,7 +521,20 @@ document.addEventListener('keydown',event=>{
   event.preventDefault();
   void printBilingual();
 });
-$('full').addEventListener('click',async()=>{full=!full;refreshTransportLabels();if(!full){translationQueue.reset();for(const number of visible)schedulePage(number,0);return;}const generation=revision;for(let number=1;pdf&&number<=pdf.numPages&&full&&generation===revision;number++)await ensurePage(number,5);});
+$('full').addEventListener('click',async()=>{
+  full=!full; refreshTransportLabels();
+  if(!full){ batching=false; translationQueue.reset(); for(const number of visible) schedulePage(number,0); return; }
+  const generation=revision;
+  batching=true;
+  try {
+    for(let number=1; pdf&&number<=pdf.numPages&&full&&generation===revision; number++) {
+      await ensurePage(number,5);
+      // The page is rendered now, so one batched request can cover its blocks; a
+      // provider that cannot batch falls back to the per-block queue inside the loop.
+      await translatePageInBatch(number);
+    }
+  } finally { batching=false; }
+});
 $<HTMLSelectElement>('target-language').addEventListener('change',()=>{const value=normalizeLanguageCode($<HTMLSelectElement>('target-language').value);if(value&&value!=='auto'){settings.targetLanguage=value;changeProfile();}});
 function changeProfile() {profile++; requestController.abort();requestController=new AbortController();translationQueue.reset();translations.clear();errors.clear();for(const page of rendered.values())paintMirror(page);for(const number of visible)schedulePage(number,0);updateProvider();status(canTranslate()?'statusSettingsApplied':'statusCloudNeeded');}
 
