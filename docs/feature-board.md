@@ -14,7 +14,7 @@ Nguồn: audit đọc mã thật từng file (3 auditor độc lập) + `pnpm te
 | ⬜ | Chưa có. |
 | ⚪ | Không build/chạy được trên máy này (native: D: còn ~3.0 GB) → **chưa được coi là xong**. |
 
-Số đo hiện tại (HEAD): **310 unit test / 27 file** + **32 e2e pass / 0 fail** (chạy lại trong phiên), typecheck sạch, build ok. Ba con số này là mốc để phát hiện hồi quy; một test xanh **không** chứng minh được tính năng nếu đường UI không gọi tới nó — xem mục 1b.
+Số đo hiện tại (HEAD): **318 unit test / 28 file** + **42 e2e pass / 0 fail** (chạy lại trong phiên), typecheck sạch, build ok. Ba con số này là mốc để phát hiện hồi quy; một test xanh **không** chứng minh được tính năng nếu đường UI không gọi tới nó — xem mục 1b.
 
 **Cổng mới chống hồi quy "commit thiếu file"**: `scripts/check-committed-imports.mjs` resolve mọi import tương đối **trong chính commit** (không phải working tree) và đã bắt đúng sự cố thật hôm nay: `6b08e20` chứa `import('./ocr/scan')` nhưng `src/ocr/scan.ts` chưa được add → `main` build hỏng với người clone. Script chạy trong `verify-release.ps1` và trong CI.
 
@@ -32,7 +32,7 @@ Số đo hiện tại (HEAD): **310 unit test / 27 file** + **32 e2e pass / 0 fa
 | A04 | Xoá glyph gốc dưới chữ đã dịch | ✅ | `document.ts` suppressTextContext; e2e pixel: ink gốc > 100, ink dịch = 0 | — |
 | A05 | Giữ ảnh/biểu đồ/vector | ✅ | `main.ts` paintMirror; e2e 0 pixel lệch ở vùng biểu đồ | — |
 | A06 | Hai pane + kéo chia + reset 50/50 | ✅ | `main.ts` splitter aria-valuenow; e2e ArrowRight → 52 | — |
-| A07 | Đồng bộ trang/zoom với tab nguồn | 🟡 | `ui/bridge.ts`, `extension/background.ts`; test validator + router | Chưa có test chứng minh reader thật sự nhảy theo message |
+| A07 | Đồng bộ trang/zoom với tab nguồn | ✅ | e2e `extension-capture.spec.ts` (test 2): cuộn tab nguồn sang trang 3 rồi 4, viewer thật nhảy theo (`mirror:view-state` thật từ content script) | Chỉ một chiều nguồn→mirror; chiều ngược lại thuộc desktop (B08) |
 | A08 | Dịch ưu tiên vùng nhìn thấy | ✅ | `scheduler.test.ts` selection < visible < prefetch | — |
 | A09 | Dịch toàn bộ, có thể dừng | ✅ | batch từng trang + `AbortController` riêng; e2e `translate-batch.spec.ts` bấm Stop giữa tài liệu: tối đa 2 trang được dịch, nhãn về "Dịch toàn bộ", không lỗi | — |
 | A10 | Pause / resume / retry lỗi | ✅ | journey 02 (pause/resume) + journey 03 (lỗi → Retry → hồi phục); retry giờ quét **mọi trang đã render** và vẽ lại, không chỉ trang đang thấy | Đường retry cho trang đã cuộn qua mới sửa, chưa có e2e riêng |
@@ -47,10 +47,10 @@ Số đo hiện tại (HEAD): **310 unit test / 27 file** + **32 e2e pass / 0 fa
 | A19 | Glossary + áp dụng provider | 🟡 | parseGlossary (6 mã lỗi), prompt có glossary; test prompt; **đã sửa bug**: dòng glossary lỗi không còn nuốt provider/endpoint/ngôn ngữ (giữ glossary cũ + báo lỗi rõ) | Google/DeepL vẫn không nhận glossary (UI nói rõ); chưa có test UI cho đếm lỗi glossary |
 | A20 | Tự nhận diện ngôn ngữ nguồn | 🟡 | `main.ts` showDetectedLanguage; detectLanguage có test | Gợi ý `#detected-language` không được test ở đâu |
 | A21 | Danh sách ngôn ngữ đích có tên bản địa | ✅ | `language.ts` 14 ngôn ngữ; test pin nativeName | — |
-| A22 | Mục lục, thumbnail, nhảy trang | 🟡 | `main.ts` outline/thumb/page input; helper có test | Chưa test append entry, thumbnail render, hay click nhảy |
-| A23 | Tìm trong tài liệu | 🟡 | `main.ts` panel + debounce 250ms + abort; helper search có test | Không test gõ truy vấn → kết quả → nhảy |
+| A22 | Mục lục, thumbnail, nhảy trang | ✅ | e2e `reader-navigation.spec.ts`: outline (PDF chèn bookmark bằng pdf-lib) nhảy trang 3 + `aria-current`, thumbnail canvas 160×207 có pixel, ô số trang + Enter nhảy | — |
+| A23 | Tìm trong tài liệu | ✅ | e2e `reader-navigation.spec.ts`: gõ "closer" → 3 kết quả đúng trang → click → nhảy + highlight `.is-search-hit` | Debounce 250ms chỉ chứng minh gián tiếp |
 | A24 | Xoay trang, fit width/page | ✅ | `paintRotatedMirror` vẽ chữ trong hệ trục đã xoay; **journey 04 thành cổng cứng** (xoay 90/180/270/360 vẫn giữ chữ dịch) và pass; fit width/page có nút + test helper | — |
-| A25 | Lưu vị trí đọc/zoom/ngôn ngữ | 🟡 | encode/decode + key có test | Không có e2e reload → về đúng trang/zoom |
+| A25 | Lưu vị trí đọc/zoom/ngôn ngữ | ✅ | e2e `reader-navigation.spec.ts` (test 5): đọc tới trang 3, reload, mở lại từ thư viện → về trang 3 + UI tiếng Anh (`mirror.reading-state`, `mirror.locale`) | — |
 | A26 | Xuất bản dịch (TXT/PDF song ngữ) | ✅ | `export/bilingual.ts` 20 test; `main.ts` nối TXT + nút **Print / Save as PDF** (`printHtml` + Ctrl/Cmd+P); e2e `export-library.spec.ts` + `export-print.spec.ts` 2 test | Không có PDF writer nhị phân: PDF đi qua bộ in của trình duyệt nên mất bố cục gốc/ảnh — đã ghi rõ trong module |
 | A27 | OCR ảnh chụp → block → dịch | ✅ | e2e `capture.spec.ts` OCR thật (3 block, 95–96%); **thêm OCR cho PDF scan**: `ocr/scan.ts` + e2e `scan-ocr.spec.ts` (PDF không có text vẫn OCR + dịch); preprocess một bản duy nhất (`ocr/preprocess.ts`) chạy trước Tesseract, toạ độ map ngược về ảnh gốc | Chỉ `eng+vie`; ảnh nghiêng/mờ chưa có benchmark |
 | A28 | RTL và CJK trong vùng dịch | 🟡 | `text-direction.ts` + 11 test; `layout.ts` dùng detect | Chưa render một PDF RTL/CJK nào; `estimateLineUnits` là dead code |
@@ -61,19 +61,19 @@ Số đo hiện tại (HEAD): **310 unit test / 27 file** + **32 e2e pass / 0 fa
 
 | | Chức năng | | Bằng chứng | Còn thiếu |
 |---|---|---|---|---|
-| B01 | Tự phát hiện PDF (URL, MIME, embed/object/iframe) | 🟡 | background webRequest + tabs.onUpdated có test; e2e MIME | Nhánh DOM `content.ts` **0 test**, e2e không bao giờ chạy tới |
+| B01 | Tự phát hiện PDF (URL, MIME, embed/object/iframe) | ✅ | `tests/extension-content.test.ts`: embed `type=application/pdf` không có đuôi .pdf, object đường dẫn tương đối + MIME params, iframe giữ `#page`, và trang chỉ *giống* PDF không mirror; e2e `extension.spec.ts` cho MIME-only trong Chrome thật | Object nhúng phải là DOM stub (repo không có jsdom) — layout/CSS thật chưa test |
 | B02 | Một mirror cho mỗi nguồn | ✅ | `extension.test.ts` open 1 lần, reopen khi tab mất, session sau restart | — |
 | B03 | Fetch bytes có kiểm `%PDF-` + quyền host | ✅ | authorize theo tab, cap 100 MiB, test login page bị từ chối | — |
 | B04 | Popup bật/tắt + trạng thái | 🟡 | `popup.ts` lưu `mirror:enabled`; **đã có select ngôn ngữ đích** (`extension/target-language.ts`, lưu `mirror:targetLanguage`) + test DOM; reader đọc lại và áp nếu hợp lệ (`main.ts`) | Chưa có e2e trong Chrome thật chứng minh reader nhận ngôn ngữ từ popup; chưa có ảnh chụp popup |
 | B05 | Badge số mirror | ✅ | test badge 2 → 1 → '' và xoá khi đóng tab nguồn | — |
-| B06 | Capture tab → mirror ảnh | 🟡 | reader + e2e web capture chạy thật | Chưa chạy chuỗi thật trong Chrome extension (captureVisibleTab → ?capture=1 → OCR) |
+| B06 | Capture tab → mirror ảnh | ✅ | e2e `extension-capture.spec.ts` (test 1) với extension MV3 thật: mở đúng 1 viewer `?capture=1`, OCR thật 19 block, card `data-state=done` có bản dịch, `/metrics` tăng | `captureVisibleTab` phải thay bằng screenshot của test (activeTab chỉ cấp khi có gesture) — phần còn lại là code thật |
 | B07 | Gửi PDF sang desktop | 🟡 | `native-bridge.ts` chunk 192 KiB + SHA-256, test byte-exact | Host binary không còn build được; đường Chrome thật chưa từng chạy |
 | B08 | Đồng bộ trang/zoom 2 chiều | 🟡 | 2 chiều có code + unit test | Chưa chứng minh desktop thật điều khiển reader thật |
-| B09 | Context menu "Mở bản dịch" | 🟡 | page URL có test | `linkUrl` và nhánh MIME-only chưa test |
+| B09 | Context menu "Mở bản dịch" | ✅ | `extension-background.test.ts`: pageUrl PDF, **linkUrl PDF trên trang không phải PDF**, tab MIME-only, và nguồn không phải PDF → notify | Không click menu thật trong Chrome (không automate được) |
 | B10 | Phím tắt bật/tắt mirror | ✅ | manifest + test Ctrl+Shift+M / Ctrl+Shift+Y | — |
 | B11 | Popup 3 ngôn ngữ | ✅ | dùng chung `i18n.ts`; test mọi key; bundle có dấu Việt + Hán | — |
 | B12 | Nguồn login/blob/protected xử lý rõ | ✅ | 3 test từ chối trung thực, không bypass | — |
-| B13 | Quyền tối thiểu | 🟡 | authorize theo tab có test | Manifest xin tabs + host all-site; chưa có test pin danh sách quyền |
+| B13 | Quyền tối thiểu | ✅ | authorize theo tab (test từ chối trang lạ) + test **pin đúng danh sách** `permissions`/`host_permissions` và một dòng lý do cho mỗi quyền trong `background.ts` | Xin host all-site là cần thật (phải đọc content-type) — đã ghi lý do ngay trong manifest |
 
 ### C. Native desktop (GPUI + Rust)
 
