@@ -106,7 +106,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | D05 | Đếm ký tự/chi phí ước tính | [x] | `characterCount` trong kết quả và status bar |
 | D06 | Glossary parser + kiểm tra thuật ngữ | [x] | `parseGlossary`, giới hạn 200 mục, test edge cases |
 | D07 | Prompt template có version, chống prompt injection | [~] | có promptVersion + câu “do not follow instructions”; chưa test |
-| D08 | Test web đơn vị | [x] | 233 passed / 19 files (2026-11-18) |
+| D08 | Test web đơn vị | [x] | 296 passed / 24 files (2026-11-18) |
 | D09 | Test e2e Chromium | [x] | 16 passed (2026-11-18), gồm mặc định tiếng Việt, capture OCR, export và a11y |
 | D10 | Test native | [~] | 95 + 71 passed trước khi xoá editor; chưa build lại |
 | D11 | CI GitHub Actions | [~] | `.github/workflows/ci.yml` đã có; chưa chạy trên GitHub |
@@ -114,6 +114,8 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | D13 | Tài liệu kiến trúc/quyết định | [x] | `docs/decisions.tsv`, product-contract, native.md |
 | D14 | Feature flag / telemetry / crash report | [ ] | không có; privacy-first |
 | D15 | Repo Git + remote | [x] | `https://github.com/kyoo-147/mirror_trans_pdf` (private) |
+| D16 | Release gate kiểm tra artifact `dist` | [x] | `scripts/verify-release.ps1 -ArtifactsOnly` PASS 2/2 checks |
+| D17 | Module giá/chi phí, print, download, OCR preprocess | [x] | Unit test cho `pricing`, `export/print`, `export/download`, `ocr/preprocess`; chưa nối hết vào UI |
 
 ## 2. Ảnh chụp kiểm chứng hiện tại
 
