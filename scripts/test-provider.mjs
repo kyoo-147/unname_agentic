@@ -35,16 +35,24 @@ const server = createServer(async (request, response) => {
       if (typeof text !== 'string') throw new Error('Missing user text');
       requests++;
       response.setHeader('Content-Type', 'application/json');
-      let content = translations.get(text) ?? `Bản dịch kiểm thử: ${text}`;
+      // The system prompt names the target language. Echoing Arabic or Chinese for
+      // those targets is what lets the e2e suite exercise the RTL and CJK render
+      // paths without shipping a font-embedded fixture PDF. It is still a fixture.
+      const system = String(payload.messages?.find?.(item => item.role === 'system')?.content ?? '').toLowerCase();
+      const arabic = system.includes('arabic') || system.includes('العربية');
+      const chinese = system.includes('chinese') || system.includes('simplified chinese') || system.includes('中文');
+      const fake = source => arabic ? `ترجمة تجريبية: ${source}` : chinese ? `测试翻译：${source}` : `Bản dịch kiểm thử: ${source}`;
+      const translate = source => (arabic || chinese) ? fake(source) : (translations.get(source) ?? fake(source));
+      let content = translate(text);
       let parsed = undefined;
       try { parsed = JSON.parse(text); } catch { parsed = undefined; }
       // Batch envelope: [{ id, text }] in, [{ id, text }] out with the ids preserved.
       if (Array.isArray(parsed) && parsed.every(item => item && typeof item === 'object' && typeof item.id === 'string' && typeof item.text === 'string')) {
-        content = JSON.stringify(parsed.map(item => ({ id: item.id, text: translations.get(item.text) ?? `Bản dịch kiểm thử: ${item.text}` })));
+        content = JSON.stringify(parsed.map(item => ({ id: item.id, text: translate(item.text) })));
       } else if (payload.response_format?.type === 'json_object') {
         const blocks = parsed;
         if (!Array.isArray(blocks) || !blocks.every(item => typeof item === 'string')) throw new Error('Expected text blocks');
-        content = JSON.stringify({ translations: blocks.map(block => translations.get(block) ?? `Bản dịch kiểm thử: ${block}`) });
+        content = JSON.stringify({ translations: blocks.map(block => translate(block)) });
       }
       response.end(JSON.stringify({ choices: [{ message: { content } }], testOnly: true }));
     } catch { response.writeHead(400).end('Invalid test request'); }
