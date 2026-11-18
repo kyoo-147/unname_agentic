@@ -649,7 +649,7 @@ impl Workspace {
             if root.as_ref().is_some_and(|r| !deleted.contains(r)) { continue; }
             match self.store.delete(id, root.as_deref()) {
                 Ok(()) => deleted.push(id.clone()),
-                Err(e) => errors.push(crate::localized_format!("删除失败：{}", "Could not delete document: {}", crate::settings::diagnostic(&e.to_string()))),
+                Err(e) => errors.push(crate::localized_format!("删除失败：{}", "Could not delete document: {}", "Không xoá được tài liệu: {}", crate::settings::diagnostic(&e.to_string()))),
             }
         }
         if self.current.as_ref().is_some_and(|c| deleted.contains(c)) {
@@ -797,7 +797,7 @@ impl Workspace {
                     }
                     self.sort();
                 }
-                Err(e) => self.status = SaveStatus::Failed(crate::localized_format!("重命名失败：{}", "Could not rename document: {}", crate::settings::diagnostic(&e.to_string()))),
+                Err(e) => self.status = SaveStatus::Failed(crate::localized_format!("重命名失败：{}", "Could not rename document: {}", "Không đổi tên được tài liệu: {}", crate::settings::diagnostic(&e.to_string()))),
             }
         }
         self.sync_sub_pages(cx);

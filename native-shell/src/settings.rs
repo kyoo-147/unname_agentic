@@ -1199,8 +1199,12 @@ pub(crate) fn localize(text: &str, english: bool) -> &str {
 
 #[macro_export]
 macro_rules! localized_format {
-    ($zh:literal, $en:literal $(, $arg:expr)* $(,)?) => {
-        if $crate::settings::english() { format!($en $(, $arg)*) } else { format!($zh $(, $arg)*) }
+    ($zh:literal, $en:literal, $vi:literal $(, $arg:expr)* $(,)?) => {
+        match $crate::i18n::lang() {
+            $crate::i18n::Lang::Zh => format!($zh $(, $arg)*),
+            $crate::i18n::Lang::En => format!($en $(, $arg)*),
+            $crate::i18n::Lang::Vi => format!($vi $(, $arg)*),
+        }
     };
 }
 
@@ -1260,6 +1264,14 @@ fn diagnostic_for(message: &str, english: bool) -> String {
 #[cfg(test)]
 mod localization_tests {
     use super::{localize, diagnostic_for, display_title};
+
+    #[test]
+    fn localized_format_uses_vietnamese_when_selected() {
+        let previous = crate::i18n::lang();
+        crate::i18n::set_lang(crate::i18n::Lang::Vi);
+        assert_eq!(crate::localized_format!("{} 天", "{} days", "{} ngày", 3), "3 ngày");
+        crate::i18n::set_lang(previous);
+    }
 
     #[test]
     fn ui_keys_and_menu_tables_have_english_translations() {

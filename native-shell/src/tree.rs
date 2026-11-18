@@ -176,7 +176,7 @@ impl Workspace {
                         e.meta = meta;
                     }
                 }
-                Err(e) => self.status = crate::app::SaveStatus::Failed(crate::localized_format!("移动失败：{}", "Could not move document: {}", crate::settings::diagnostic(&e.to_string()))),
+                Err(e) => self.status = crate::app::SaveStatus::Failed(crate::localized_format!("移动失败：{}", "Could not move document: {}", "Không di chuyển được tài liệu: {}", crate::settings::diagnostic(&e.to_string()))),
             }
         }
         if let Some(t) = &target {

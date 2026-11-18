@@ -17,7 +17,7 @@ pub const TRASH_MENU_W: f32 = 160.;
 fn remaining(deleted: u64) -> String {
     let end = deleted + TRASH_DAYS * 86_400;
     let left = end.saturating_sub(crate::time::now());
-    if left < 86_400 { crate::settings::text("即将彻底删除").into() } else { crate::localized_format!("{} 天", "{} days", left.div_ceil(86_400)) }
+    if left < 86_400 { crate::settings::text("即将彻底删除").into() } else { crate::localized_format!("{} 天", "{} days", "{} ngày", left.div_ceil(86_400)) }
 }
 
 /// The page header, as tall as the document's so the header pills sit in
@@ -240,7 +240,7 @@ impl Workspace {
             }
             Err(e) => {
                 let detail = e.chain().map(|cause| crate::settings::diagnostic(&cause.to_string())).collect::<Vec<_>>().join(": ");
-                let msg = crate::localized_format!("恢复失败：{}", "Could not restore document: {}", detail);
+                let msg = crate::localized_format!("恢复失败：{}", "Could not restore document: {}", "Không khôi phục được tài liệu: {}", detail);
                 self.show_toast_kind(crate::ui::ToastKind::Error, &msg, cx);
                 self.status = crate::app::SaveStatus::Failed(msg);
             }
@@ -255,7 +255,7 @@ impl Workspace {
     fn purge_doc(&mut self, id: &str, cx: &mut Context<Self>) {
         match self.store.purge(id) {
             Ok(()) => self.show_toast(crate::settings::text("已彻底删除"), cx),
-            Err(e) => self.status = crate::app::SaveStatus::Failed(crate::localized_format!("删除失败：{}", "Could not delete document: {}", crate::settings::diagnostic(&e.to_string()))),
+            Err(e) => self.status = crate::app::SaveStatus::Failed(crate::localized_format!("删除失败：{}", "Could not delete document: {}", "Không xoá được tài liệu: {}", crate::settings::diagnostic(&e.to_string()))),
         }
         self.trash = self.store.list_trash();
         self.show_store_warnings(cx);
@@ -266,7 +266,7 @@ impl Workspace {
         let ids: Vec<String> = self.store.list_trash().into_iter().map(|t| t.id).collect();
         match ids.iter().try_for_each(|id| self.store.purge(id)) {
             Ok(()) => self.show_toast(crate::settings::text("已清空回收站"), cx),
-            Err(e) => self.status = crate::app::SaveStatus::Failed(crate::localized_format!("删除失败：{}", "Could not delete document: {}", crate::settings::diagnostic(&e.to_string()))),
+            Err(e) => self.status = crate::app::SaveStatus::Failed(crate::localized_format!("删除失败：{}", "Could not delete document: {}", "Không xoá được tài liệu: {}", crate::settings::diagnostic(&e.to_string()))),
         }
         self.trash = self.store.list_trash();
         self.show_store_warnings(cx);
@@ -296,7 +296,7 @@ impl Workspace {
         };
         let (title, body, action, danger) = match c {
             Confirm::Delete { ids, batch } => (
-                if *batch || ids.len() > 1 { crate::localized_format!("是否删除所选的 {} 项？", "Delete the {} selected items?", ids.len()) } else { crate::localized_format!("是否删除： {}？", "Delete {}?", title_of(&ids[0])) },
+                if *batch || ids.len() > 1 { crate::localized_format!("是否删除所选的 {} 项？", "Delete the {} selected items?", "Xoá {} mục đã chọn?", ids.len()) } else { crate::localized_format!("是否删除： {}？", "Delete {}?", "Xoá {}?", title_of(&ids[0])) },
                 crate::settings::text("删除的内容将进入回收站，30 天后自动彻底删除").to_string(),
                 crate::settings::text("删除"),
                 true,
@@ -304,7 +304,7 @@ impl Workspace {
             Confirm::Restore(_) => (crate::settings::text("确认恢复？").to_string(), crate::settings::text("确认后将恢复至原位置").to_string(), crate::settings::text("恢复"), false),
             Confirm::EmptyTrash => (
                 crate::settings::text("确认清空回收站？").to_string(),
-                crate::localized_format!("回收站中的 {} 项将被彻底删除，无法恢复", "The {} items in the Trash will be deleted permanently. This cannot be undone.", self.trash.len()),
+                crate::localized_format!("回收站中的 {} 项将被彻底删除，无法恢复", "The {} items in the Trash will be deleted permanently. This cannot be undone.", "{} mục trong Thùng rác sẽ bị xoá vĩnh viễn. Không thể hoàn tác.", self.trash.len()),
                 crate::settings::text("清空"),
                 true,
             ),
@@ -318,7 +318,7 @@ impl Workspace {
             Confirm::Refs { show: true, .. } => (crate::settings::text("是否显示引用列表？").to_string(), crate::settings::text("选择显示后，协作者可再次查看本文的引用列表。").to_string(), crate::settings::text("显示"), false),
             Confirm::SaveFailed => (
                 crate::settings::text("文档保存失败").to_string(),
-                crate::localized_format!("{}。可以重试或另存副本；重新载入将放弃未保存的修改并载入磁盘内容。", "{}. Retry or save a copy. Reload discards unsaved changes and loads the document from disk.", self.save_error()),
+                crate::localized_format!("{}。可以重试或另存副本；重新载入将放弃未保存的修改并载入磁盘内容。", "{}. Retry or save a copy. Reload discards unsaved changes and loads the document from disk.", "{}. Hãy thử lại hoặc lưu bản sao. Tải lại sẽ bỏ thay đổi chưa lưu và đọc tài liệu từ đĩa.", self.save_error()),
                 crate::settings::text("重试"),
                 false,
             ),

@@ -93,7 +93,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | C22 | Xuất PDF/bản dịch | [x] | Native xuất trang hiện tại ra Markdown song ngữ cạnh bản gốc (đã chạy thật, toast + file UTF-8); web xuất .bilingual.txt; chưa xuất PDF/DOCX giữ layout |
 | C23 | Packaging + license bundle + ký số | [~] | portable release zip + PDFium/host/license bundle, chạy được first-import; chưa ký số |
 | C24 | Auto-update | [ ] | bị tắt có chủ đích |
-| C25 | Build lại + test lại toàn bộ trong phiên này | [x] | `cargo test` 50 pass/1 ignored; release exe 21.4 MB; zip 11.28 MB; first-import fix chạy 15s |
+| C25 | Build lại + test lại toàn bộ trong phiên này | [x] | `cargo test` 51 pass/1 ignored; release exe 21.4 MB; zip 11.28 MB; first-import fix chạy 15s |
 | C26 | OCR PDF scan native | [x] | Windows OCR trên `scanned-page.pdf`; text nhận đúng; paired text giữ raster gốc; ảnh `desktop-native-scan-ocr.png` |
 
 ### D. Lõi dùng chung & chất lượng
@@ -109,7 +109,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | D07 | Prompt template có version, chống prompt injection | [~] | có promptVersion + câu “do not follow instructions”; chưa test |
 | D08 | Test web đơn vị | [x] | 323 passed / 29 files (2026-11-18) |
 | D09 | Test e2e Chromium | [x] | 49 passed (2026-11-18), gồm journeys, rotation, RTL/CJK, batch, capture, export, a11y |
-| D10 | Test native | [x] | 50 pass / 1 ignored native workspace; 20 backend desktop; release build OK |
+| D10 | Test native | [x] | 51 pass / 1 ignored native workspace; 20 backend desktop; release build OK |
 | D11 | CI GitHub Actions | [~] | `.github/workflows/ci.yml` đã có; chưa chạy trên GitHub |
 | D12 | LICENSE root + third-party notices | [x] | `LICENSE` MIT + notice OCR/PDFium/GPUI |
 | D13 | Tài liệu kiến trúc/quyết định | [x] | `docs/decisions.tsv`, product-contract, native.md |

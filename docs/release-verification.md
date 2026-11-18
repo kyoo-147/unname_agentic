@@ -18,12 +18,12 @@ cargo build --release --manifest-path native-shell/Cargo.toml -p pdf_workspace -
 
 Result: exit 0, 36 pre-existing warnings, 6m 38s cold build (31.7s after the first-import fix).
 
-- Executable: `pdf_workspace.exe`, 21,400,064 bytes
-- SHA-256: `0C120D7D38115931A7EAED35B3D7302167683A6218F939FCB9F5B4B83250D63F`
+- Executable: `pdf_workspace.exe`, 21,405,696 bytes
+- SHA-256: `8C1000D6CCBC43690751B5EB155A51247C95023124CBCE421606F90DF55C97DF`
 - Package: `dist/pdf-workspace-windows-x64-release-20261118-110746/`
 - Native-messaging host: `pdf-workspace-host.exe`, 478,208 bytes, SHA-256 `79713585756FC360B2CC9590C3FBE1B5769030DFDBAFBF4E841358BDC95AAF1C`
 - Zip: `dist/pdf-workspace-windows-x64-release-20261118-110746.zip`, 11.28 MB
-- Zip SHA-256: `2D8C417E3FB9C351B7575E830AD2AF43CEFD5CC359412A40FA4500DE4B76FD69`
+- Zip SHA-256: `718C60611DEEA1DB09C56FF19B1E5ECAB8A7CE98AA2B34320F4E6B92E2451227`
 
 Package contents: executable, `pdfium.dll`, `pdf-workspace-host.exe`, `install-native-host.ps1`,
 root and upstream licenses, Lucide license, PDFium version and component licenses. The package is
@@ -49,7 +49,7 @@ Fix: `Store::reload()` clears and re-reads `index.json`; `SharedStore::reload()`
 workspace calls it after file import and after browser-companion updates, then rebuilds the entry list.
 
 Regression evidence: fresh packaged launch renders at 15 s; native workspace tests remain
-**50 passed, 0 failed, 1 ignored**; release build succeeds.
+**51 passed, 0 failed, 1 ignored**; release build succeeds. Destructive dialogs (delete/rename/move/trash) now pick a Vietnamese format string through `localized_format!`; a unit test pins the Vietnamese branch.
 
 ## Native scanned PDF OCR
 
