@@ -7,6 +7,9 @@ import { resolve } from 'node:path';
 // document title rather than the app title.
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('mirror.locale', 'vi'));
+  // Headless Chromium blocks on the native print sheet; stub the sink so the
+  // wiring and the status line can be observed in CI.
+  await page.addInitScript(() => { window.print = () => undefined; });
 });
 
 test('opens the bilingual print sheet for a translated document', async ({ page }) => {

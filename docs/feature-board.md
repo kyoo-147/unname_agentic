@@ -14,7 +14,9 @@ Nguồn: audit đọc mã thật từng file (3 auditor độc lập) + `pnpm te
 | ⬜ | Chưa có. |
 | ⚪ | Không build/chạy được trên máy này (native: D: còn ~3.0 GB) → **chưa được coi là xong**. |
 
-Số đo hiện tại (5b78dab): **300 unit test / 24 file** (tự chạy lại 09:52), typecheck sạch, **e2e 16+ test** gồm 13 hành trình click thật. Ba con số này là mốc để phát hiện hồi quy; một test xanh **không** chứng minh được tính năng nếu đường UI không gọi tới nó — xem mục 1b.
+Số đo hiện tại (417e745): **310 unit test / 27 file** + **32 e2e pass / 0 fail** (chạy lại trong phiên), typecheck sạch, build ok. Ba con số này là mốc để phát hiện hồi quy; một test xanh **không** chứng minh được tính năng nếu đường UI không gọi tới nó — xem mục 1b.
+
+**Cổng mới chống hồi quy "commit thiếu file"**: `scripts/check-committed-imports.mjs` resolve mọi import tương đối **trong chính commit** (không phải working tree) và đã bắt đúng sự cố thật hôm nay: `6b08e20` chứa `import('./ocr/scan')` nhưng `src/ocr/scan.ts` chưa được add → `main` build hỏng với người clone. Script chạy trong `verify-release.ps1` và trong CI.
 
 ---
 
@@ -50,7 +52,7 @@ Số đo hiện tại (5b78dab): **300 unit test / 24 file** (tự chạy lại 
 | A24 | Xoay trang, fit width/page | 🟡 | helper có test; `main.ts` rotateView/applyFit | Không test click 3 nút; remap translation sau xoay chưa chứng minh |
 | A25 | Lưu vị trí đọc/zoom/ngôn ngữ | 🟡 | encode/decode + key có test | Không có e2e reload → về đúng trang/zoom |
 | A26 | Xuất bản dịch (TXT/PDF song ngữ) | ✅ | `export/bilingual.ts` 20 test; `main.ts` nối TXT + nút **Print / Save as PDF** (`printHtml` + Ctrl/Cmd+P); e2e `export-library.spec.ts` + `export-print.spec.ts` 2 test | Không có PDF writer nhị phân: PDF đi qua bộ in của trình duyệt nên mất bố cục gốc/ảnh — đã ghi rõ trong module |
-| A27 | OCR ảnh chụp → block → dịch | ✅ | e2e `capture.spec.ts` OCR thật (3 block, 95–96%), ảnh `artifacts/capture-ocr-e2e.png` | — |
+| A27 | OCR ảnh chụp → block → dịch | ✅ | e2e `capture.spec.ts` OCR thật (3 block, 95–96%); **thêm OCR cho PDF scan**: `ocr/scan.ts` + e2e `scan-ocr.spec.ts` (PDF không có text vẫn OCR + dịch); preprocess một bản duy nhất (`ocr/preprocess.ts`) chạy trước Tesseract, toạ độ map ngược về ảnh gốc | Chỉ `eng+vie`; ảnh nghiêng/mờ chưa có benchmark |
 | A28 | RTL và CJK trong vùng dịch | 🟡 | `text-direction.ts` + 11 test; `layout.ts` dùng detect | Chưa render một PDF RTL/CJK nào; `estimateLineUnits` là dead code |
 | A29 | Phím tắt đọc | ✅ | `keyboardIntent` 20+ case + test mới `reader-keyboard.test.ts` (Home/End, j/k, +/-, w/f, o, /, Escape, modifier, ô nhập); `main.ts` dispatch đủ | Chưa có e2e bấm phím thật trong trình duyệt (chỉ unit) |
 | A30 | Accessibility WCAG cơ bản | ✅ | `a11y.spec.ts` 8 test: focus trap, aria-live, reduced-motion, contrast 4.5:1 (đo thật) | — |
