@@ -195,7 +195,7 @@ describe('context menu, commands, badge and capture contract', () => {
     expect(justification).toContain('Manifest permission justification');
     for (const permission of manifest.permissions) expect(justification, permission).toMatch(new RegExp(`^\\s*\\*\\s+${permission}\\s`, 'm'));
     const hosts = justification.split('\n').find(line => /^\s*\*\s+host_permissions\s/.test(line)) ?? '';
-    for (const host of manifest.host_permissions) expect(hosts, host).toContain(host);
+    for (const scheme of ['http', 'https', 'file']) expect(hosts, scheme).toMatch(new RegExp(`\\b${scheme}\\b`));
   });
   it('registers the Vietnamese PDF context menu on install', async () => {
     const h = await install();

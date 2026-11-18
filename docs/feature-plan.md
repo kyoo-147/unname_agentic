@@ -39,7 +39,7 @@ Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ c�
 | A21 | Danh sách ngôn ngữ đích có tên hiển thị | [x] | select từ `SUPPORTED_TARGETS`, 14 ngôn ngữ, tên bản địa |
 | A22 | Mục lục, thumbnail, nhảy trang | [x] | panel outline/thumbnail + ô số trang; `getOutline`, `renderThumbnail` |
 | A23 | Tìm trong tài liệu | [x] | panel search, debounce 250ms, `searchAllPages` có abort |
-| A24 | Xoay trang, chế độ fit width/page | [x] | rotate 0/90/180/270; `fitScale` width/page |
+| A24 | Xoay trang, chế độ fit width/page | [~] | rotate 0/90/180/270 + fit; overlay bản dịch khi xoay còn lệch, journey 04 đang `fixme` |
 | A25 | Lưu vị trí đọc, zoom, ngôn ngữ qua reload | [x] | `saveReadingState` theo tài liệu; locale lưu localStorage |
 | A26 | Xuất bản dịch (txt/PDF song ngữ) | [x] | `src/export/bilingual.ts` + nút Xuất; e2e tải file `.bilingual.txt` có cả nguồn và bản dịch |
 | A27 | OCR ảnh chụp màn hình → block → dịch | [~] | `src/capture/*` + Tesseract eng/vie; đã nối `?capture=1`; chưa chạy capture thật trong extension |
