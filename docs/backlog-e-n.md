@@ -66,7 +66,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | F04 | **P1** | OCR confidence và vùng nghi ngờ | Highlight vùng confidence thấp, cho sửa thủ công.  ⬜ |
 | F05 | **P1** | Searchable PDF tạo text layer từ scan | Copy/search đúng vị trí mà ảnh gốc không mất. | ✅ `src/export/searchable.ts` + 20 test: text render mode 3, đúng baseline, pdfjs trích được chữ |
 | F06 | **P1** | Mixed OCR theo vùng, bỏ qua text gốc đã tốt | Không tạo 2 lớp chữ trùng nhau.  ⬜ |
-| F07 | **P1** | Agentic OCR query-driven chỉ đọc vùng cần thiết | Một câu hỏi kích hoạt inspect/crop/zoom/extract có trace.  ⬜ |
+| F07 | **P1** | Agentic OCR query-driven chỉ đọc vùng cần thiết | Một câu hỏi kích hoạt inspect/crop/zoom/extract có trace. | 🟡 `native-shell/src/vision_tools.rs` + 9 test: crop/zoom/rotate OCR một vùng, map toạ độ về trang, ToolTrace + budget; chưa nối vào chat agent |
 | F08 | **P1** | Visual grounding/citation vào bbox đa giác | Click answer focus đúng box nguồn.  ⬜ |
 | F09 | **P2** | OCR lặp lại có chọn lọc với crop/scale/contrast/rotation | Chỉ re-OCR vùng lỗi, không OCR lại toàn PDF.  ⬜ |
 | F10 | **P2** | Nhận diện dấu mộc, checkbox, handwritten/printed | Đánh nhãn từng loại và confidence.  ⬜ |
