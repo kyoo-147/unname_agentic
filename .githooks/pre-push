@@ -1,0 +1,4 @@
+#!/bin/sh
+# Local CI: GitHub Actions cannot start for this account (billing lock), so the
+# same gate runs before every push. Installed by scripts/install-hooks.ps1.
+exec powershell -NoProfile -ExecutionPolicy Bypass -File "$(git rev-parse --show-toplevel)/scripts/pre-push.ps1"
