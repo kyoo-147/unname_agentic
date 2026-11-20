@@ -42,7 +42,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
 | E01 | **P0** | Phát hiện PDF born-digital, scanned, hybrid theo trang | Tự chọn extraction/OCR từng trang và ghi lý do chọn engine. | ✅ `src/core/classify.ts` + 18 test: quy tắc có thứ tự, ngưỡng là hằng số có giải thích, mỗi biên được test đúng điểm |
-| E02 | **P1** | Đọc thứ tự đa cột và xuyên trang | Chuẩn hoá reading-order không lẫn cột, header/footer.  ⬜ |
+| E02 | **P1** | Đọc thứ tự đa cột và xuyên trang | Chuẩn hoá reading-order không lẫn cột, header/footer. | ✅ `src/core/reading-order.ts` + 21 test: gutter theo coverage valley, block spanning đóng band, `stripRepeats` bỏ header/footer lặp |
 | E03 | **P1** | Phân loại block: heading, paragraph, list, table, figure, formula, footnote | Lưu type, bbox, confidence và quan hệ cha-con. | ✅ `src/core/blocks.ts` + 27 test: mỗi loại một fixture, heading level 1-3, confidence + lý do |
 | E04 | P1 | Lưu Document IR có provenance | Block có page, polygon, reading-order, source bytes hash, version. | ✅ src/core/ir.ts: contract + validate + serialize versioned; 21 test |
 | E05 | **P1** | Tái tạo cấu trúc heading/section và mục lục tự động | Click heading đưa đúng đến đoạn gốc. | ✅ `src/core/outline.ts` + 31 test: cây section, TOC có path 1 / 1.1 / 1.1.1, level jump bị kẹp và báo, `sectionAt` cho mọi block |
