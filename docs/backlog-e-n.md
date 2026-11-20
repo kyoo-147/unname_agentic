@@ -188,7 +188,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 |---|---|---|---|---|
 | M01 | **P0** | Privacy modes Offline-only/Ask/Cloud-enabled | Không network trong Offline-only, e2e test. | ✅ `src/core/privacy.ts` + 20 test: offline = **0 fetch** kể cả batch, loopback vẫn chạy, ask cần consent |
 | **P1** | Data retention + xoá vĩnh viễn có xác nhận | Không giữ dữ liệu ngoài ý muốn. | ✅ `src/core/capabilities.ts` + 39 test: 4 mode × 6 capability, 7 action được phân loại, `CapabilityError` nêu capability thiếu; xoá nằm ở `deleteDocument` + store purge 30 ngày |
-| M03 | **P1** | Document encryption at rest và secure temp/cache purge | Không tồn tại bản plaintext ngoài thư mục được quản lý.  ⬜ |
+| **P2** | Permission model theo mode (reader/local/cloud/automation) | Mỗi mode chỉ làm được việc đã khai. | ✅ cùng `capabilities.ts`: matrix frozen, mode lạ/action lạ bị từ chối thay vì map mặc định |
 | M04 | **P1** | Encryption at rest cho dữ liệu local | File DB mã hoá bằng key/passphrase. | ✅ `src/core/crypto.ts` + 24 test: PBKDF2 600k + AES-GCM, salt/IV mỗi lần, sai passphrase hay tamper đều WrongPassphrase, 1 KB thành 1505 B |
 | M05 | **P1** | Audit log local: file nào, ai, khi nào, export gì | Truy vết được mọi thao tác. | ✅ `src/core/audit.ts` + 25 test: 8 loại event, chặn detail giống secret, chain SHA-256 phát hiện sửa, report mask giá trị |
 | M06 | **P2** | Audit log consent/cloud route per document/job | Biết file nào dùng engine nào và tại sao.  ⬜ |
