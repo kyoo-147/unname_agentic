@@ -130,10 +130,8 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | N07 | **P1** | Đo p50/p95 cho startup, OCR, translate, export, memory | Có số thật theo build. | ✅ `src/core/metrics.ts` + `docs/metrics.md` + 22 test: 9 metric có đơn vị, series theo tag, so baseline ngưỡng 10% p95, phân biệt "không hồi quy" với "không đo" |
 | I07 | **P1** | So sánh nhiều tài liệu và tạo evidence matrix | Mỗi khác biệt có trích dẫn và trang. | ✅ `src/core/evidence-matrix.ts` + 32 test: cell có page/block/excerpt, gap khác zero, conflict/agree, CSV + Markdown |
 | I08 | **P1** | Agent tools: navigate_page, crop, zoom, OCR_region, search, cite | Ghi tool call + kết quả, có budget. | ✅ `src/core/agent-tools.ts` + 48 test: 6 tool có type/return, validate không coerce, planner theo intent có trần 6 bước |
-| **P2** | Table Q&A có cell provenance và phép tính kiểm chứng | Trả kết quả số + cách tính. | ✅ `src/core/table-qa.ts` + 21 test: sum/count/max/min/compare/lookup kèm cell đã dùng, phát hiện total lệch 1 và cột % cộng 102 |
 | I10 | **P2** | Figure/formula explanation dưới dạng multimodal | Nhận thức từ image crop và cite đúng vùng.  ⬜ |
 | I11 | **P0** | Không đủ bằng chứng thì báo không đủ, không bịa | Abstain trước khi trả lời. | ✅ `src/core/abstain.ts` + 16 test: coverage/floor, câu hỏi số không có chữ số → abstain, câu yes-no không xác nhận → abstain, `guardAnswer` chặn câu trả lời không citation |
-| **P1** | Eval harness cho answer quality (citation hit, abstention) | Bảng điểm theo case cố định. | 🟡 `src/core/eval-harness.ts` + `docs/evaluation.md` + 24 test: pass chỉ khi đủ phrase + citation + abstain đúng, rate rỗng = null; **bộ case mới 4 case tổng hợp** |
 | I13 | **P2** | Reusable prompt templates: summarize, extract, review, compare | Template theo version, inject được tham số.  ⬜ |
 | I14 | **P3** | Sinh outline/report/slide brief từ bằng chứng | Đính kèm citations; không claim là kết quả đã được kiểm duyệt.  ⬜ |
 
@@ -178,7 +176,6 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | L05 | **P2** | Quick actions từ selection (menu/dropdown) | Chọn là ra hành động đúng ngữ cảnh. | ✅ `src/core/selection-actions.ts` + 35 test: translate/copy/cite/note/glossary/search/web/define/redact, disable kèm lý do |
 | L06 | **P2** | Reading modes: original/translation/bilingual/interleave | Chuyển mode giữ đúng vị trí đọc. | 🟡 `src/core/reading-modes.ts` + 12 test: 4 mode phủ kín viewport, đổi mode giữ trang và progress <1%; **UI chưa nối** |
 | L07 | **P2** | Selection → glossary/citation với 1 click | Tạo glossary/citation nhanh. | ✅ cùng `selection-actions.ts`: nhóm `annotate` + `research`, phân loại selection (word/phrase/sentence/number/email/url) |
-| **P2** | Drag/drop nhiều file, thư mục | Drop folder hoạt động. | ✅ `src/core/drop.ts` + 24 test: format theo extension, duplicate theo tên+size, folder defer có lý do, caps tham lam, code lỗi rõ |
 | L09 | **P2** | Quick actions/palette từ selection | Chọn text hiện palette hành động. | 🟡 `src/core/commands.ts` + 29 test: registry fuzzy + chord + nhóm; **UI palette chưa nối** |
 | L10 | **P3** | Offline desktop model manager với download/checksum/quantization | Model download opt-in, xoá được, báo RAM/VRAM.  ⬜ |
 
@@ -192,14 +189,12 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | M04 | **P1** | Encryption at rest cho dữ liệu local | File DB mã hoá bằng key/passphrase. | ✅ `src/core/crypto.ts` + 24 test: PBKDF2 600k + AES-GCM, salt/IV mỗi lần, sai passphrase hay tamper đều WrongPassphrase, 1 KB thành 1505 B |
 | M05 | **P1** | Audit log local: file nào, ai, khi nào, export gì | Truy vết được mọi thao tác. | ✅ `src/core/audit.ts` + 25 test: 8 loại event, chặn detail giống secret, chain SHA-256 phát hiện sửa, report mask giá trị |
 | M06 | **P2** | Audit log consent/cloud route per document/job | Biết file nào dùng engine nào và tại sao.  ⬜ |
-| **P1** | Preview chính xác nội dung sẽ gửi cloud | Xem payload trước khi consent. | ✅ `src/core/payload-preview.ts` + 21 test: characters/bytes tính từ text thật (không từ preview), endpoint scope theo effective endpoint, redact preview, cost null khi thiếu giá |
 | M08 | **P2** | Local-only mode + audit trail cho cloud call | Biết cái gì đã gửi lên cloud. | ✅ cùng `audit.ts` (kind translate/export) + `privacy.ts` chặn mạng; audit ghi lại quyết định |
 
 ### N. Đo chất lượng, quan sát và phát hành — 8 mục
 
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
-| **P1** | Export → re-import round-trip tương thích | Mở lại không mất dữ liệu. | ✅ `src/core/roundtrip.ts` + 17 test: so từng field theo identity, tolerance chỉ cho số đo, codec phải khai báo mất mát |
 | N02 | **P0** | Nối AbortController thật tới tất cả provider calls | Cancel không sinh result stale hoặc tốn request ngoài ý muốn.  ⬜ |
 | N03 | **P1** | i18n matrix test cho 3 ngôn ngữ | Không missing key, không lệch placeholder. | ✅ `src/core/i18n-audit.ts` + `scripts/i18n-matrix.mjs` + 16 test: so key set, placeholder theo thứ tự, cờ untranslated, xanh trên 3 từ điển thật |
 | N04 | **P1** | Accessibility audit (contrast, role, focus order) | Không lỗi a11y nghiêm trọng. | ✅ `src/core/a11y.ts` + 33 test: contrast AA/UI + gợi ý màu đạt, lỗi cấu trúc, focus order + cảnh báo tabIndex dương |
