@@ -2,6 +2,7 @@
 //! (see `sidebar.rs`) and the editor on the right, with the
 //! 64px top bar (breadcrumb title + save status) above the page.
 
+use crate::export_native::{ExportDocument, ExportFormat, export_document, suggested_name, write_export_path};
 use crate::input::{TextField, TextFieldEvent};
 use crate::settings::display_title;
 use crate::store::Entry;
@@ -319,6 +320,12 @@ pub struct Workspace {
 }
 
 
+/// Where the save panel opens: the documents folder, else the home folder, else
+/// wherever the process happens to run.
+fn export_directory() -> std::path::PathBuf {
+    dirs::document_dir().or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from)).unwrap_or_default()
+}
+
 /// A macOS notification (only logged when scripted).
 fn notify_system(title: &str, body: &str) {
     if crate::devtools::scripted() {
@@ -580,6 +587,50 @@ impl Workspace {
 
     pub fn new_doc(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_import(window, cx);
+    }
+
+    /// 导出文档: ask the system save panel where, then write the open document in
+    /// the format the chosen extension names. The panel itself confirms a
+    /// replacement, so the write may replace the file it returned.
+    pub fn export_open_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(document) = self.export_snapshot(cx) else {
+            self.show_toast_kind(ToastKind::Info, crate::i18n::tr3("没有可导出的文字。打开一份 PDF 后再导出。", "There is no text to export yet. Open a PDF first.", "Chưa có văn bản để xuất. Hãy mở một PDF trước."), cx);
+            return;
+        };
+        let suggested = suggested_name(&document.title, ExportFormat::Markdown);
+        // A scripted devtools run answers the panel through `take_pick`, exactly
+        // as 保存原始 PDF does.
+        let picked = crate::devtools::take_pick().and_then(|paths| paths.into_iter().next());
+        let prompt = picked.is_none().then(|| cx.prompt_for_new_path(&export_directory(), Some(&suggested)));
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(path) = (match prompt {
+                Some(prompt) => prompt.await.ok().and_then(Result::ok).flatten(),
+                None => picked,
+            }) else {
+                return;
+            };
+            let content = export_document(&document, ExportFormat::from_path(&path));
+            let write = cx.background_executor().spawn(async move { write_export_path(&path, &content, true) });
+            let result = write.await;
+            let _ = this.update(cx, |workspace, cx| match result {
+                Ok(path) => workspace.show_toast(&crate::i18n::tr3_fill("已导出 {}", "Exported {}", "Đã xuất {}", path.display()), cx),
+                Err(error) => workspace.show_toast_kind(ToastKind::Error, &format!("{}: {error:#}", crate::i18n::tr3("导出失败", "Export failed", "Xuất thất bại")), cx),
+            });
+        })
+        .detach();
+    }
+
+    /// The open document as the export engine takes it: the record's title, and
+    /// the text the reader is showing, or the record's body when no reader is
+    /// open. The reader shares its page text through `document_context` (the
+    /// bounded view the chat gets); paired blocks stay inside the reader, so this
+    /// app-level export carries the page's source text.
+    fn export_snapshot(&self, cx: &App) -> Option<ExportDocument> {
+        let entry = self.current.as_ref().and_then(|id| self.entries.iter().find(|entry| &entry.id == id));
+        let title = entry.map(|entry| display_title(&entry.title)).unwrap_or_else(|| crate::i18n::tr3("文档", "Document", "Tài liệu").to_string());
+        let text = self.pdf_reader.as_ref().and_then(|reader| reader.read(cx).document_context()).map(|(_, text)| text).or_else(|| entry.map(|entry| entry.body.clone())).unwrap_or_default();
+        let document = ExportDocument::from_text(title, &text);
+        (!document.is_empty()).then_some(document)
     }
 
     pub fn open_capture_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1116,8 +1167,16 @@ impl Workspace {
                     .h(px(HEADER_ACTIONS_H)).flex_none()
                     .flex()
                     .items_center()
-                    .when(self.current.is_some(), |d| {
+                    .when(self.current.is_some() || self.live_source.is_some(), |d| {
                         d.child(
+                            // 导出文档: the save panel decides the path and the
+                            // extension decides the format, so one button is the
+                            // whole control.
+                            seg("doc-export", "export")
+                                .tip(crate::i18n::tr3("导出文档", "Export document", "Xuất tài liệu"), None)
+                                .on_click(cx.listener(|w, _, window, cx| w.export_open_document(window, cx))),
+                        )
+                        .child(
                             // No tooltip while its dropdown is open; the menu hangs
                             // from this button's right edge.
                             seg("doc-more", "ellipsis")

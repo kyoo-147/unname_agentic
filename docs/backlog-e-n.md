@@ -27,10 +27,10 @@ Tiến độ cập nhật bằng script: `scripts/backlog-status.mjs` (đếm t�
 | B07/B08 | Native messaging Chrome↔host 2 chiều | Chrome thật ↔ host thật, profile sạch, import và sync roundtrip |
 | C09/C10 | Provider validation, consent và credential vault | E2E với key hợp lệ/không hợp lệ, không leak logs |
 | C11/C12 | Live mirror thật và chống self-capture | Test window/tab/screen capture, nhiều monitor, quyền OS |
-| C13 | Bridge desktop/extension end-to-end | Event delivery, reconnect, duplicate delivery, timeout  🟡 |
+| C13 | Cầu Chrome ↔ desktop | 🟡 | ✅ `native_bridge.rs`: typed error, duplicate bounded, checksum trước khi parse, timeout không rò pending (9 test mới); chưa chạy Chrome thật |
 | C14/C15 | Native i18n/theme | Screenshot matrix ngôn ngữ × theme × DPI |
 | C18 | Model catalogue | Discovery/config, capabilities, health check, context size  🟡 |
-| C22 | File save dialog native | Save As Markdown/PDF + conflict/permission path handling  🟡 |
+| C22 | Xuất bản dịch native | 🟡 | ✅ `export_native.rs` (Markdown/Text/JSON, ghi atomic, hỏi đường dẫn) + 14 test; nút header đang xuất tiêu đề + text trang vì PdfReader chưa expose bản dịch |
 | D02 | Cancel/abort thật | ✅ scheduler có AbortController thật, abortAll, 10 test đếm request; transport không gửi request sau abort |
 | D11 | CI | Chạy được trong account hợp lệ; nếu billing block, test runner alternative  🟡 |
 
@@ -66,8 +66,8 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | F04 | **P1** | OCR confidence và vùng nghi ngờ | Highlight vùng confidence thấp, cho sửa thủ công.  ⬜ |
 | F05 | **P1** | Searchable PDF tạo text layer từ scan | Copy/search đúng vị trí mà ảnh gốc không mất. | ✅ `src/export/searchable.ts` + 20 test: text render mode 3, đúng baseline, pdfjs trích được chữ |
 | F06 | **P1** | Mixed OCR theo vùng, bỏ qua text gốc đã tốt | Không tạo 2 lớp chữ trùng nhau.  ⬜ |
-| F07 | **P1** | Agentic OCR query-driven chỉ đọc vùng cần thiết | Một câu hỏi kích hoạt inspect/crop/zoom/extract có trace.  ⬜ |
-| F08 | **P1** | Visual grounding/citation vào bbox đa giác | Click answer focus đúng box nguồn.  ⬜ |
+| F07 | **P1** | Agentic OCR query-driven chỉ đọc vùng cần thiết | Một câu hỏi kích hoạt inspect/crop/zoom/extract có trace. | 🟡 `native-shell/src/vision_tools.rs` + 9 test: crop/zoom/rotate OCR một vùng, map toạ độ về trang, ToolTrace + budget; chưa nối vào chat agent |
+| F08 | **P1** | Visual grounding/citation vào bbox đa giác | Click answer focus đúng box nguồn. | 🟡 Core có `citations.ts` (web) và `Chat::citations` (native, 15 test); UI chưa vẽ chip click |
 | F09 | **P2** | OCR lặp lại có chọn lọc với crop/scale/contrast/rotation | Chỉ re-OCR vùng lỗi, không OCR lại toàn PDF.  ⬜ |
 | F10 | **P2** | Nhận diện dấu mộc, checkbox, handwritten/printed | Đánh nhãn từng loại và confidence.  ⬜ |
 | F11 | **P2** | So sánh nhiều OCR engines bằng confidence và consensus | Ghi engine winner theo vùng và chi phí.  ⬜ |
@@ -121,7 +121,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
-| I01 | **P0** | Chat answers với citation trang+vùng source | Click citation highlight đúng block, không chỉ page. | ✅ `src/core/citations.ts` + 24 test: 5 dạng citation, resolve vào IR, `highlightShape` ra toạ độ 0..1 |
+| I01 | **P0** | Chat answers với citation trang+vùng source | Click citation highlight đúng block, không chỉ page. | 🟡 Parser + resolve đã xong ở cả web (24 test) và native (15 test); phần highlight trong UI là wave sau |
 | I02 | **P1** | Hybrid retrieval BM25 + vector + metadata filter | Có kết quả lexical và semantic với trace.  ⬜ |
 | I03 | **P1** | Section/table-aware chunking theo Document IR | Không xé bảng/công thức giữa chunks.  ⬜ |
 | I04 | **P1** | Multi-PDF chat trong project/workspace | Trả lời dẫn nguồn phân biệt từng tài liệu.  ⬜ |

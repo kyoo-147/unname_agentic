@@ -27,6 +27,7 @@ mod devtools {
     pub fn start(_: &mut gpui::Window, _: &mut gpui::App) {}
     pub fn take_pick() -> Option<Vec<std::path::PathBuf>> { None }
 }
+mod export_native;
 mod home;
 mod i18n;
 mod input;
@@ -52,6 +53,7 @@ mod transfer;
 mod trash;
 mod tree;
 mod ui;
+mod vision_tools;
 mod voice;
 
 pub(crate) use pdf_library::{store, time};
