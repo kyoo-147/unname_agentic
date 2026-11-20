@@ -48,7 +48,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | E05 | **P1** | Tái tạo cấu trúc heading/section và mục lục tự động | Click heading đưa đúng đến đoạn gốc. | ✅ `src/core/outline.ts` + 31 test: cây section, TOC có path 1 / 1.1 / 1.1.1, level jump bị kẹp và báo, `sectionAt` cho mọi block |
 | E06 | **P1** | Tách bảng thành cell/row/col, merged cells | Xuất table có header, rowspan, colspan mà không mất dữ liệu. | ✅ `src/core/tables.ts` + 13 test: gom hàng theo baseline, cột theo corridor, colSpan, CSV RFC4180, Markdown |
 | E07 | **P1** | Nhận diện phương trình inline/display và LaTeX | Giữ công thức khi dịch, sao chép được LaTeX. | ✅ `src/core/formulas.ts` + 33 test: sup/sub/fraction/Greek/operator, `H_2O`→`H_{2}O`, chặn `and/or`, khoá cả cụm khi dịch |
-| E08 | **P1** | Tách hình, caption, bảng và liên kết caption | Click caption focus hình/bảng tương ứng.  ⬜ |
+| E08 | **P1** | Tách hình, caption, bảng và liên kết caption | Click caption focus hình/bảng tương ứng. | ✅ `src/core/captions.ts` + 14 test: cùng cột, số khớp ưu tiên, tie ghi alternative, orphan có lý do |
 | E09 | **P2** | Nhận diện header/footer/page-number để loại khỏi dịch tuỳ chọn | Không trùng nội dung mỗi trang.  ⬜ |
 | E10 | **P2** | Nhận diện hyperlinks, footnotes và cross-reference | Giữ và remap liên kết nội bộ trong file xuất.  ⬜ |
 | E11 | **P2** | Phát hiện ngôn ngữ theo đoạn/vùng, không chỉ toàn tài liệu | PDF song ngữ dịch đúng từng span.  ⬜ |
