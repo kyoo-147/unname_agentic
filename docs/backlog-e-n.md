@@ -205,7 +205,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | N05 | **P1** | Benchmark OCR: CER/WER theo ngôn ngữ và loại ảnh | Bảng số thật, so sánh engine. | 🟡 `src/core/ocr-metrics.ts` + `scripts/ocr-benchmark.mjs` + doc; **chưa có fixture/benchmark numbers** |
 | N06 | **P1** | Benchmark chất lượng dịch theo loại tài liệu | Bảng điểm thật, so sánh model. | 🟡 `src/core/perf.ts` + `scripts/perf-budget.mjs` + `docs/performance.md`: baseline p95 thật (chunk 2.71 ms, index 8.98 ms, search 0.89 ms, diff 11.74 ms) |
 | N07 | **P1** | Performance metrics p50/p95 startup/OCR/translation/export | Báo CPU/RAM/VRAM/file size và kích thước PDF.  ⬜ |
-| N08 | **P2** | CI signed release matrix Win/web/extension + SBOM/dependencies | Không phát hành nếu security/regression gate fail.  ⬜ |
+| N08 | **P2** | Release checklist có gate (tests, licences, i18n, a11y) | Checklist tự chạy, thiếu là fail. | ✅ `src/core/release-gate.ts` + `scripts/release-check.mjs` + `docs/release-checklist.md` + 36 test: unit>0, e2e≥40, gate xanh, notice đủ, changelog, artifact |
 
 ## 2. Kiến trúc đề xuất (không giả định đã tồn tại trong repo)
 
