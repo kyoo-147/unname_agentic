@@ -58,6 +58,19 @@ They are junctions, so `git` and the scripts see the normal path. Move them back
 
 Generate the PDF fixtures with `node scripts/fixtures.mjs`. Tests use generated documents rather than redistributing third-party papers.
 
+### Seeing a translation without any API key
+
+The desktop app has no built-in translation engine of its own: it calls a provider. If you have no key and no local model, run the keyless bridge and point the app at it:
+
+```powershell
+node scripts/translate-bridge.mjs --verbose          # http://127.0.0.1:4400/v1
+```
+
+Then in the reader: **Ngôn ngữ / Language → tab Cục bộ (Local) → endpoint `http://127.0.0.1:4400/v1` → model `translate-bridge` → Lưu**. Open a page and the visible region translates; the bridge reports `/health` counters so you can see the blocks it served.
+
+The bridge translates with MyMemory's public API first and Google's public `gtx` endpoint as a fallback. Both are free web endpoints, not licensed translation APIs, and MyMemory's anonymous quota is small — this is for demos and for testing the product end to end. For real work use a provider key (Google Cloud, DeepL, OpenAI-compatible) or a local model such as Ollama; the app speaks the same protocol to all of them.
+
+
 ## Verification status
 
 The web reader and the extension are the verified surface: 318 unit tests, 42 end-to-end tests, clean typecheck and a green release gate. `docs/feature-board.md` carries one row per feature with the evidence behind it and is the honest source of truth; `docs/feature-plan.md` and `docs/roadmap.md` are the older plans.
