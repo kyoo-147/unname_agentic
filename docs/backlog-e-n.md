@@ -133,7 +133,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | **P2** | Table Q&A có cell provenance và phép tính kiểm chứng | Trả kết quả số + cách tính. | ✅ `src/core/table-qa.ts` + 21 test: sum/count/max/min/compare/lookup kèm cell đã dùng, phát hiện total lệch 1 và cột % cộng 102 |
 | I10 | **P2** | Figure/formula explanation dưới dạng multimodal | Nhận thức từ image crop và cite đúng vùng.  ⬜ |
 | I11 | **P0** | Không đủ bằng chứng thì báo không đủ, không bịa | Abstain trước khi trả lời. | ✅ `src/core/abstain.ts` + 16 test: coverage/floor, câu hỏi số không có chữ số → abstain, câu yes-no không xác nhận → abstain, `guardAnswer` chặn câu trả lời không citation |
-| I12 | **P2** | Local embedding + reranker + on-device LLM mode | Không có outbound request ở offline mode.  ⬜ |
+| **P1** | Eval harness cho answer quality (citation hit, abstention) | Bảng điểm theo case cố định. | 🟡 `src/core/eval-harness.ts` + `docs/evaluation.md` + 24 test: pass chỉ khi đủ phrase + citation + abstain đúng, rate rỗng = null; **bộ case mới 4 case tổng hợp** |
 | I13 | **P2** | Reusable prompt templates: summarize, extract, review, compare | Template theo version, inject được tham số.  ⬜ |
 | I14 | **P3** | Sinh outline/report/slide brief từ bằng chứng | Đính kèm citations; không claim là kết quả đã được kiểm duyệt.  ⬜ |
 
