@@ -45,7 +45,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | E02 | **P1** | Đọc thứ tự đa cột và xuyên trang | Chuẩn hoá reading-order không lẫn cột, header/footer.  ⬜ |
 | E03 | **P1** | Phân loại block: heading, paragraph, list, table, figure, formula, footnote | Lưu type, bbox, confidence và quan hệ cha-con. | ✅ `src/core/blocks.ts` + 27 test: mỗi loại một fixture, heading level 1-3, confidence + lý do |
 | E04 | P1 | Lưu Document IR có provenance | Block có page, polygon, reading-order, source bytes hash, version. | ✅ src/core/ir.ts: contract + validate + serialize versioned; 21 test |
-| E05 | **P1** | Tái tạo cấu trúc heading/section và mục lục tự động | Click heading đưa đúng đến đoạn gốc.  ⬜ |
+| E05 | **P1** | Tái tạo cấu trúc heading/section và mục lục tự động | Click heading đưa đúng đến đoạn gốc. | ✅ `src/core/outline.ts` + 31 test: cây section, TOC có path 1 / 1.1 / 1.1.1, level jump bị kẹp và báo, `sectionAt` cho mọi block |
 | E06 | **P1** | Tách bảng thành cell/row/col, merged cells | Xuất table có header, rowspan, colspan mà không mất dữ liệu. | ✅ `src/core/tables.ts` + 13 test: gom hàng theo baseline, cột theo corridor, colSpan, CSV RFC4180, Markdown |
 | E07 | **P1** | Nhận diện phương trình inline/display và LaTeX | Giữ công thức khi dịch, sao chép được LaTeX.  ⬜ |
 | E08 | **P1** | Tách hình, caption, bảng và liên kết caption | Click caption focus hình/bảng tương ứng.  ⬜ |
