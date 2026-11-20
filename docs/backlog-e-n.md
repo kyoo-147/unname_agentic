@@ -50,7 +50,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | E07 | **P1** | Nhận diện phương trình inline/display và LaTeX | Giữ công thức khi dịch, sao chép được LaTeX. | ✅ `src/core/formulas.ts` + 33 test: sup/sub/fraction/Greek/operator, `H_2O`→`H_{2}O`, chặn `and/or`, khoá cả cụm khi dịch |
 | E08 | **P1** | Tách hình, caption, bảng và liên kết caption | Click caption focus hình/bảng tương ứng. | ✅ `src/core/captions.ts` + 14 test: cùng cột, số khớp ưu tiên, tie ghi alternative, orphan có lý do |
 | E09 | **P2** | Nhận diện header/footer/page-number để loại khỏi dịch tuỳ chọn | Không trùng nội dung mỗi trang.  ⬜ |
-| E10 | **P2** | Nhận diện hyperlinks, footnotes và cross-reference | Giữ và remap liên kết nội bộ trong file xuất.  ⬜ |
+| E10 | **P2** | Giữ hyperlink, footnote và cross-reference | Link nội bộ hoạt động lại sau export. | ✅ `src/core/links.ts` + 26 test: footnote/figure/table/section, tie báo thay vì đoán, renumber, Markdown anchor theo block id |
 | E11 | **P2** | Phát hiện ngôn ngữ theo đoạn/vùng, không chỉ toàn tài liệu | PDF song ngữ dịch đúng từng span.  ⬜ |
 | E12 | **P2** | Hỗ trợ DOCX/PPTX/XLSX/EPUB/HTML/ảnh TIFF/PNG/JPG | Đưa về IR, giữ nguồn và metadata.  ⬜ |
 | E13 | **P2** | Phát hiện PDF hỏng, font lỗi, text encoding lỗi | Cảnh báo và tự đề xuất extraction fallback.  ⬜ |
