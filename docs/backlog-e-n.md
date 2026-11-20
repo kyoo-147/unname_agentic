@@ -108,7 +108,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | H06 | **P1** | Sửa text OCR và translated block inline | Undo/redo, autosave và so khớp nguồn.  ⬜ |
 | H07 | **P1** | Tách, ghép, đổi thứ tự, xoay, xoá/trích trang | Page thumbnails phản ánh edit tức thời.  ⬜ |
 | H08 | **P1** | Trích bảng ra CSV/XLSX và công thức ra LaTeX | Dữ liệu đúng row/col và chọn đúng bảng.  ⬜ |
-| H09 | **P2** | Export HTML/Markdown faithful với ảnh và assets | Gói ZIP có media và link đúng.  ⬜ |
+| H09 | **P2** | Preserve metadata/outline/AcroForm khi xuất | Mở lại giữ metadata và form. | 🟡 `src/core/export-check.ts` kiểm cấu trúc file trước khi giao; chưa ghi metadata/outline vào file xuất |
 | H10 | **P2** | Diff hai phiên bản tài liệu (text + visual) | Chỉ ra thay đổi có toạ độ. | 🟡 `src/core/diff.ts` + 13 test: diff text theo block/từ, bỏ nhiễu whitespace/1-2 ký tự; **visual diff chưa** |
 | H11 | **P1** | Redaction PII: CCCD/CMND, số tài khoản, MST, địa chỉ | Redact đúng vùng, không lộ số. | ✅ `src/core/redact.ts` + 30 test: mỗi rule cần label/checksum/Luhn, plan gộp span + confidence floor, apply giữ nguyên phần còn lại, report không chứa giá trị |
 | H12 | **P1** | Redaction có review trước khi áp dụng | Preview và diff trước/sau. | ✅ `planRedaction` trả `kept`/`skipped` kèm lý do để duyệt trước khi `applyRedaction` |
