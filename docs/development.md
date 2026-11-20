@@ -34,15 +34,27 @@ The deterministic endpoint in `scripts/test-provider.mjs` is a test fixture, not
 
 ## Develop and verify
 
-- `pnpm test` runs browser-core, reader, OCR, export and extension behavior tests (318 tests in 28 files at the last measured commit).
+- `pnpm test` runs browser-core, reader, OCR, export and extension behavior tests (324 tests in 29 files at the 2026-11-20 audit).
 - `pnpm typecheck` checks the TypeScript sources.
 - `pnpm build` creates the web and unpacked extension artifacts. It empties `dist/extension` first, so a stale bundle can never ship beside a fresh one.
-- `pnpm test:e2e` runs 42 Chromium tests against the real app and, for the extension specs, the real MV3 extension: PDF opening, translation, pixel-level source-glyph removal, preserved chart pixels, provider errors and recovery, outline/search/page/thumbnail navigation, reload persistence, print-to-PDF, bilingual export, screenshot OCR, scanned-PDF OCR, accessibility, the 13 user journeys, and the capture plus linked-view chain.
+- `pnpm test:e2e` runs 49 Chromium tests in 15 files against the real app and, for the extension specs, the real MV3 extension: PDF opening, translation, pixel-level source-glyph removal, preserved chart pixels, provider errors and recovery, outline/search/page/thumbnail navigation, reload persistence, print-to-PDF, bilingual export, screenshot OCR, scanned-PDF OCR, accessibility, RTL/CJK rendering, batch translation, the 13 user journeys, and the capture plus linked-view chain.
 - `pwsh -File scripts/verify-web.ps1` runs the web gate as one table; `pwsh -File scripts/verify-release.ps1` is the release gate (unit, typecheck, build, e2e, then the built artifacts themselves).
 - `node scripts/check-committed-imports.mjs [rev]` resolves every relative import against the files committed at that revision. It exists because a local green build cannot catch a committed file importing a module that was never added.
 - `pwsh -File scripts/build-windows.ps1 -Action test` runs native tests with the MSVC environment.
-- `pwsh -File scripts/build-shell.ps1 -Release` builds the current GPUI native release.
+- `pwsh -File scripts/build-shell.ps1 -Release` builds the current GPUI native release. Native builds need a Developer shell so `rc.exe` exists; plain `cargo build` fails with "Windows SDK rc.exe is required".
 - The backend `reference-shell` Cargo feature is opt-in for the retired egui diagnostic executable.
+
+### Disk layout on this machine
+
+`D:` is nearly full, so two large generated trees live on `C:` behind NTFS junctions and every path above keeps working:
+
+| Path | Real location | Why |
+| --- | --- | --- |
+| `native-shell/target` | `C:\mirror-store\native-target` | a debug GPUI dependency tree is about 4 GB; on `D:` it left 0 bytes free and broke `pnpm test`, `pnpm build` and the native build with ENOSPC |
+| `artifacts/` | `C:\mirror-store\artifacts` | screenshots, logs and measurement runs (gitignored either way) |
+
+They are junctions, so `git` and the scripts see the normal path. Move them back with `cmd /c rmdir native-shell\target` then a real move when `D:` has space again. Keep one cargo profile: mixing `CARGO_PROFILE_DEV_DEBUG=0` builds with default ones makes every rebuild recompile the whole graph.
+
 
 Generate the PDF fixtures with `node scripts/fixtures.mjs`. Tests use generated documents rather than redistributing third-party papers.
 
