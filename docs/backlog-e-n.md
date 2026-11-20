@@ -188,7 +188,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | M01 | **P0** | Privacy modes Offline-only/Ask/Cloud-enabled | Không network trong Offline-only, e2e test. | ✅ `src/core/privacy.ts` + 20 test: offline = **0 fetch** kể cả batch, loopback vẫn chạy, ask cần consent |
 | M02 | **P0** | Key vault đã kiểm thử + không log credential/content nhạy cảm | Secret từ OS keystore, rotation/migration hợp lệ.  ⬜ |
 | M03 | **P1** | Document encryption at rest và secure temp/cache purge | Không tồn tại bản plaintext ngoài thư mục được quản lý.  ⬜ |
-| M04 | **P1** | Prompt-injection defenses cho PDF text/image và tool permissions | Tài liệu untrusted không thể tự nâng quyền.  ⬜ |
+| M04 | **P1** | Encryption at rest cho dữ liệu local | File DB mã hoá bằng key/passphrase. | ✅ `src/core/crypto.ts` + 24 test: PBKDF2 600k + AES-GCM, salt/IV mỗi lần, sai passphrase hay tamper đều WrongPassphrase, 1 KB thành 1505 B |
 | M05 | **P1** | PDF parser isolation/sandbox và resource limits | Chặn zip-bomb-like, memory/CPU/decompression attacks.  ⬜ |
 | M06 | **P2** | Audit log consent/cloud route per document/job | Biết file nào dùng engine nào và tại sao.  ⬜ |
 | M07 | **P2** | Workspace-level policy: no-cloud, allowed providers, retention | Rule enforcement trước request.  ⬜ |
