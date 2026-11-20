@@ -37,7 +37,7 @@ Số đo tại thời điểm này: **324 unit test web (29 file)**, **49 e2e Pl
 | A23 | Tìm trong tài liệu | ✅ | e2e gõ → kết quả → nhảy + highlight |
 | A24 | Xoay trang, fit width/page | ✅ | journey 04 là cổng cứng, xoay 90/180/270/360 vẫn giữ bản dịch |
 | A25 | Lưu vị trí/zoom/ngôn ngữ | ✅ | e2e reload về đúng trang 3 + UI tiếng Anh |
-| A26 | Xuất bản dịch (TXT/PDF) | 🟡 | TXT + in ra PDF qua hộp in trình duyệt; **không có PDF writer**, không giữ bố cục gốc |
+| A26 | Xuất bản dịch (TXT/PDF) | ✅ | `src/export/pdf.ts`: PDF thật bằng pdf-lib (ảnh trang gốc + che vùng + chữ dịch), round-trip đọc lại bằng pdfjs; 31 test + nút "Tải PDF thật". Font Unicode đang bổ sung (H02) |
 | A27 | OCR ảnh chụp → block → dịch | 🟡 | e2e OCR thật + PDF scan; model chỉ có vi/en/zh/ja/ko, chưa benchmark ảnh nghiêng/mờ |
 | A28 | RTL và CJK trong vùng dịch | 🟡 | e2e target Ả Rập (dir=rtl) + Trung (wrap, không tràn); **chưa có PDF nguồn RTL/CJK** |
 | A29 | Phím tắt đọc | ✅ | e2e bấm j/k/+/−/Ctrl+F/Escape thật |
@@ -96,7 +96,7 @@ Số đo tại thời điểm này: **324 unit test web (29 file)**, **49 e2e Pl
 | | Chức năng | | Ghi chú |
 |---|---|---|---|
 | D01 | Kiểu chung, block id ổn định | ✅ | test pin `p{page}-r{n}`, id OCR không đụng id PDF |
-| D02 | Scheduler priority/dedupe/abort | 🟡 | priority + dedupe có test; **AbortController trong scheduler là trang trí** |
+| D02 | Scheduler priority/dedupe/abort | ✅ | AbortController thật: huỷ job đang chờ (0 request), huỷ job đang chạy (AbortError), `abortAll()`; 10 test đếm request |
 | D03 | Retry/backoff, phân loại lỗi | ✅ | 7 loại lỗi, backoff jitter, không retry auth/invalid |
 | D04 | Batch cho tài liệu dài | ✅ | e2e đo **số request provider** nhỏ hơn số block |
 | D05 | Đếm ký tự / chi phí | ✅ | bảng giá 4 model, model lạ → "chưa có bảng giá" |
