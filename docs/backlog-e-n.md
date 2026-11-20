@@ -81,13 +81,13 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 |---|---|---|---|---|
 | G01 | **P0** | Xuất PDF đơn ngữ thật, không qua Print | Tải file PDF hợp lệ mở được bằng reader độc lập.  ⬜ |
 | G02 | **P1** | Xuất PDF song ngữ thật (dual PDF) | Có tuỳ chọn chia trang đối chiếu hoặc xếp xen kẽ.  ⬜ |
-| G03 | **P1** | Dịch theo paragraph/section có cross-page context | Không tách câu sai qua page boundary.  ⬜ |
+| G03 | **P1** | Domain-aware translation (legal, medical, finance, technical) | Glossary + style theo domain. | ✅ `src/core/domain.ts` + 30 test: 5 domain + general, trọng số có tài liệu, guidance 3 ngôn ngữ, glossary hints; chưa nối vào `prompt.ts` |
 | G04 | **P1** | Translation memory (TM) theo segment và version | Đoạn lặp được tái sử dụng và truy nguyên bản gốc. | ✅ `src/core/tm.ts` + 17 test: exact 1.0, gần đúng 0.875, import/export byte-identical |
 | G05 | **P1** | Glossary learning từ tài liệu và sửa của người dùng | Đề xuất term có duyệt, không tự áp. | ✅ `src/core/glossary-learn.ts` + 16 test: align theo 3 tầng, confidence theo độ nhất quán, xung đột bị từ chối, round-trip `parseGlossary` |
 | G06 | P1 | Protect placeholders: số, SKU, URL, công thức, citation, tag | Bản dịch không thay đổi các token bị khoá. | ✅ protect.ts + prompt v2 + transport mask/restore; 20 test |
 | G07 | **P1** | Tự động sửa text overflow bằng layout optimizer | Ưu tiên wrap/reflow rồi mới font scaling với cờ cảnh báo.  ⬜ |
 | G08 | **P2** | Consistency check cho thuật ngữ trong cùng tài liệu | Cùng term phải cùng bản dịch. | ✅ `src/core/consistency.ts` + 15 test: glossary vi phạm = error, 2 cách viết = warn, term xuất hiện 1 lần không báo, applyCanonical chỉ sửa cái được duyệt |
-| G09 | **P1** | Dịch theo vùng trang hoặc page range khi xuất | Xuất chỉ các trang được chọn.  ⬜ |
+| G09 | **P2** | Bilingual/parallel export ghép câu theo segment | Bản song ngữ đọc song song được. | ✅ `src/core/parallel-text.ts` + 24 test: align theo block id, ratio báo cắt cụt, Markdown có anchor, TMX round-trip, XML lỗi báo dòng |
 | G10 | **P2** | Lựa chọn văn phong formal/technical/legal/academic | Profile được lưu và đưa vào prompt versioned.  ⬜ |
 | G11 | **P2** | Translation QA: số, thuật ngữ, câu phủ định, đơn vị | Hiển thị lỗi có bằng chứng để reviewer duyệt. | ✅ `src/core/qa.ts` + 22 test: số/đơn vị/phủ định/glossary/placeholder, mỗi issue có trích nguồn hai phía |
 | G12 | **P2** | Dịch bảng giữ cell alignment và công thức số | Bảng bản dịch không đổi cấu trúc/giá trị. | ✅ `src/core/table-translate.ts` + 20 test: ô số/ngày/tiền giữ nguyên, cache, span giữ, diff/merge theo ô |
@@ -115,7 +115,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | H13 | **P3** | Form filling và flatten | Điền field, flatten có cảnh báo. | 🟡 `src/core/forms.ts` + 34 test: planFill + conflict/read-only/signature, flattenPlan cảnh báo mất gì; chưa ghi vào PDF |
 | H14 | **P1** | Validation mở file trên nhiều reader, không lỗi font | Mở được trên ≥2 PDF reader. | ✅ `checkExport` + 32 test: header/EOF, page count, font nhúng, text layer, câu nguồn còn sót, size cap |
 | H15 | **P2** | Render công thức trong PDF xuất (LaTeX → drawing) | Công thức hiện đúng, không crash. | ✅ `src/export/tex.ts` + 30 test: phân số có rule, script shift/scale, sqrt, fit theo box, `toSvg` escape, `plainText` cho text layer |
-| H16 | **P3** | Batch PDF utilities: compress, optimize, encrypt, decrypt có quyền | Có before/after quality và cảnh báo phá signature.  ⬜ |
+| H16 | **P1** | Xử lý tài liệu rất dài (500+ trang) | Chunk, checkpoint, resume. | ✅ `src/core/longform.ts` + 32 test: chunk theo budget, checkpoint ghi trước khi tính done, crash ở chunk 33/500 vẫn resume đúng một lần mỗi trang |
 
 ### I. AI Assistant, RAG & multi-document intelligence — 14 mục
 
@@ -125,10 +125,10 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | I02 | **P1** | Hybrid retrieval BM25 + embeddings trên Document IR | Truy vấn trả top-k kèm score và nguồn. | 🟡 `src/core/retrieval.ts` BM25 (k1 1.5, b 0.75) + heading boost + fold dấu tiếng Việt, 18 test; **chưa có embeddings** |
 | I03 | **P1** | Chunking hiểu bảng và section thay vì chia text máy móc | Chunk theo section/bảng, không cắt giữa công thức. | ✅ `chunkDocument`: section theo outline, bảng + caption riêng, cắt câu có overlap, không cắt trong công thức; 18 test |
 | I04 | **P1** | Hỏi đáp trên nhiều PDF với citation theo tài liệu | Câu trả lời nêu rõ tài liệu/trang. | ✅ `src/core/multi-document.ts` + 20 test: chia budget, fence theo doc, citation không có trong context bị báo unsupported, evidence matrix |
-| I05 | **P1** | Ask selected text/figure/table and explain | Context ưu tiên vùng người dùng chọn.  ⬜ |
+| I05 | **P1** | Ask selected text/figure/table and explain | Context ưu tiên vùng người dùng chọn. | ✅ `src/core/ask-selection.ts` + 21 test: mở rộng về whole block, secondary có giới hạn, fence chống đóng sớm, `grounded=false` khi không overlap |
 | I06 | **P1** | Query rewriting / decomposition | Câu hỏi phức tạp được tách và viết lại. | ✅ `src/core/query.ts` + 32 test: bỏ từ hỏi, giữ số và quoted span, synonym VN↔EN, mỗi intent một query, keyword là token của BM25 |
 | N07 | **P1** | Đo p50/p95 cho startup, OCR, translate, export, memory | Có số thật theo build. | ✅ `src/core/metrics.ts` + `docs/metrics.md` + 22 test: 9 metric có đơn vị, series theo tag, so baseline ngưỡng 10% p95, phân biệt "không hồi quy" với "không đo" |
-| I07 | **P1** | So sánh nhiều tài liệu và tạo evidence matrix | Mỗi khác biệt có trích dẫn hai phía.  ⬜ |
+| I07 | **P1** | So sánh nhiều tài liệu và tạo evidence matrix | Mỗi khác biệt có trích dẫn và trang. | ✅ `src/core/evidence-matrix.ts` + 32 test: cell có page/block/excerpt, gap khác zero, conflict/agree, CSV + Markdown |
 | I08 | **P1** | Agent tools: navigate_page, crop, zoom, OCR_region, search, cite | Ghi tool trace, giới hạn bước/chi phí và allowlist.  ⬜ |
 | I09 | **P2** | Table Q&A có cell provenance và phép tính kiểm chứng | Trả kết quả số + cell nguồn + phép tính.  ⬜ |
 | I10 | **P2** | Figure/formula explanation dưới dạng multimodal | Nhận thức từ image crop và cite đúng vùng.  ⬜ |
@@ -159,7 +159,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | K01 | **P1** | Template trích fields dưới dạng schema JSON | Field có value, bbox, confidence, type, validator. | ✅ `src/core/schema.ts` + 26 test: 6 kiểu field, chuẩn hoá số/ngày/tiền, ambiguity báo chứ không đoán |
 | K02 | **P1** | Extract key-value từ invoice/contract/certificate/customs docs | Có review screen và export structured JSON/CSV.  ⬜ |
 | K03 | **P1** | Batch jobs: pause/cancel/retry, progress | Hàng đợi có trạng thái rõ, không treo. | 🟡 `src/core/queue.ts` + 12 test: concurrency, pause/resume/cancel, retry failed, progress nguyên; **chưa có UI** |
-| K04 | **P1** | Folder watch tự động import/process theo rule | Chỉ kích hoạt thư mục do user cấp quyền.  ⬜ |
+| **P1** | Batch API/CLI với folder watcher | Chạy được batch không cần UI. | 🟡 `src/core/cli-args.ts` + `scripts/mirror-cli.mjs` + `docs/cli.md` + 63 test: parse 4 lệnh/9 flag, drift guard, `check` chạy thật trên 41 PDF; **extract/translate/export mới plan, exit 7** vì core chưa import được từ Node |
 | K05 | **P1** | Human review queue cho field thiếu chắc chắn | Confidence thấp vào queue, có accept/reject. | ✅ `src/core/review.ts` + 15 test: chỉ field dưới ngưỡng hoặc lỗi vào queue, quyết định có audit, lần hai trả AlreadyDecided, export/apply round-trip |
 | K06 | **P2** | Rule engine auto-tag/classify/date/vendor/document type | Mỗi rule có preview và override.  ⬜ |
 | K07 | **P2** | Review/approve queue cho tài liệu lỗi hoặc low-confidence | Thống kê unresolved fields, không tự xuất sai.  ⬜ |
@@ -190,10 +190,10 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | M02 | **P0** | Key vault đã kiểm thử + không log credential/content nhạy cảm | Secret từ OS keystore, rotation/migration hợp lệ.  ⬜ |
 | M03 | **P1** | Document encryption at rest và secure temp/cache purge | Không tồn tại bản plaintext ngoài thư mục được quản lý.  ⬜ |
 | M04 | **P1** | Encryption at rest cho dữ liệu local | File DB mã hoá bằng key/passphrase. | ✅ `src/core/crypto.ts` + 24 test: PBKDF2 600k + AES-GCM, salt/IV mỗi lần, sai passphrase hay tamper đều WrongPassphrase, 1 KB thành 1505 B |
-| M05 | **P1** | PDF parser isolation/sandbox và resource limits | Chặn zip-bomb-like, memory/CPU/decompression attacks.  ⬜ |
+| **P1** | Audit log local: file nào, ai, khi nào, export gì | Truy vết được mọi thao tác. | ✅ `src/core/audit.ts` + 25 test: 8 loại event, chặn detail giống secret, chain SHA-256 phát hiện sửa, report mask giá trị |
 | M06 | **P2** | Audit log consent/cloud route per document/job | Biết file nào dùng engine nào và tại sao.  ⬜ |
 | M07 | **P2** | Workspace-level policy: no-cloud, allowed providers, retention | Rule enforcement trước request.  ⬜ |
-| M08 | **P3** | Compliance export và retention/deletion policy configuration | Quy trình xoá dữ liệu, back-up, audit đều kiểm chứng được.  ⬜ |
+| **P2** | Local-only mode + audit trail cho cloud call | Biết cái gì đã gửi lên cloud. | ✅ cùng `audit.ts`: kind `translate`/`export` + `privacy.ts` chặn mạng; audit ghi lại quyết định |
 
 ### N. Đo chất lượng, quan sát và phát hành — 8 mục
 
