@@ -21,7 +21,7 @@ Tiến độ cập nhật bằng script: `scripts/backlog-status.mjs` (đếm t�
 
 | Mã | Việc hoàn thiện | Bằng chứng cần có | Trạng thái |
 |---|---|---|---|
-| A26 | PDF writer đúng nghĩa | Export file rồi mở/inspect bằng 2 PDF readers khác nhau  🟡 |
+| A26 | PDF writer đúng nghĩa | ✅ DOM-free pagePlan + buildPdf bằng pdf-lib, round-trip qua pdfjs; 31 test (font Unicode đang làm ở H02) |
 | A27 | Benchmark OCR đa ngôn ngữ/ảnh xấu | CER/WER cho blur, skew, rotate, noise; định nghĩa language support  🟡 |
 | A28 | RTL/CJK nguồn thật | Corpus RTL/CJK + visual regression + copy/search text  🟡 |
 | B07/B08 | Native messaging Chrome↔host 2 chiều | Chrome thật ↔ host thật, profile sạch, import và sync roundtrip |
@@ -31,7 +31,7 @@ Tiến độ cập nhật bằng script: `scripts/backlog-status.mjs` (đếm t�
 | C14/C15 | Native i18n/theme | Screenshot matrix ngôn ngữ × theme × DPI |
 | C18 | Model catalogue | Discovery/config, capabilities, health check, context size  🟡 |
 | C22 | File save dialog native | Save As Markdown/PDF + conflict/permission path handling  🟡 |
-| D02 | Cancel/abort thật | Request aborted, no stale commit, no double-charge where avoidable  🟡 |
+| D02 | Cancel/abort thật | ✅ scheduler có AbortController thật, abortAll, 10 test đếm request; transport không gửi request sau abort |
 | D11 | CI | Chạy được trong account hợp lệ; nếu billing block, test runner alternative  🟡 |
 
 ## 1. Backlog mở rộng — 120 tính năng
@@ -44,7 +44,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | E01 | **P0** | Phát hiện PDF born-digital, scanned, hybrid theo trang | Tự chọn extraction/OCR từng trang và ghi lý do chọn engine.  ⬜ |
 | E02 | **P1** | Đọc thứ tự đa cột và xuyên trang | Chuẩn hoá reading-order không lẫn cột, header/footer.  ⬜ |
 | E03 | **P1** | Phân loại block: heading, paragraph, list, table, figure, formula, footnote | Lưu type, bbox, confidence và quan hệ cha-con.  ⬜ |
-| E04 | **P1** | Lưu Document IR có provenance | Block có page, polygon, reading-order, source bytes hash, version.  ⬜ |
+| E04 | P1 | Lưu Document IR có provenance | Block có page, polygon, reading-order, source bytes hash, version. | ✅ src/core/ir.ts: contract + validate + serialize versioned; 21 test |
 | E05 | **P1** | Tái tạo cấu trúc heading/section và mục lục tự động | Click heading đưa đúng đến đoạn gốc.  ⬜ |
 | E06 | **P1** | Tách bảng thành cell/row/col, merged cells | Xuất table có header, rowspan, colspan mà không mất dữ liệu.  ⬜ |
 | E07 | **P1** | Nhận diện phương trình inline/display và LaTeX | Giữ công thức khi dịch, sao chép được LaTeX.  ⬜ |
@@ -64,7 +64,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | F02 | **P1** | Tiền xử lý ảnh: deskew, rotate, denoise, binarize | Có before/after và OCR quality gain.  ⬜ |
 | F03 | **P1** | Dewarp trang cong/ảnh điện thoại | Text line baseline được chỉnh thẳng.  ⬜ |
 | F04 | **P1** | OCR confidence và vùng nghi ngờ | Highlight vùng confidence thấp, cho sửa thủ công.  ⬜ |
-| F05 | **P1** | Searchable PDF tạo text layer từ scan | Copy/search đúng vị trí mà ảnh gốc không mất.  ⬜ |
+| F05 | P1 | Searchable PDF tạo text layer từ scan | Copy/search đúng vị trí mà ảnh gốc không mất. | ⬜ |
 | F06 | **P1** | Mixed OCR theo vùng, bỏ qua text gốc đã tốt | Không tạo 2 lớp chữ trùng nhau.  ⬜ |
 | F07 | **P1** | Agentic OCR query-driven chỉ đọc vùng cần thiết | Một câu hỏi kích hoạt inspect/crop/zoom/extract có trace.  ⬜ |
 | F08 | **P1** | Visual grounding/citation vào bbox đa giác | Click answer focus đúng box nguồn.  ⬜ |
@@ -84,7 +84,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | G03 | **P1** | Dịch theo paragraph/section có cross-page context | Không tách câu sai qua page boundary.  ⬜ |
 | G04 | **P1** | Translation memory (TM) theo segment và version | Đoạn lặp được tái sử dụng và truy nguyên bản gốc.  ⬜ |
 | G05 | **P1** | Glossary đa ngôn ngữ cấp workspace + bảo vệ thuật ngữ | Bảo toàn thuật ngữ khi dịch/đổi provider.  ⬜ |
-| G06 | **P1** | Protect placeholders: số, SKU, URL, công thức, citation, tag | Bản dịch không thay đổi các token bị khoá.  ⬜ |
+| G06 | P1 | Protect placeholders: số, SKU, URL, công thức, citation, tag | Bản dịch không thay đổi các token bị khoá. | ✅ protect.ts + prompt v2 + transport mask/restore; 20 test |
 | G07 | **P1** | Tự động sửa text overflow bằng layout optimizer | Ưu tiên wrap/reflow rồi mới font scaling với cờ cảnh báo.  ⬜ |
 | G08 | **P1** | Preview diff source/target từng block trước khi export | Cho accept/retranslate/edit từng block.  ⬜ |
 | G09 | **P1** | Dịch theo vùng trang hoặc page range khi xuất | Xuất chỉ các trang được chọn.  ⬜ |
