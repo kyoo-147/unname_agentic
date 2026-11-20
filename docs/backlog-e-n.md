@@ -125,7 +125,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | I02 | **P1** | Hybrid retrieval BM25 + embeddings trên Document IR | Truy vấn trả top-k kèm score và nguồn. | 🟡 `src/core/retrieval.ts` BM25 (k1 1.5, b 0.75) + heading boost + fold dấu tiếng Việt, 18 test; **chưa có embeddings** |
 | I03 | **P1** | Chunking hiểu bảng và section thay vì chia text máy móc | Chunk theo section/bảng, không cắt giữa công thức. | ✅ `chunkDocument`: section theo outline, bảng + caption riêng, cắt câu có overlap, không cắt trong công thức; 18 test |
 | I04 | **P1** | Hỏi đáp trên nhiều PDF với citation theo tài liệu | Câu trả lời nêu rõ tài liệu/trang. | ✅ `src/core/multi-document.ts` + 20 test: chia budget, fence theo doc, citation không có trong context bị báo unsupported, evidence matrix |
-| I05 | **P1** | Ask selected text/figure/table and explain | Context ưu tiên vùng người dùng chọn.  ⬜ |
+| I05 | **P1** | Ask selected text/figure/table and explain | Context ưu tiên vùng người dùng chọn. | ✅ `src/core/ask-selection.ts` + 21 test: mở rộng về whole block, secondary có giới hạn, fence chống đóng sớm, `grounded=false` khi không overlap |
 | I06 | **P1** | Query rewriting / decomposition | Câu hỏi phức tạp được tách và viết lại. | ✅ `src/core/query.ts` + 32 test: bỏ từ hỏi, giữ số và quoted span, synonym VN↔EN, mỗi intent một query, keyword là token của BM25 |
 | N07 | **P1** | Đo p50/p95 cho startup, OCR, translate, export, memory | Có số thật theo build. | ✅ `src/core/metrics.ts` + `docs/metrics.md` + 22 test: 9 metric có đơn vị, series theo tag, so baseline ngưỡng 10% p95, phân biệt "không hồi quy" với "không đo" |
 | I07 | **P1** | So sánh nhiều tài liệu và tạo evidence matrix | Mỗi khác biệt có trích dẫn hai phía.  ⬜ |
