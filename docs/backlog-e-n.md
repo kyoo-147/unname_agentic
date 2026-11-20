@@ -60,7 +60,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
-| F01 | **P0** | Tăng số ngôn ngữ OCR qua OCR engine adapter | Chọn engine theo script, language packs tải riêng.  ⬜ |
+| F01 | **P1** | Chọn engine OCR theo loại trang + ghi lý do | Mỗi trang ghi engine đã chọn và vì sao. | ✅ `src/core/engine-plan.ts` + 32 test: digital→none, scan→engine nhanh nhất có sẵn, ngôn ngữ không hỗ trợ bị demote, offline loại cloud, budget ước lượng |
 | F02 | **P1** | Tiền xử lý ảnh: deskew, rotate, denoise, binarize | Có before/after và OCR quality gain.  ⬜ |
 | F03 | **P1** | Preprocessing: deskew/binarize/denoise/upscale pipeline | OCR tăng chất lượng đo được. | ✅ `src/core/preprocess.ts` + 19 test: đo stats, ước lượng skew bằng projection profile, quyết định kèm lý do, ngưỡng export |
 | F04 | **P1** | OCR confidence và vùng nghi ngờ | Highlight vùng confidence thấp, cho sửa thủ công.  ⬜ |
