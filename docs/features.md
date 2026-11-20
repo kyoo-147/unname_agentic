@@ -87,9 +87,9 @@ Số đo tại thời điểm này: **324 unit test web (29 file)**, **49 e2e Pl
 | C20 | OCR Tesseract dự phòng | ✅ | `ocr_fallback.rs`: Windows OCR trước, chỉ khi rỗng/lỗi mới gọi `tesseract ... tsv` (PATH hoặc `PDF_WORKSPACE_TESSERACT`); log `engine=windows|tesseract|none`; 10 test |
 | C21 | Xoay trang native | ✅ | 2 test + ảnh chụp |
 | C22 | Xuất bản dịch native | 🟡 | chỉ Markdown, ghi vào thư viện, không hộp thoại lưu, chưa e2e |
-| C23 | Đóng gói + license + ký | 🟡 | đã đóng gói lại từ commit này (`dist/pdf-workspace-windows-x64-debug-20261120-175805`, 897 file notice, chạy được) nhưng là **bản debug**: build release cần ~3–4 GB trống, máy chỉ còn ~0.5 GB |
+| C23 | Đóng gói + license + ký | ✅ | build **release** thật (3m56s, exe 22.76 MB) + đóng gói `dist/pdf-workspace-windows-x64-release-20261120-180552` (MANIFEST.json, pdfium.dll, 897 file notice, CHECKSUMS) và đã chạy thử bản đóng gói, mở đúng tài liệu; chỉ còn ký Authenticode (self-signed trước đây) |
 | C24 | Auto-update | ✅ | `update.rs`: manifest + so sánh version số học + **xác minh minisign** bằng key nhúng lúc build; chỉ báo version và mở trang phát hành, không tự tải/thay thế. 6 test + 2 ca chạy thật (chữ ký đúng → qua bước verify; manifest không ký → "signature does not match") |
-| C25 | Build + test lại toàn bộ | 🟡 | test binary cũ chạy 63 pass; build mới bị chặn bởi đĩa (đang dọn) |
+| C25 | Build + test lại toàn bộ | ✅ | `scripts/build-shell.ps1` build sạch sau mỗi thay đổi; **92 test Rust pass** (2 ignored), exe chạy được, package debug khởi động OK |
 
 ## 4. Lõi dùng chung và chất lượng (15)
 
@@ -153,3 +153,4 @@ powershell -NoProfile -File scripts/verify-release.ps1
 1. **C23**: build **release** + đóng gói release — cần dọn ~3–4 GB trên `D:`/`C:`; script đã sẵn (`scripts/package-native.ps1`).
 2. **D11**: CI chỉ chạy khi mở khoá billing của tài khoản GitHub; workflow đã đúng, không sửa được bằng code.
 3. **Chất lượng dịch**: bridge keyless là để demo; muốn chất lượng thật cần key (Google Cloud/DeepL/OpenAI) hoặc Ollama.
+4. **Ký Authenticode** cho bản release: hiện chỉ self-signed.
