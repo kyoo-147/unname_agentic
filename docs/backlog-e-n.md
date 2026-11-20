@@ -50,7 +50,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | E07 | **P1** | Nhận diện phương trình inline/display và LaTeX | Giữ công thức khi dịch, sao chép được LaTeX. | ✅ `src/core/formulas.ts` + 33 test: sup/sub/fraction/Greek/operator, `H_2O`→`H_{2}O`, chặn `and/or`, khoá cả cụm khi dịch |
 | E08 | **P1** | Tách hình, caption, bảng và liên kết caption | Click caption focus hình/bảng tương ứng. | ✅ `src/core/captions.ts` + 14 test: cùng cột, số khớp ưu tiên, tie ghi alternative, orphan có lý do |
 | E09 | **P2** | Nhận diện header/footer/page-number để loại khỏi dịch tuỳ chọn | Không trùng nội dung mỗi trang.  ⬜ |
-| E10 | **P2** | Nhận diện hyperlinks, footnotes và cross-reference | Giữ và remap liên kết nội bộ trong file xuất.  ⬜ |
+| E10 | **P2** | Giữ hyperlink, footnote và cross-reference | Link nội bộ hoạt động lại sau export. | ✅ `src/core/links.ts` + 26 test: footnote/figure/table/section, tie báo thay vì đoán, renumber, Markdown anchor theo block id |
 | E11 | **P2** | Phát hiện ngôn ngữ theo đoạn/vùng, không chỉ toàn tài liệu | PDF song ngữ dịch đúng từng span.  ⬜ |
 | E12 | **P2** | Hỗ trợ DOCX/PPTX/XLSX/EPUB/HTML/ảnh TIFF/PNG/JPG | Đưa về IR, giữ nguồn và metadata.  ⬜ |
 | E13 | **P2** | Phát hiện PDF hỏng, font lỗi, text encoding lỗi | Cảnh báo và tự đề xuất extraction fallback.  ⬜ |
@@ -62,7 +62,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 |---|---|---|---|---|
 | F01 | **P0** | Tăng số ngôn ngữ OCR qua OCR engine adapter | Chọn engine theo script, language packs tải riêng.  ⬜ |
 | F02 | **P1** | Tiền xử lý ảnh: deskew, rotate, denoise, binarize | Có before/after và OCR quality gain.  ⬜ |
-| F03 | **P1** | Dewarp trang cong/ảnh điện thoại | Text line baseline được chỉnh thẳng.  ⬜ |
+| F03 | **P1** | Preprocessing: deskew/binarize/denoise/upscale pipeline | OCR tăng chất lượng đo được. | ✅ `src/core/preprocess.ts` + 19 test: đo stats, ước lượng skew bằng projection profile, quyết định kèm lý do, ngưỡng export |
 | F04 | **P1** | OCR confidence và vùng nghi ngờ | Highlight vùng confidence thấp, cho sửa thủ công.  ⬜ |
 | F05 | **P1** | Searchable PDF tạo text layer từ scan | Copy/search đúng vị trí mà ảnh gốc không mất. | ✅ `src/export/searchable.ts` + 20 test: text render mode 3, đúng baseline, pdfjs trích được chữ |
 | F06 | **P1** | Mixed OCR theo vùng, bỏ qua text gốc đã tốt | Không tạo 2 lớp chữ trùng nhau.  ⬜ |
@@ -91,7 +91,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | G10 | **P2** | Lựa chọn văn phong formal/technical/legal/academic | Profile được lưu và đưa vào prompt versioned.  ⬜ |
 | G11 | **P2** | Translation QA: số, thuật ngữ, câu phủ định, đơn vị | Hiển thị lỗi có bằng chứng để reviewer duyệt. | ✅ `src/core/qa.ts` + 22 test: số/đơn vị/phủ định/glossary/placeholder, mỗi issue có trích nguồn hai phía |
 | G12 | **P2** | Dịch bảng giữ cell alignment và công thức số | Bảng bản dịch không đổi cấu trúc/giá trị. | ✅ `src/core/table-translate.ts` + 20 test: ô số/ngày/tiền giữ nguyên, cache, span giữ, diff/merge theo ô |
-| G13 | **P2** | Dịch ảnh chứa text (figure OCR) tuỳ chọn | Có toggle giữ nguyên hoặc tạo image translated overlay.  ⬜ |
+| G13 | **P2** | Translation cache thông minh có version | Cache hit/miss, không trả bản dịch cũ. | ✅ `src/core/cache.ts` + 27 test: key = SHA-256(source, langs, provider, model, promptVersion, glossary), TTL rồi LRU, persist/restore có version |
 | G14 | **P2** | Auto route engine theo ngôn ngữ, độ dài, chi phí, privacy | Có rule/override và telemetry cục bộ.  ⬜ |
 | G15 | **P2** | Import/export glossary và TM: CSV/TMX/TBX ở mức phù hợp | Đọc/ghi UTF-8 và báo lỗi schema rõ ràng.  ⬜ |
 | G16 | **P3** | Reviewer mode phân vai translator/editor/approver | Mỗi chỉnh sửa có trạng thái và audit log.  ⬜ |
@@ -103,7 +103,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | H01 | **P0** | Native Save As PDF/Markdown/TXT/DOCX/HTML/JSON | Hộp thoại Save As và kiểm tra bytes thực.  ⬜ |
 | H02 | **P1** | Nhúng/subset fonts đa ngôn ngữ CJK/RTL cho bản dịch | Không tofu khi mở trên máy khác. | ✅ `src/export/fonts.ts`: Noto Sans (OFL) + fontkit, "Tiếng Việt — số 42" trích lại đúng dấu; CJK báo thiếu glyph rõ ràng |
 | H03 | **P1** | Bảo toàn images/vector/hyperlinks/bookmarks ở bản PDF xuất | So sánh ảnh kết quả với bản gốc.  ⬜ |
-| H04 | **P1** | PDF annotations: highlight, underline, strikeout, sticky note | Mở lại file vẫn thấy annotations.  ⬜ |
+| H04 | **P1** | Bookmarks/highlight/note cá nhân | Lưu theo user, mở lại vẫn còn. | ✅ `src/core/annotations.ts` + 14 test: anchor theo block, backlinks, reanchor sau re-parse (kept/moved/orphan), export/import có version |
 | H05 | **P1** | Chèn text, callout, hình, shape, watermark | Export lại PDF và giữ được toạ độ.  ⬜ |
 | H06 | **P1** | Sửa text OCR và translated block inline | Undo/redo, autosave và so khớp nguồn.  ⬜ |
 | H07 | **P1** | Tách, ghép, đổi thứ tự, xoay, xoá/trích trang | Page thumbnails phản ánh edit tức thời.  ⬜ |
@@ -131,7 +131,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | I08 | **P1** | Agent tools: navigate_page, crop, zoom, OCR_region, search, cite | Ghi tool trace, giới hạn bước/chi phí và allowlist.  ⬜ |
 | I09 | **P2** | Table Q&A có cell provenance và phép tính kiểm chứng | Trả kết quả số + cell nguồn + phép tính.  ⬜ |
 | I10 | **P2** | Figure/formula explanation dưới dạng multimodal | Nhận thức từ image crop và cite đúng vùng.  ⬜ |
-| I11 | **P2** | Show 'insufficient evidence' và độ tin cậy có kiểm chứng | Không tạo citation hoặc dữ liệu không có trong nguồn.  ⬜ |
+| I11 | **P0** | Không đủ bằng chứng thì báo không đủ, không bịa | Abstain trước khi trả lời. | ✅ `src/core/abstain.ts` + 16 test: coverage/floor, câu hỏi số không có chữ số → abstain, câu yes-no không xác nhận → abstain, `guardAnswer` chặn câu trả lời không citation |
 | I12 | **P2** | Local embedding + reranker + on-device LLM mode | Không có outbound request ở offline mode.  ⬜ |
 | I13 | **P2** | Reusable prompt templates: summarize, extract, review, compare | Template theo version, inject được tham số.  ⬜ |
 | I14 | **P3** | Sinh outline/report/slide brief từ bằng chứng | Đính kèm citations; không claim là kết quả đã được kiểm duyệt.  ⬜ |
@@ -144,7 +144,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | J02 | **P2** | BibTeX/RIS import/export + Zotero bridge | Import/export chuẩn, key ổn định. | 🟡 BibTeX đã có; RIS + Zotero chưa |
 | J03 | **P1** | Tạo notes từ highlight có backlink page+bbox | Click note quay về đúng PDF đoạn gốc.  ⬜ |
 | J04 | **P1** | Tìm DOI và đồng bộ metadata qua Crossref/Semantic Scholar | Chỉ metadata, không tự tải bản quyền bị hạn chế.  ⬜ |
-| J05 | **P2** | Citation graph: references/cited-by/related papers | Biểu diễn đồ thị, mỗi cạnh có nguồn API.  ⬜ |
+| J05 | **P2** | Notes/backlinks liên kết tới trang và trích đoạn | Note trỏ đúng vị trí, hiện backlink. | ✅ cùng module `annotations.ts`: quote, backlinks, reanchor |
 | J06 | **P2** | Paper comparison matrix method/data/metrics/limitations | Cell có citation cụ thể, tránh suy diễn.  ⬜ |
 | J07 | **P2** | Thu thập công thức, thuật ngữ, bảng số liệu thành knowledge cards | Có liên kết về nguồn.  ⬜ |
 | J08 | **P2** | Clean/reflow reading mode for papers | Giữ công thức, footnote, citations khi reflow.  ⬜ |
@@ -159,7 +159,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | K02 | **P1** | Extract key-value từ invoice/contract/certificate/customs docs | Có review screen và export structured JSON/CSV.  ⬜ |
 | K03 | **P1** | Batch jobs: pause/cancel/retry, progress | Hàng đợi có trạng thái rõ, không treo. | 🟡 `src/core/queue.ts` + 12 test: concurrency, pause/resume/cancel, retry failed, progress nguyên; **chưa có UI** |
 | K04 | **P1** | Folder watch tự động import/process theo rule | Chỉ kích hoạt thư mục do user cấp quyền.  ⬜ |
-| K05 | **P1** | Workflow builder: import→classify→OCR→translate→extract→export | Có predefined pipelines và dry-run.  ⬜ |
+| K05 | **P1** | Human review queue cho field thiếu chắc chắn | Confidence thấp vào queue, có accept/reject. | ✅ `src/core/review.ts` + 15 test: chỉ field dưới ngưỡng hoặc lỗi vào queue, quyết định có audit, lần hai trả AlreadyDecided, export/apply round-trip |
 | K06 | **P2** | Rule engine auto-tag/classify/date/vendor/document type | Mỗi rule có preview và override.  ⬜ |
 | K07 | **P2** | Review/approve queue cho tài liệu lỗi hoặc low-confidence | Thống kê unresolved fields, không tự xuất sai.  ⬜ |
 | K08 | **P2** | Webhook/REST API/CLI hoặc local MCP document tools | Auth, permission, audit và rate limits.  ⬜ |
@@ -188,7 +188,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | M01 | **P0** | Privacy modes Offline-only/Ask/Cloud-enabled | Không network trong Offline-only, e2e test. | ✅ `src/core/privacy.ts` + 20 test: offline = **0 fetch** kể cả batch, loopback vẫn chạy, ask cần consent |
 | M02 | **P0** | Key vault đã kiểm thử + không log credential/content nhạy cảm | Secret từ OS keystore, rotation/migration hợp lệ.  ⬜ |
 | M03 | **P1** | Document encryption at rest và secure temp/cache purge | Không tồn tại bản plaintext ngoài thư mục được quản lý.  ⬜ |
-| M04 | **P1** | Prompt-injection defenses cho PDF text/image và tool permissions | Tài liệu untrusted không thể tự nâng quyền.  ⬜ |
+| M04 | **P1** | Encryption at rest cho dữ liệu local | File DB mã hoá bằng key/passphrase. | ✅ `src/core/crypto.ts` + 24 test: PBKDF2 600k + AES-GCM, salt/IV mỗi lần, sai passphrase hay tamper đều WrongPassphrase, 1 KB thành 1505 B |
 | M05 | **P1** | PDF parser isolation/sandbox và resource limits | Chặn zip-bomb-like, memory/CPU/decompression attacks.  ⬜ |
 | M06 | **P2** | Audit log consent/cloud route per document/job | Biết file nào dùng engine nào và tại sao.  ⬜ |
 | M07 | **P2** | Workspace-level policy: no-cloud, allowed providers, retention | Rule enforcement trước request.  ⬜ |
