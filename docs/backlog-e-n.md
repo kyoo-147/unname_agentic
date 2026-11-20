@@ -143,7 +143,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | J01 | **P1** | DOI/arXiv detection, authors, venue, references | Metadata đúng, tạo được BibTeX. | 🟡 `src/core/bibtex.ts` (parse/emit/stable key/dedupe, 26 test); **chưa fetch DOI/arXiv** |
 | J02 | **P2** | BibTeX/RIS import/export + Zotero bridge | Import/export chuẩn, key ổn định. | 🟡 BibTeX đã có; RIS + Zotero chưa |
 | J03 | **P2** | Citation graph/tìm paper liên quan | Đồ thị citation tương tác. | ✅ `src/core/citation-graph.ts` + 47 test: resolve theo DOI rồi title+year, stub cho cái không resolve, related/coCitation, DOT + JSON |
-| J04 | **P1** | Tìm DOI và đồng bộ metadata qua Crossref/Semantic Scholar | Chỉ metadata, không tự tải bản quyền bị hạn chế.  ⬜ |
+| J04 | **P2** | Semantic Scholar/Crossref enrichment | Có metadata, abstract, citation count. | ✅ `src/core/scholar.ts` + 32 test: DOI/arXiv normalise, build URL, parse 2 nguồn, merge có provenance |
 | J05 | **P2** | Notes/backlinks liên kết tới trang và trích đoạn | Note trỏ đúng vị trí, hiện backlink. | ✅ cùng module `annotations.ts`: quote, backlinks, reanchor |
 | J06 | **P2** | Paper comparison matrix method/data/metrics/limitations | Cell có citation cụ thể, tránh suy diễn.  ⬜ |
 | J07 | **P2** | Thu thập công thức, thuật ngữ, bảng số liệu thành knowledge cards | Có liên kết về nguồn.  ⬜ |
