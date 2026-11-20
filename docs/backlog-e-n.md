@@ -69,7 +69,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | F07 | **P1** | Agentic OCR query-driven chỉ đọc vùng cần thiết | Một câu hỏi kích hoạt inspect/crop/zoom/extract có trace. | 🟡 `native-shell/src/vision_tools.rs` + 9 test: crop/zoom/rotate OCR một vùng, map toạ độ về trang, ToolTrace + budget; chưa nối vào chat agent |
 | F08 | **P1** | Visual grounding/citation vào bbox đa giác | Click answer focus đúng box nguồn. | 🟡 Core có `citations.ts` (web) và `Chat::citations` (native, 15 test); UI chưa vẽ chip click |
 | F09 | **P2** | OCR lặp lại có chọn lọc với crop/scale/contrast/rotation | Chỉ re-OCR vùng lỗi, không OCR lại toàn PDF.  ⬜ |
-| F10 | **P2** | Nhận diện dấu mộc, checkbox, handwritten/printed | Đánh nhãn từng loại và confidence.  ⬜ |
+| **P1** | Offline/no-network mode e2e (không cloud call) | 0 request ra ngoài, có test. | ✅ `src/core/network-guard.ts` + 14 test: ghi mọi attempt kể cả bị chặn, policy deny/loopback/origin list, wrap transport để test cả lỗi lẫn log |
 | F11 | **P2** | So sánh nhiều OCR engines bằng confidence và consensus | Ghi engine winner theo vùng và chi phí.  ⬜ |
 | F12 | **P2** | Image understanding: biểu đồ, sơ đồ, hình kỹ thuật | Kết quả mô tả được gắn với ảnh nguồn.  ⬜ |
 | F13 | **P2** | Phát hiện mâu thuẫn OCR bằng kiểm tra số/ngày/đơn vị | Flag số hoặc ký tự rủi ro cao để duyệt.  ⬜ |
