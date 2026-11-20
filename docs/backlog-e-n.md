@@ -83,7 +83,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | G02 | **P1** | Xuất PDF song ngữ thật (dual PDF) | Có tuỳ chọn chia trang đối chiếu hoặc xếp xen kẽ.  ⬜ |
 | G03 | **P1** | Dịch theo paragraph/section có cross-page context | Không tách câu sai qua page boundary.  ⬜ |
 | G04 | **P1** | Translation memory (TM) theo segment và version | Đoạn lặp được tái sử dụng và truy nguyên bản gốc. | ✅ `src/core/tm.ts` + 17 test: exact 1.0, gần đúng 0.875, import/export byte-identical |
-| G05 | **P1** | Glossary đa ngôn ngữ cấp workspace + bảo vệ thuật ngữ | Bảo toàn thuật ngữ khi dịch/đổi provider.  ⬜ |
+| G05 | **P1** | Glossary learning từ tài liệu và sửa của người dùng | Đề xuất term có duyệt, không tự áp. | ✅ `src/core/glossary-learn.ts` + 16 test: align theo 3 tầng, confidence theo độ nhất quán, xung đột bị từ chối, round-trip `parseGlossary` |
 | G06 | P1 | Protect placeholders: số, SKU, URL, công thức, citation, tag | Bản dịch không thay đổi các token bị khoá. | ✅ protect.ts + prompt v2 + transport mask/restore; 20 test |
 | G07 | **P1** | Tự động sửa text overflow bằng layout optimizer | Ưu tiên wrap/reflow rồi mới font scaling với cờ cảnh báo.  ⬜ |
 | G08 | **P1** | Preview diff source/target từng block trước khi export | Cho accept/retranslate/edit từng block.  ⬜ |
