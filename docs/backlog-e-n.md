@@ -159,7 +159,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | K01 | **P1** | Template trích fields dưới dạng schema JSON | Field có value, bbox, confidence, type, validator. | ✅ `src/core/schema.ts` + 26 test: 6 kiểu field, chuẩn hoá số/ngày/tiền, ambiguity báo chứ không đoán |
 | K02 | **P1** | Extract key-value từ invoice/contract/certificate/customs docs | Có review screen và export structured JSON/CSV.  ⬜ |
 | K03 | **P1** | Batch jobs: pause/cancel/retry, progress | Hàng đợi có trạng thái rõ, không treo. | 🟡 `src/core/queue.ts` + 12 test: concurrency, pause/resume/cancel, retry failed, progress nguyên; **chưa có UI** |
-| **P1** | Batch API/CLI với folder watcher | Chạy được batch không cần UI. | 🟡 `src/core/cli-args.ts` + `scripts/mirror-cli.mjs` + `docs/cli.md` + 63 test: parse 4 lệnh/9 flag, drift guard, `check` chạy thật trên 41 PDF; **extract/translate/export mới plan, exit 7** vì core chưa import được từ Node |
+| K04 | **P1** | Batch API/CLI với folder watcher | Chạy được batch không cần UI. | 🟡 `src/core/cli-args.ts` + `scripts/mirror-cli.mjs` + `docs/cli.md` + 63 test: parse 4 lệnh/9 flag, drift guard, `check` chạy thật trên 41 PDF; extract/translate/export mới plan (exit 7) vì core chưa import được từ Node |
 | K05 | **P1** | Human review queue cho field thiếu chắc chắn | Confidence thấp vào queue, có accept/reject. | ✅ `src/core/review.ts` + 15 test: chỉ field dưới ngưỡng hoặc lỗi vào queue, quyết định có audit, lần hai trả AlreadyDecided, export/apply round-trip |
 | K06 | **P2** | Rule engine auto-tag/classify/date/vendor/document type | Mỗi rule có preview và override.  ⬜ |
 | K07 | **P2** | Review/approve queue cho tài liệu lỗi hoặc low-confidence | Thống kê unresolved fields, không tự xuất sai.  ⬜ |
@@ -190,10 +190,10 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | M02 | **P0** | Key vault đã kiểm thử + không log credential/content nhạy cảm | Secret từ OS keystore, rotation/migration hợp lệ.  ⬜ |
 | M03 | **P1** | Document encryption at rest và secure temp/cache purge | Không tồn tại bản plaintext ngoài thư mục được quản lý.  ⬜ |
 | M04 | **P1** | Encryption at rest cho dữ liệu local | File DB mã hoá bằng key/passphrase. | ✅ `src/core/crypto.ts` + 24 test: PBKDF2 600k + AES-GCM, salt/IV mỗi lần, sai passphrase hay tamper đều WrongPassphrase, 1 KB thành 1505 B |
-| **P1** | Audit log local: file nào, ai, khi nào, export gì | Truy vết được mọi thao tác. | ✅ `src/core/audit.ts` + 25 test: 8 loại event, chặn detail giống secret, chain SHA-256 phát hiện sửa, report mask giá trị |
+| M05 | **P1** | Audit log local: file nào, ai, khi nào, export gì | Truy vết được mọi thao tác. | ✅ `src/core/audit.ts` + 25 test: 8 loại event, chặn detail giống secret, chain SHA-256 phát hiện sửa, report mask giá trị |
 | M06 | **P2** | Audit log consent/cloud route per document/job | Biết file nào dùng engine nào và tại sao.  ⬜ |
 | M07 | **P2** | Workspace-level policy: no-cloud, allowed providers, retention | Rule enforcement trước request.  ⬜ |
-| **P2** | Local-only mode + audit trail cho cloud call | Biết cái gì đã gửi lên cloud. | ✅ cùng `audit.ts`: kind `translate`/`export` + `privacy.ts` chặn mạng; audit ghi lại quyết định |
+| M08 | **P2** | Local-only mode + audit trail cho cloud call | Biết cái gì đã gửi lên cloud. | ✅ cùng `audit.ts` (kind translate/export) + `privacy.ts` chặn mạng; audit ghi lại quyết định |
 
 ### N. Đo chất lượng, quan sát và phát hành — 8 mục
 
