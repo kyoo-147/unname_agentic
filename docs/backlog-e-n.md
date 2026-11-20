@@ -159,7 +159,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | K02 | **P1** | Extract key-value từ invoice/contract/certificate/customs docs | Có review screen và export structured JSON/CSV.  ⬜ |
 | K03 | **P1** | Batch jobs: pause/cancel/retry, progress | Hàng đợi có trạng thái rõ, không treo. | 🟡 `src/core/queue.ts` + 12 test: concurrency, pause/resume/cancel, retry failed, progress nguyên; **chưa có UI** |
 | K04 | **P1** | Folder watch tự động import/process theo rule | Chỉ kích hoạt thư mục do user cấp quyền.  ⬜ |
-| K05 | **P1** | Workflow builder: import→classify→OCR→translate→extract→export | Có predefined pipelines và dry-run.  ⬜ |
+| K05 | **P1** | Human review queue cho field thiếu chắc chắn | Confidence thấp vào queue, có accept/reject. | ✅ `src/core/review.ts` + 15 test: chỉ field dưới ngưỡng hoặc lỗi vào queue, quyết định có audit, lần hai trả AlreadyDecided, export/apply round-trip |
 | K06 | **P2** | Rule engine auto-tag/classify/date/vendor/document type | Mỗi rule có preview và override.  ⬜ |
 | K07 | **P2** | Review/approve queue cho tài liệu lỗi hoặc low-confidence | Thống kê unresolved fields, không tự xuất sai.  ⬜ |
 | K08 | **P2** | Webhook/REST API/CLI hoặc local MCP document tools | Auth, permission, audit và rate limits.  ⬜ |
