@@ -157,7 +157,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
 | K01 | **P1** | Template trích fields dưới dạng schema JSON | Field có value, bbox, confidence, type, validator. | ✅ `src/core/schema.ts` + 26 test: 6 kiểu field, chuẩn hoá số/ngày/tiền, ambiguity báo chứ không đoán |
-| K02 | **P1** | Extract key-value từ invoice/contract/certificate/customs docs | Có review screen và export structured JSON/CSV.  ⬜ |
+| **P1** | Folder watcher + import tự động | Thả file vào folder là tự xử lý. | ✅ `src/core/watcher.ts` + 38 test: glob + ignore mặc định, diff snapshot (mtime-only → `maybeTouch`), coalesce theo cửa sổ cố định |
 | K03 | **P1** | Batch jobs: pause/cancel/retry, progress | Hàng đợi có trạng thái rõ, không treo. | 🟡 `src/core/queue.ts` + 12 test: concurrency, pause/resume/cancel, retry failed, progress nguyên; **chưa có UI** |
 | K04 | **P1** | Batch API/CLI với folder watcher | Chạy được batch không cần UI. | 🟡 `src/core/cli-args.ts` + `scripts/mirror-cli.mjs` + `docs/cli.md` + 63 test: parse 4 lệnh/9 flag, drift guard, `check` chạy thật trên 41 PDF; extract/translate/export mới plan (exit 7) vì core chưa import được từ Node |
 | K05 | **P1** | Human review queue cho field thiếu chắc chắn | Confidence thấp vào queue, có accept/reject. | ✅ `src/core/review.ts` + 15 test: chỉ field dưới ngưỡng hoặc lỗi vào queue, quyết định có audit, lần hai trả AlreadyDecided, export/apply round-trip |
