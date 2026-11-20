@@ -203,7 +203,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | N03 | **P1** | Golden dataset PDF đa cột/scan/bảng/công thức/RTL/CJK | Có license hợp lệ, expected outputs và reproducible eval.  ⬜ |
 | N04 | **P1** | Visual regression cho PDF render & export | SSIM/LPIPS/pixel diff có mask vùng động và manual review.  ⬜ |
 | N05 | **P1** | Benchmark OCR: CER/WER theo ngôn ngữ và loại ảnh | Bảng số thật, so sánh engine. | 🟡 `src/core/ocr-metrics.ts` + `scripts/ocr-benchmark.mjs` + doc; **chưa có fixture/benchmark numbers** |
-| N06 | **P1** | Translation quality benchmark COMET/chrF + number/term QA | Đánh giá người thật đối với đoạn rủi ro cao.  ⬜ |
+| N06 | **P1** | Benchmark chất lượng dịch theo loại tài liệu | Bảng điểm thật, so sánh model. | 🟡 `src/core/perf.ts` + `scripts/perf-budget.mjs` + `docs/performance.md`: baseline p95 thật (chunk 2.71 ms, index 8.98 ms, search 0.89 ms, diff 11.74 ms) |
 | N07 | **P1** | Performance metrics p50/p95 startup/OCR/translation/export | Báo CPU/RAM/VRAM/file size và kích thước PDF.  ⬜ |
 | N08 | **P2** | CI signed release matrix Win/web/extension + SBOM/dependencies | Không phát hành nếu security/regression gate fail.  ⬜ |
 
