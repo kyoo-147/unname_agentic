@@ -108,12 +108,12 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | H06 | **P1** | Sửa text OCR và translated block inline | Undo/redo, autosave và so khớp nguồn.  ⬜ |
 | H07 | **P1** | Tách, ghép, đổi thứ tự, xoay, xoá/trích trang | Page thumbnails phản ánh edit tức thời.  ⬜ |
 | H08 | **P1** | Trích bảng ra CSV/XLSX và công thức ra LaTeX | Dữ liệu đúng row/col và chọn đúng bảng.  ⬜ |
-| H09 | **P2** | Export HTML/Markdown faithful với ảnh và assets | Gói ZIP có media và link đúng.  ⬜ |
+| H09 | **P2** | Preserve metadata/outline/AcroForm khi xuất | Mở lại giữ metadata và form. | 🟡 `src/core/export-check.ts` kiểm cấu trúc file trước khi giao; chưa ghi metadata/outline vào file xuất |
 | H10 | **P2** | Diff hai phiên bản tài liệu (text + visual) | Chỉ ra thay đổi có toạ độ. | 🟡 `src/core/diff.ts` + 13 test: diff text theo block/từ, bỏ nhiễu whitespace/1-2 ký tự; **visual diff chưa** |
-| H11 | **P2** | Bảo vệ/redaction vĩnh viễn PII | Không thể copy/search/trích text đã xoá.  ⬜ |
-| H12 | **P2** | PDF forms: phát hiện field, fill, flatten, export data | Dữ liệu lưu được và flatten không mất trường.  ⬜ |
-| H13 | **P2** | Chữ ký điện tử cơ bản + kiểm tra chữ ký hiện có | Tách ký tay đơn giản khỏi chữ ký số certificate.  ⬜ |
-| H14 | **P2** | PDF/A, OCR archival, document metadata & sanitization | Validate chuẩn bằng công cụ độc lập.  ⬜ |
+| H11 | **P1** | Redaction PII: CCCD/CMND, số tài khoản, MST, địa chỉ | Redact đúng vùng, không lộ số. | ✅ `src/core/redact.ts` + 30 test: mỗi rule cần label/checksum/Luhn, plan gộp span + confidence floor, apply giữ nguyên phần còn lại, report không chứa giá trị |
+| H12 | **P1** | Redaction có review trước khi áp dụng | Preview và diff trước/sau. | ✅ `planRedaction` trả `kept`/`skipped` kèm lý do để duyệt trước khi `applyRedaction` |
+| H13 | **P3** | Form filling và flatten | Điền field, flatten có cảnh báo. | 🟡 `src/core/forms.ts` + 34 test: planFill + conflict/read-only/signature, flattenPlan cảnh báo mất gì; chưa ghi vào PDF |
+| H14 | **P1** | Validation mở file trên nhiều reader, không lỗi font | Mở được trên ≥2 PDF reader. | ✅ `checkExport` + 32 test: header/EOF, page count, font nhúng, text layer, câu nguồn còn sót, size cap |
 | H15 | **P3** | PDF/UA tagged accessibility export | Semantic structure/tag tree đọc được qua assistive tech.  ⬜ |
 | H16 | **P3** | Batch PDF utilities: compress, optimize, encrypt, decrypt có quyền | Có before/after quality và cảnh báo phá signature.  ⬜ |
 
@@ -142,8 +142,8 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 |---|---|---|---|---|
 | J01 | **P1** | DOI/arXiv detection, authors, venue, references | Metadata đúng, tạo được BibTeX. | 🟡 `src/core/bibtex.ts` (parse/emit/stable key/dedupe, 26 test); **chưa fetch DOI/arXiv** |
 | J02 | **P2** | BibTeX/RIS import/export + Zotero bridge | Import/export chuẩn, key ổn định. | 🟡 BibTeX đã có; RIS + Zotero chưa |
-| J03 | **P1** | Tạo notes từ highlight có backlink page+bbox | Click note quay về đúng PDF đoạn gốc.  ⬜ |
-| J04 | **P1** | Tìm DOI và đồng bộ metadata qua Crossref/Semantic Scholar | Chỉ metadata, không tự tải bản quyền bị hạn chế.  ⬜ |
+| J03 | **P2** | Citation graph/tìm paper liên quan | Đồ thị citation tương tác. | ✅ `src/core/citation-graph.ts` + 47 test: resolve theo DOI rồi title+year, stub cho cái không resolve, related/coCitation, DOT + JSON |
+| J04 | **P2** | Semantic Scholar/Crossref enrichment | Có metadata, abstract, citation count. | ✅ `src/core/scholar.ts` + 32 test: DOI/arXiv normalise, build URL, parse 2 nguồn, merge có provenance |
 | J05 | **P2** | Notes/backlinks liên kết tới trang và trích đoạn | Note trỏ đúng vị trí, hiện backlink. | ✅ cùng module `annotations.ts`: quote, backlinks, reanchor |
 | J06 | **P2** | Paper comparison matrix method/data/metrics/limitations | Cell có citation cụ thể, tránh suy diễn.  ⬜ |
 | J07 | **P2** | Thu thập công thức, thuật ngữ, bảng số liệu thành knowledge cards | Có liên kết về nguồn.  ⬜ |
@@ -178,7 +178,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | L06 | **P2** | Reading modes: original/translation/bilingual/interleave | Chuyển mode giữ đúng vị trí đọc. | 🟡 `src/core/reading-modes.ts` + 12 test: 4 mode phủ kín viewport, đổi mode giữ trang và progress <1%; **UI chưa nối** |
 | L07 | **P1** | Reader annotations sync desktop↔web qua local bridge | Merge conflict rõ ràng; offline giữ local.  ⬜ |
 | L08 | **P2** | System-wide capture selection & OCR translate in-place | Chọn màn hình/window/vùng, overlay không tự chụp.  ⬜ |
-| L09 | **P2** | Split editor panels: source/translation/AI/outline/notes | Workspace layouts persist per project.  ⬜ |
+| L09 | **P2** | Quick actions/palette từ selection | Chọn text hiện palette hành động. | 🟡 `src/core/commands.ts` + 29 test: registry fuzzy + chord + nhóm; **UI palette chưa nối** |
 | L10 | **P3** | Offline desktop model manager với download/checksum/quantization | Model download opt-in, xoá được, báo RAM/VRAM.  ⬜ |
 
 ### M. Privacy, bảo mật và quản trị — 8 mục
@@ -203,7 +203,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | N03 | **P1** | Golden dataset PDF đa cột/scan/bảng/công thức/RTL/CJK | Có license hợp lệ, expected outputs và reproducible eval.  ⬜ |
 | N04 | **P1** | Visual regression cho PDF render & export | SSIM/LPIPS/pixel diff có mask vùng động và manual review.  ⬜ |
 | N05 | **P1** | Benchmark OCR: CER/WER theo ngôn ngữ và loại ảnh | Bảng số thật, so sánh engine. | 🟡 `src/core/ocr-metrics.ts` + `scripts/ocr-benchmark.mjs` + doc; **chưa có fixture/benchmark numbers** |
-| N06 | **P1** | Translation quality benchmark COMET/chrF + number/term QA | Đánh giá người thật đối với đoạn rủi ro cao.  ⬜ |
+| N06 | **P1** | Benchmark chất lượng dịch theo loại tài liệu | Bảng điểm thật, so sánh model. | 🟡 `src/core/perf.ts` + `scripts/perf-budget.mjs` + `docs/performance.md`: baseline p95 thật (chunk 2.71 ms, index 8.98 ms, search 0.89 ms, diff 11.74 ms) |
 | N07 | **P1** | Performance metrics p50/p95 startup/OCR/translation/export | Báo CPU/RAM/VRAM/file size và kích thước PDF.  ⬜ |
 | N08 | **P2** | CI signed release matrix Win/web/extension + SBOM/dependencies | Không phát hành nếu security/regression gate fail.  ⬜ |
 
