@@ -27,7 +27,7 @@ Tiến độ cập nhật bằng script: `scripts/backlog-status.mjs` (đếm t�
 | B07/B08 | Native messaging Chrome↔host 2 chiều | Chrome thật ↔ host thật, profile sạch, import và sync roundtrip |
 | C09/C10 | Provider validation, consent và credential vault | E2E với key hợp lệ/không hợp lệ, không leak logs |
 | C11/C12 | Live mirror thật và chống self-capture | Test window/tab/screen capture, nhiều monitor, quyền OS |
-| C13 | Bridge desktop/extension end-to-end | Event delivery, reconnect, duplicate delivery, timeout  🟡 |
+| C13 | Cầu Chrome ↔ desktop | 🟡 | ✅ `native_bridge.rs`: typed error, duplicate bounded, checksum trước khi parse, timeout không rò pending (9 test mới); chưa chạy Chrome thật |
 | C14/C15 | Native i18n/theme | Screenshot matrix ngôn ngữ × theme × DPI |
 | C18 | Model catalogue | Discovery/config, capabilities, health check, context size  🟡 |
 | C22 | Xuất bản dịch native | 🟡 | ✅ `export_native.rs` (Markdown/Text/JSON, ghi atomic, hỏi đường dẫn) + 14 test; nút header đang xuất tiêu đề + text trang vì PdfReader chưa expose bản dịch |
