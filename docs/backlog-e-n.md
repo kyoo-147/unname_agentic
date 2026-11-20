@@ -63,7 +63,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | F01 | **P1** | Chọn engine OCR theo loại trang + ghi lý do | Mỗi trang ghi engine đã chọn và vì sao. | ✅ `src/core/engine-plan.ts` + 32 test: digital→none, scan→engine nhanh nhất có sẵn, ngôn ngữ không hỗ trợ bị demote, offline loại cloud, budget ước lượng |
 | F02 | **P1** | Deskew/denoise/binarize ảnh scan trước OCR | OCR tăng chất lượng trên ảnh nghiêng/mờ. | ✅ `src/core/deskew.ts` + 17 test: matrix affine, box map/invert trong 0.01pt, crop tight (kèm giải thích), quarter turn bị từ chối; `preprocess.ts` lo binarize/denoise |
 | F03 | **P1** | Preprocessing: deskew/binarize/denoise/upscale pipeline | OCR tăng chất lượng đo được. | ✅ `src/core/preprocess.ts` + 19 test: đo stats, ước lượng skew bằng projection profile, quyết định kèm lý do, ngưỡng export |
-| F04 | **P1** | OCR confidence và vùng nghi ngờ | Highlight vùng confidence thấp, cho sửa thủ công.  ⬜ |
+| **P1** | Phân tích bảng từ ảnh scan (row/col detection) | Bảng scan thành cell có toạ độ. | ✅ `src/core/table-grid.ts` + 18 test: profile theo trục, merge có ink, speck bị loại, confidence = 1 - biến thiên pitch, từ chối có lý do |
 | F05 | **P1** | Searchable PDF tạo text layer từ scan | Copy/search đúng vị trí mà ảnh gốc không mất. | ✅ `src/export/searchable.ts` + 20 test: text render mode 3, đúng baseline, pdfjs trích được chữ |
 | F06 | **P1** | Mixed OCR theo vùng, bỏ qua text gốc đã tốt | Không tạo 2 lớp chữ trùng nhau.  ⬜ |
 | F07 | **P1** | Agentic OCR query-driven chỉ đọc vùng cần thiết | Một câu hỏi kích hoạt inspect/crop/zoom/extract có trace. | 🟡 `native-shell/src/vision_tools.rs` + 9 test: crop/zoom/rotate OCR một vùng, map toạ độ về trang, ToolTrace + budget; chưa nối vào chat agent |
