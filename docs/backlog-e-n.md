@@ -178,7 +178,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | L06 | **P2** | Reading modes: original/translation/bilingual/interleave | Chuyển mode giữ đúng vị trí đọc. | 🟡 `src/core/reading-modes.ts` + 12 test: 4 mode phủ kín viewport, đổi mode giữ trang và progress <1%; **UI chưa nối** |
 | L07 | **P1** | Reader annotations sync desktop↔web qua local bridge | Merge conflict rõ ràng; offline giữ local.  ⬜ |
 | L08 | **P2** | System-wide capture selection & OCR translate in-place | Chọn màn hình/window/vùng, overlay không tự chụp.  ⬜ |
-| L09 | **P2** | Split editor panels: source/translation/AI/outline/notes | Workspace layouts persist per project.  ⬜ |
+| L09 | **P2** | Quick actions/palette từ selection | Chọn text hiện palette hành động. | 🟡 `src/core/commands.ts` + 29 test: registry fuzzy + chord + nhóm; **UI palette chưa nối** |
 | L10 | **P3** | Offline desktop model manager với download/checksum/quantization | Model download opt-in, xoá được, báo RAM/VRAM.  ⬜ |
 
 ### M. Privacy, bảo mật và quản trị — 8 mục
