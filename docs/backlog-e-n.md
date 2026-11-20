@@ -90,7 +90,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | G09 | **P1** | Dịch theo vùng trang hoặc page range khi xuất | Xuất chỉ các trang được chọn.  ⬜ |
 | G10 | **P2** | Lựa chọn văn phong formal/technical/legal/academic | Profile được lưu và đưa vào prompt versioned.  ⬜ |
 | G11 | **P2** | Translation QA: số, thuật ngữ, câu phủ định, đơn vị | Hiển thị lỗi có bằng chứng để reviewer duyệt. | ✅ `src/core/qa.ts` + 22 test: số/đơn vị/phủ định/glossary/placeholder, mỗi issue có trích nguồn hai phía |
-| G12 | **P2** | Dịch bảng giữ cell alignment và công thức số | Bảng bản dịch không đổi cấu trúc/giá trị.  ⬜ |
+| G12 | **P2** | Dịch bảng giữ cell alignment và công thức số | Bảng bản dịch không đổi cấu trúc/giá trị. | ✅ `src/core/table-translate.ts` + 20 test: ô số/ngày/tiền giữ nguyên, cache, span giữ, diff/merge theo ô |
 | G13 | **P2** | Dịch ảnh chứa text (figure OCR) tuỳ chọn | Có toggle giữ nguyên hoặc tạo image translated overlay.  ⬜ |
 | G14 | **P2** | Auto route engine theo ngôn ngữ, độ dài, chi phí, privacy | Có rule/override và telemetry cục bộ.  ⬜ |
 | G15 | **P2** | Import/export glossary và TM: CSV/TMX/TBX ở mức phù hợp | Đọc/ghi UTF-8 và báo lỗi schema rõ ràng.  ⬜ |
