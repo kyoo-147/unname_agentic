@@ -146,7 +146,7 @@ powershell -NoProfile -File scripts/verify-release.ps1
 | C24 | Update check có chữ ký minisign, không tự cài |
 | D12 | Notice pdf.js/lucide nằm trong bundle |
 | D14 | Crash report cục bộ, không gửi mạng |
-| C23 | Đóng gói lại (debug profile vì đĩa không đủ cho release) |
+| C23 | Đóng gói lại — **build release thật**, gói release đã chạy thử |
 
 ## Còn lại
 
