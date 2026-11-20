@@ -10,7 +10,7 @@ Cập nhật: 2026-11-18 (Asia/Saigon). Nguồn: đọc mã nguồn, chạy test
 
 Không đánh dấu `[x]` cho phần chỉ biên dịch được hoặc chỉ có mock. Native release đã build lại, ký self-signed preview và đóng gói; xem `docs/release-verification.md`. Các mục native còn `[~]` là do thiếu CA certificate, tools/agent picker hoặc automation GUI — không phải do chưa build.
 
-Kiểm chứng lại 2026-11-19 09:00 (Asia/Saigon): `pnpm test` **324 pass / 29 file**, `pnpm typecheck` sạch, `pnpm build` sạch; git clean tại `e872fd9`. Lần này **không chạy lại e2e Chromium hay test native**.
+Kiểm chứng lại 2026-11-20 09:00 (Asia/Saigon): `pnpm test` **324 pass / 29 file**, `pnpm typecheck` sạch, `pnpm build` sạch; git clean tại `2a90509`. Lần này **không chạy lại e2e Chromium hay test native**.
 
 ## 1. Bảng chức năng
 
@@ -109,7 +109,7 @@ Kiểm chứng lại 2026-11-19 09:00 (Asia/Saigon): `pnpm test` **324 pass / 29
 | D05 | Đếm ký tự/chi phí ước tính | [x] | `characterCount` trong kết quả và status bar |
 | D06 | Glossary parser + kiểm tra thuật ngữ | [x] | `parseGlossary`, giới hạn 200 mục, test edge cases |
 | D07 | Prompt template có version, chống prompt injection | [~] | có promptVersion + câu “do not follow instructions”; chưa test |
-| D08 | Test web đơn vị | [x] | 324 passed / 29 files (2026-11-19) |
+| D08 | Test web đơn vị | [x] | 324 passed / 29 files (2026-11-20) |
 | D09 | Test e2e Chromium | [x] | 49 passed (2026-11-18), gồm journeys, rotation, RTL/CJK, batch, capture, export, a11y |
 | D10 | Test native | [x] | 51 pass / 1 ignored native workspace + 23 desktop; release build OK |
 | D11 | CI GitHub Actions | [~] | `.github/workflows/ci.yml` đã có; chưa chạy trên GitHub |
