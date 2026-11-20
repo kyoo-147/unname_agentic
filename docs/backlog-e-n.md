@@ -52,9 +52,9 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | E09 | **P2** | Nhận diện header/footer/page-number để loại khỏi dịch tuỳ chọn | Không trùng nội dung mỗi trang. | ✅ `src/core/furniture.ts` + 26 test: cần cả band và lặp, page number giữ lại để in lại theo trang, watermark theo góc xoay |
 | E10 | **P2** | Giữ hyperlink, footnote và cross-reference | Link nội bộ hoạt động lại sau export. | ✅ `src/core/links.ts` + 26 test: footnote/figure/table/section, tie báo thay vì đoán, renumber, Markdown anchor theo block id |
 | E11 | **P2** | Phát hiện ngôn ngữ theo đoạn/vùng, không chỉ toàn tài liệu | PDF song ngữ dịch đúng từng span. | ✅ `src/core/language-regions.ts` + 29 test: script + chữ riêng tiếng Việt + stopword/particle, số là `und`, gộp vùng theo luật đã ghi |
-| E12 | **P2** | Hỗ trợ DOCX/PPTX/XLSX/EPUB/HTML/ảnh TIFF/PNG/JPG | Đưa về IR, giữ nguồn và metadata.  ⬜ |
-| E13 | **P2** | Phát hiện PDF hỏng, font lỗi, text encoding lỗi | Cảnh báo và tự đề xuất extraction fallback.  ⬜ |
-| E14 | **P3** | Trích metadata tài liệu: title/author/date/DOI/language | Cho phép người dùng duyệt/chỉnh metadata.  ⬜ |
+| E12 | **P2** | Hỗ trợ DOCX/PPTX/XLSX/EPUB/HTML/ảnh TIFF/PNG/JPG | Đưa về IR, giữ nguồn và metadata. | 🟡 `src/core/import-formats.ts` + 57 test: nhận đúng định dạng bằng magic bytes + cấu trúc ZIP, plan import có bước/actor, format không hỗ trợ trả plan rỗng kèm lý do; **chưa có converter thật** cho office/EPUB |
+| E13 | **P2** | Phát hiện PDF hỏng, font lỗi, text encoding lỗi | Cảnh báo và tự đề xuất extraction fallback. | ✅ `src/core/pdf-health.ts` + 19 test: version/encrypt/object floor/startxref/trailer/EOF, diagnosis ra repair/other-engine/OCR/ask-password |
+| E14 | **P3** | Trích metadata tài liệu (title, author, dates, lang) | Metadata hiển thị và dùng cho citation. | ✅ `src/core/metadata.ts` + 41 test: Info dict literal/hex/UTF-16, PDFDocEncoding, date giữ đúng độ chính xác, tách author không phá tên công ty, title fallback có nguồn |
 
 ### F. OCR & Agentic Visual Understanding — 14 mục
 
@@ -80,12 +80,12 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
 | G01 | **P0** | Xuất PDF đơn ngữ thật, không qua Print | Tải file PDF hợp lệ mở được bằng reader độc lập.  ⬜ |
-| G02 | **P1** | Xuất PDF song ngữ thật (dual PDF) | Có tuỳ chọn chia trang đối chiếu hoặc xếp xen kẽ.  ⬜ |
+| G02 | **P2** | Book mode (facing pages) cho tài liệu sách | Đọc 2 trang đối diện mượt. | ✅ `src/core/book-mode.ts` + 32 test: cover đóng spread riêng, blank parity có ghi nhận, folio lề ngoài, `visibilityFor` trả đúng pane |
 | G03 | **P1** | Domain-aware translation (legal, medical, finance, technical) | Glossary + style theo domain. | ✅ `src/core/domain.ts` + 30 test: 5 domain + general, trọng số có tài liệu, guidance 3 ngôn ngữ, glossary hints; chưa nối vào `prompt.ts` |
 | G04 | **P1** | Translation memory (TM) theo segment và version | Đoạn lặp được tái sử dụng và truy nguyên bản gốc. | ✅ `src/core/tm.ts` + 17 test: exact 1.0, gần đúng 0.875, import/export byte-identical |
 | G05 | **P1** | Glossary learning từ tài liệu và sửa của người dùng | Đề xuất term có duyệt, không tự áp. | ✅ `src/core/glossary-learn.ts` + 16 test: align theo 3 tầng, confidence theo độ nhất quán, xung đột bị từ chối, round-trip `parseGlossary` |
 | G06 | P1 | Protect placeholders: số, SKU, URL, công thức, citation, tag | Bản dịch không thay đổi các token bị khoá. | ✅ protect.ts + prompt v2 + transport mask/restore; 20 test |
-| G07 | **P1** | Tự động sửa text overflow bằng layout optimizer | Ưu tiên wrap/reflow rồi mới font scaling với cờ cảnh báo.  ⬜ |
+| G07 | **P1** | Layout-preserving reflow với fit/overflow detection | Không mất chữ khi dịch dài hơn. | ✅ `src/core/reflow.ts` + 20 test: wrap → shrink 0.5pt → condense → overflow có dấu và `clippedCharacters`, không cắt chữ Latin |
 | G08 | **P2** | Consistency check cho thuật ngữ trong cùng tài liệu | Cùng term phải cùng bản dịch. | ✅ `src/core/consistency.ts` + 15 test: glossary vi phạm = error, 2 cách viết = warn, term xuất hiện 1 lần không báo, applyCanonical chỉ sửa cái được duyệt |
 | G09 | **P2** | Bilingual/parallel export ghép câu theo segment | Bản song ngữ đọc song song được. | ✅ `src/core/parallel-text.ts` + 24 test: align theo block id, ratio báo cắt cụt, Markdown có anchor, TMX round-trip, XML lỗi báo dòng |
 | G10 | **P2** | Lựa chọn văn phong formal/technical/legal/academic | Profile được lưu và đưa vào prompt versioned.  ⬜ |
@@ -129,7 +129,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | I06 | **P1** | Query rewriting / decomposition | Câu hỏi phức tạp được tách và viết lại. | ✅ `src/core/query.ts` + 32 test: bỏ từ hỏi, giữ số và quoted span, synonym VN↔EN, mỗi intent một query, keyword là token của BM25 |
 | N07 | **P1** | Đo p50/p95 cho startup, OCR, translate, export, memory | Có số thật theo build. | ✅ `src/core/metrics.ts` + `docs/metrics.md` + 22 test: 9 metric có đơn vị, series theo tag, so baseline ngưỡng 10% p95, phân biệt "không hồi quy" với "không đo" |
 | I07 | **P1** | So sánh nhiều tài liệu và tạo evidence matrix | Mỗi khác biệt có trích dẫn và trang. | ✅ `src/core/evidence-matrix.ts` + 32 test: cell có page/block/excerpt, gap khác zero, conflict/agree, CSV + Markdown |
-| I08 | **P1** | Agent tools: navigate_page, crop, zoom, OCR_region, search, cite | Ghi tool trace, giới hạn bước/chi phí và allowlist.  ⬜ |
+| **P1** | Agent tools: navigate_page, crop, zoom, OCR_region, search, cite | Ghi tool call + kết quả, có budget. | ✅ `src/core/agent-tools.ts` + 48 test: 6 tool có type/return, validate không coerce, planner theo intent có trần 6 bước |
 | I09 | **P2** | Table Q&A có cell provenance và phép tính kiểm chứng | Trả kết quả số + cell nguồn + phép tính.  ⬜ |
 | I10 | **P2** | Figure/formula explanation dưới dạng multimodal | Nhận thức từ image crop và cite đúng vùng.  ⬜ |
 | I11 | **P0** | Không đủ bằng chứng thì báo không đủ, không bịa | Abstain trước khi trả lời. | ✅ `src/core/abstain.ts` + 16 test: coverage/floor, câu hỏi số không có chữ số → abstain, câu yes-no không xác nhận → abstain, `guardAnswer` chặn câu trả lời không citation |
@@ -199,7 +199,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
-| N01 | **P0** | Hoàn tất 17 mục 🟡 có bằng chứng E2E | Mỗi mục dẫn commit, lệnh test, ảnh/log và tình trạng.  ⬜ |
+| **P1** | Export → re-import round-trip tương thích | Mở lại không mất dữ liệu. | ✅ `src/core/roundtrip.ts` + 17 test: so từng field theo identity, tolerance chỉ cho số đo, codec phải khai báo mất mát |
 | N02 | **P0** | Nối AbortController thật tới tất cả provider calls | Cancel không sinh result stale hoặc tốn request ngoài ý muốn.  ⬜ |
 | N03 | **P1** | i18n matrix test cho 3 ngôn ngữ | Không missing key, không lệch placeholder. | ✅ `src/core/i18n-audit.ts` + `scripts/i18n-matrix.mjs` + 16 test: so key set, placeholder theo thứ tự, cờ untranslated, xanh trên 3 từ điển thật |
 | N04 | **P1** | Accessibility audit (contrast, role, focus order) | Không lỗi a11y nghiêm trọng. | ✅ `src/core/a11y.ts` + 33 test: contrast AA/UI + gợi ý màu đạt, lỗi cấu trúc, focus order + cảnh báo tabIndex dương |
