@@ -2,6 +2,8 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 pub(crate) const APP_ID: &str = "local.pdfworkspace.preview";
+/// Shown in the About page and stamped into any local crash report.
+pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) const UI_PREVIEW: bool = true;
 pub(crate) fn layout_preview() -> bool { std::env::var_os("PDF_WORKSPACE_LAYOUT_PREVIEW").is_some_and(|v| v == "1") }
 
@@ -13,6 +15,7 @@ mod native_bridge;
 mod shared_store;
 mod assets;
 mod clipboard;
+mod crash;
 #[cfg(feature = "devtools")]
 mod devtools;
 /// Without the `devtools` feature (release builds) nothing reads FDL_SCRIPT.
@@ -142,6 +145,11 @@ pub(crate) fn persist_window_size(cx: &mut App) {
 }
 
 fn main() {
+    // 崩溃报告: a crash writes one local report and stops there; nothing is uploaded.
+    crash::install();
+    // Debug builds only: `--dev-panic` proves the local crash report end to end.
+    #[cfg(debug_assertions)]
+    if std::env::args().any(|arg| arg == "--dev-panic") { panic!("dev panic requested on the command line"); }
     #[cfg(all(feature = "devtools", target_os = "windows"))]
     {
         let args: Vec<String> = std::env::args().collect();
