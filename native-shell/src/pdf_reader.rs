@@ -49,7 +49,23 @@ fn prepare(frame: PageFrame) -> PreparedPage {
     let original = render_image(frame.original.clone());
     let patches = frame.blocks.iter().map(|block| {
         if state::preserve_formula(&block.source) { return None; }
-        if frame.quality.contains("OCR") && block.background.is_none() { return None; }
+        if frame.quality.contains("OCR") && block.background.is_none() {
+            // A scan has no text layer to erase, so the only honest way to show a
+            // translation over it is to cover the source with its own paper colour.
+            // That is safe on a flat region and wrong on a photo, so measure first
+            // and leave busy regions to the paired list.
+            let width = frame.original.width(); let height = frame.original.height();
+            let (x, y, right, bottom) = state::patch_bounds([block.rect.x, block.rect.y, block.rect.width, block.rect.height], width, height);
+            if right <= x || bottom <= y { return None; }
+            let crop = image::imageops::crop_imm(&frame.original, x, y, right - x, bottom - y).to_image();
+            let (fill, share) = dominant_fill(&crop)?;
+            if share < 0.55 { return None; }
+            let rect = model::BlockRect { x: x as f32 / width as f32, y: y as f32 / height as f32, width: (right - x) as f32 / width as f32, height: (bottom - y) as f32 / height as f32 };
+            let (r, g, b) = (fill[0], fill[1], fill[2]);
+            let luminance = u32::from(r) * 2126 + u32::from(g) * 7152 + u32::from(b) * 722;
+            let image = image::RgbaImage::from_pixel(right - x, bottom - y, image::Rgba([r, g, b, 255]));
+            return Some(CleanPatch { image: render_image(image), rect, text_color: if luminance < 1_275_000 { white() } else { black() } });
+        }
         let width = frame.clean.width(); let height = frame.clean.height();
         let (x, y, right, bottom) = state::patch_bounds([block.rect.x, block.rect.y, block.rect.width, block.rect.height], width, height);
         if right <= x || bottom <= y { return None; }
@@ -600,5 +616,68 @@ mod page_input_tests {
     fn clamps_to_the_document() {
         assert_eq!(parse_page_input("999", 4), Some(4));
         assert_eq!(parse_page_input("1", 4), Some(1));
+    }
+}
+/// 扫描页遮罩: the colour a block sits on, and how much of the region it covers.
+///
+/// Quantises to 16 levels per channel so anti-aliasing does not split one paper
+/// colour into many buckets. Returns None only for an empty crop; the caller
+/// decides what share is flat enough to paint over.
+fn dominant_fill(pixels: &image::RgbaImage) -> Option<([u8; 3], f32)> {
+    if pixels.width() == 0 || pixels.height() == 0 { return None; }
+    let mut buckets: std::collections::HashMap<(u8, u8, u8), (u64, u64, u64, u32)> = std::collections::HashMap::new();
+    for pixel in pixels.pixels() {
+        if pixel[3] < 8 { continue; }
+        let key = (pixel[0] & 0xF0, pixel[1] & 0xF0, pixel[2] & 0xF0);
+        let slot = buckets.entry(key).or_insert((0, 0, 0, 0));
+        slot.0 += u64::from(pixel[0]);
+        slot.1 += u64::from(pixel[1]);
+        slot.2 += u64::from(pixel[2]);
+        slot.3 += 1;
+    }
+    let total: u32 = buckets.values().map(|slot| slot.3).sum();
+    if total == 0 { return None; }
+    let (_, (sum_r, sum_g, sum_b, count)) = buckets.into_iter().max_by_key(|(_, slot)| slot.3)?;
+    // the bucket's own mean, so a white page fills white instead of a greyed band
+    let mean = |sum: u64| (sum / u64::from(count.max(1))).min(255) as u8;
+    Some(([mean(sum_r), mean(sum_g), mean(sum_b)], count as f32 / total as f32))
+}
+#[cfg(test)]
+mod scan_overlay_tests {
+    use super::dominant_fill;
+
+    fn image(width: u32, height: u32, pixel: impl Fn(u32, u32) -> [u8; 4]) -> image::RgbaImage {
+        image::RgbaImage::from_fn(width, height, |x, y| image::Rgba([pixel(x, y)[0], pixel(x, y)[1], pixel(x, y)[2], pixel(x, y)[3]]))
+    }
+
+    #[test]
+    fn a_blank_region_is_one_flat_colour() {
+        let page = image(20, 10, |_, _| [255, 255, 255, 255]);
+        let (fill, share) = dominant_fill(&page).expect("paper colour");
+        assert_eq!(fill, [255, 255, 255]);
+        assert!(share > 0.99);
+    }
+
+    #[test]
+    fn a_half_covered_region_is_not_flat_enough() {
+        let page = image(20, 10, |x, _| if x < 10 { [255, 255, 255, 255] } else { [0, 0, 0, 255] });
+        let (_, share) = dominant_fill(&page).expect("some colour");
+        assert!((share - 0.5).abs() < 0.01, "half and half must not look like paper, got {share}");
+    }
+
+    #[test]
+    fn a_photo_is_not_flat_enough() {
+        let page = image(16, 16, |x, y| [(x * 16) as u8, (y * 16) as u8, ((x + y) * 8) as u8, 255]);
+        let (_, share) = dominant_fill(&page).expect("some colour");
+        assert!(share < 0.55, "a gradient must stay unpainted, got {share}");
+    }
+
+    #[test]
+    fn text_on_paper_still_reads_as_paper() {
+        // 90% white with a few dark glyph pixels: the paper colour must win.
+        let page = image(40, 20, |x, y| if (x % 10 == 0) && (y % 7 == 0) { [20, 20, 20, 255] } else { [249, 248, 244, 255] });
+        let (fill, share) = dominant_fill(&page).expect("paper colour");
+        assert!(share > 0.9, "glyph pixels must not change the fill, got {share}");
+        assert!(fill[0] > 200 && fill[1] > 200 && fill[2] > 200, "fill stays light, got {fill:?}");
     }
 }
