@@ -7,7 +7,7 @@ mod view;
 
 use crate::{i18n::{tr3, tr3_fill}, input::{TextField, TextFieldEvent}, theme::{self, Theme}, ui};
 use gpui::{prelude::FluentBuilder, *};
-use mirror_pdf_desktop::{capture, model::{self, CaptureSource, PageFrame, ProviderKind, ProviderSettings, TextBlock}, pdf, provider};
+use mirror_pdf_desktop::{capture, model::{self, CaptureSource, PageFrame, ProviderKind, ProviderSettings, TextBlock}, ocr_fallback, pdf, provider};
 use state::{Epoch, Stamp};
 use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc, time::{Duration, Instant}};
 
@@ -66,7 +66,9 @@ fn prepare(frame: PageFrame) -> PreparedPage {
 /// harness under `artifacts/desktop-test/measure` parses. Keep the prefix and
 /// the field names stable:
 /// `ocr page=<1-based> pages=<n> scanned=<0|1> ran=<0|1> ms=<n> regions=<n>
-/// confidence=<f|na> source=<token> doc=<digest>`. Keep it on one line.
+/// confidence=<f|na> source=<token> doc=<digest> engine=<windows|tesseract|none>`.
+/// Keep it on one line. `engine` (C20) names the OCR engine that produced the
+/// regions, read out of the frame's quality note; `none` means no engine ran.
 ///
 /// `ms` is the call that prepared the frame: PDFium raster plus Windows OCR for
 /// a scanned PDF, screen grab plus Windows OCR for a capture. Windows OCR
@@ -81,11 +83,13 @@ fn prepare(frame: PageFrame) -> PreparedPage {
 fn log_prepared_page(page: u16, label: &str, pdf: bool, elapsed: Duration, frame: &PageFrame) {
     let quality = frame.quality.as_str();
     let failed = quality.contains("OCR unavailable");
-    let ran = quality.contains("local OCR") || quality.contains("Windows OCR");
+    // C20: the note names the engine that produced the page (unit-tested there).
+    let engine = ocr_fallback::engine_token(quality);
+    let ran = engine != "none" && !failed;
     let scanned = pdf && (quality.starts_with("Scanned PDF") || failed);
     log::info!(
         target: "pdf_workspace",
-        "ocr page={} pages={} scanned={} ran={} ms={} regions={} confidence=na source={} doc={}",
+        "ocr page={} pages={} scanned={} ran={} ms={} regions={} confidence=na source={} doc={} engine={}",
         u32::from(page) + 1,
         frame.page_count,
         u8::from(scanned),
@@ -93,7 +97,8 @@ fn log_prepared_page(page: u16, label: &str, pdf: bool, elapsed: Duration, frame
         elapsed.as_millis(),
         frame.blocks.len(),
         label,
-        frame.document_digest.get(..16).unwrap_or(frame.document_digest.as_str())
+        frame.document_digest.get(..16).unwrap_or(frame.document_digest.as_str()),
+        engine
     );
 }
 

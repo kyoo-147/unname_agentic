@@ -65,11 +65,16 @@ pub fn load_page(path: &Path, page_index: u16, password: Option<&str>) -> Result
         document_digest: crate::model::digest(&std::fs::read(path)?),
     };
     if frame.blocks.is_empty() {
-        match crate::capture::recognize(&frame.original) {
-            Ok(blocks) => {
-                frame.blocks = blocks;
+        match crate::ocr_fallback::recognize(&frame.original) {
+            Ok(outcome) => {
+                frame.blocks = outcome.blocks;
                 frame.clean = crate::model::suppress_flat_text(&frame.original, &mut frame.blocks);
-                frame.quality = "Scanned PDF · local OCR · paired text preserves original raster artwork".into();
+                // The note names the engine that really ran; the `ocr page=…`
+                // log line reads `engine=` back out of it.
+                frame.quality = match outcome.engine {
+                    crate::ocr_fallback::Engine::Windows => "Scanned PDF · local OCR · paired text preserves original raster artwork".into(),
+                    crate::ocr_fallback::Engine::Tesseract => "Scanned PDF · local OCR (Tesseract OCR fallback) · paired text preserves original raster artwork".into(),
+                };
             }
             Err(error) => {
                 frame.clean = frame.original.clone();

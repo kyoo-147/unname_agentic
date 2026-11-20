@@ -440,6 +440,8 @@ impl Workspace {
             .child(div().flex().items_center().gap(px(2.)).p(px(2.)).rounded(px(8.)).bg(Theme::fill_hover())
                 .child(mode(0, "问答", "Ask", "Hỏi đáp"))
                 .child(mode(1, "文档", "Document", "Tài liệu")));
+        let voice = self.voice.state();
+        let listening = voice.phase().is_active();
         let tools = div().mt(px(12.)).flex().items_center().gap(px(8.))
             .child(div().id("chat-attach").size(px(26.)).rounded(px(6.)).flex().items_center().justify_center().cursor_pointer().hover(|s| s.bg(Theme::fill_hover()))
                 .child(icon("plus", 15., Theme::text_caption()))
@@ -458,11 +460,59 @@ impl Workspace {
                 .child(icon("chevron-down", 13., Theme::text_caption())))
             .child(div().w(px(1.)).h(px(18.)).bg(Theme::line_divider()))
             .child(div().id("chat-mic").size(px(26.)).rounded(px(6.)).flex().items_center().justify_center().cursor_pointer().hover(|s| s.bg(Theme::fill_hover()))
-                .child(icon("mic", 15., Theme::text_caption()))
-                .on_click(cx.listener(|w, _, _, cx| w.show_toast_kind(crate::ui::ToastKind::Info, crate::i18n::tr3("语音输入即将加入。", "Voice input is coming next.", "Nhập bằng giọng nói sẽ sớm có."), cx))))
+                .when(listening, |d| d.bg(Theme::primary_fill_1()))
+                .tip(crate::i18n::tr3("语音输入（本机识别，音频不会离开这台电脑）", "Voice input (recognised on this machine; no audio leaves it)", "Nhập bằng giọng nói (nhận dạng trên máy; âm thanh không rời khỏi máy)"), None)
+                .child(icon("mic", 15., if listening { Theme::primary() } else { Theme::text_caption() }))
+                .on_click(cx.listener(|w, _, _, cx| w.voice_toggle(cx))))
             .child(div().id("chat-voice").size(px(26.)).rounded(px(6.)).flex().items_center().justify_center().cursor_pointer().hover(|s| s.bg(Theme::fill_hover()))
                 .child(icon("audio-lines", 15., Theme::text_caption()))
                 .on_click(cx.listener(|w, _, _, cx| w.show_toast_kind(crate::ui::ToastKind::Info, crate::i18n::tr3("语音模式即将加入。", "Voice mode is coming next.", "Chế độ giọng nói sẽ sớm có."), cx))));
+        let voice_error = voice.error().map(|error| error.message());
+        // The dictation indicator: a red microphone dot, the phase in words, the
+        // live hypothesis on its own line, and how to stop. Drawn only while a
+        // session runs.
+        let interim = voice.interim().to_string();
+        let voice_row = div()
+            .id("chat-voice-state")
+            .mt(px(10.))
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(3.))
+            .rounded(px(8.))
+            .px(px(10.))
+            .py(px(7.))
+            .bg(Theme::primary_fill_1())
+            .child(
+                div().w_full().flex().items_center().gap(px(8.))
+                    .child(div().flex_none().size(px(7.)).rounded_full().bg(Theme::danger()))
+                    .child(div().flex_none().text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(Theme::text()).child(voice.label()))
+                    .child(div().flex_1())
+                    .child(div().flex_none().text_size(px(11.)).text_color(Theme::text_caption()).child(voice.hint())),
+            )
+            .when(!interim.is_empty(), |d| {
+                d.child(div().w_full().flex().child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(Theme::text_caption()).child(interim)))
+            });
+        // A failed session says what went wrong, in the interface language, and
+        // can be dismissed without starting another one.
+        let voice_error_row = voice_error.map(|message| {
+            div()
+                .id("chat-voice-error")
+                .mt(px(10.))
+                .w_full()
+                .flex()
+                .items_start()
+                .gap(px(8.))
+                .rounded(px(8.))
+                .px(px(10.))
+                .py(px(8.))
+                .bg(Theme::danger_cell())
+                .child(icon("info", 14., Theme::danger()))
+                .child(div().flex_1().min_w_0().whitespace_normal().line_clamp(3).text_size(px(12.)).line_height(px(17.)).text_color(Theme::danger()).child(message))
+                .child(div().id("chat-voice-dismiss").flex_none().size(px(18.)).rounded(px(5.)).flex().items_center().justify_center().cursor_pointer().hover(|s| s.bg(Theme::fill_hover()))
+                    .child(icon("x", 12., Theme::danger()))
+                    .on_click(cx.listener(|w, _, _, cx| w.voice_dismiss(cx))))
+        });
         let card = crate::ui::pill()
             .mt(px(32.))
             .w_full()
@@ -471,7 +521,9 @@ impl Workspace {
             .flex()
             .flex_col()
             .child(ask)
-            .child(tools);
+            .child(tools)
+            .when(listening, |d| d.child(voice_row))
+            .when_some(voice_error_row, |d, row| d.child(row));
         let suggestions = div().mt(px(14.)).w_full().max_w(px(640.)).flex().flex_wrap().gap(px(8.))
             .child(greeting_chip("home-greeting-open", "file-text", crate::i18n::tr3("打开 PDF", "Open PDF", "Mở PDF"))
                 .on_click(cx.listener(|w, _, window, cx| w.open_import(window, cx))))

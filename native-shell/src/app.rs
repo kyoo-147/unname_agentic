@@ -245,6 +245,8 @@ pub struct Workspace {
     pub current: Option<String>,
     pub pdf_reader: Option<Entity<crate::pdf_reader::PdfReader>>,
     pub chat: Entity<crate::chat::Chat>,
+    /// 语音输入: the opt-in microphone session and its state machine.
+    pub voice: crate::voice::Voice,
     pub(crate) companion: crate::native_bridge::CompanionState,
     pub(crate) companion_task: Option<Task<()>>,
     pub(crate) companion_error: Option<String>,
@@ -418,7 +420,7 @@ impl Workspace {
             store,
             entries,
             current: None,
-            pdf_reader: None, chat: cx.new(crate::chat::Chat::new), companion: Default::default(), companion_task: None, companion_error: None,
+            pdf_reader: None, chat: cx.new(crate::chat::Chat::new), voice: Default::default(), companion: Default::default(), companion_task: None, companion_error: None,
             pdf_importing: false,
             capture_picker: None,
             live_source: None,

@@ -48,6 +48,7 @@ mod transfer;
 mod trash;
 mod tree;
 mod ui;
+mod voice;
 
 pub(crate) use pdf_library::{store, time};
 mod palette;

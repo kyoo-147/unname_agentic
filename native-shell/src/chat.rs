@@ -110,6 +110,17 @@ impl Chat {
         self.send(cx);
     }
 
+    /// 语音输入 (C19): put recognised words in the composer without sending
+    /// them. Dictation appends, so several sentences land in one prompt.
+    pub fn append_composer(&mut self, text: &str, cx: &mut Context<Self>) {
+        let text = text.trim();
+        if text.is_empty() { return; }
+        let current = self.input.read(cx).text.trim_end().to_string();
+        let joined = if current.is_empty() { text.to_string() } else { format!("{current} {text}") };
+        self.input.update(cx, |field, cx| field.set_text(&joined, cx));
+        cx.notify();
+    }
+
     fn send(&mut self, cx: &mut Context<Self>) {
         let question = self.input.read(cx).text.trim().to_string();
         if question.is_empty() || self.busy { return; }

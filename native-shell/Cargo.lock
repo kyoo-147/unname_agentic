@@ -4259,6 +4259,7 @@ dependencies = [
  "serde_json",
  "unicode-segmentation",
  "uuid",
+ "windows 0.62.2",
  "windows-registry 0.5.3",
 ]
 

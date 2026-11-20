@@ -36,20 +36,25 @@ pub fn grab(source: &CaptureSource) -> Result<RgbaImage> {
 pub fn recognize_frame(image: RgbaImage, title: String, auto_detect: bool) -> Result<PageFrame> {
     let crop = if auto_detect { crate::model::detect_document_region(&image) } else { None };
     let original = if let Some(crop) = crop { image::imageops::crop_imm(&image, crop.x, crop.y, crop.width, crop.height).to_image() } else { image };
-    let mut blocks = match recognize(&original) {
-        Ok(blocks) => blocks,
+    let outcome = match crate::ocr_fallback::recognize(&original) {
+        Ok(outcome) => outcome,
         Err(error) => {
             let document_digest = crate::model::digest(original.as_raw());
             return Ok(PageFrame { clean: original.clone(), original, blocks: Vec::new(), title, page_index: 0, page_count: 1, quality: format!("Original capture retained. OCR unavailable: {error:#}"), document_digest });
         }
     };
+    let mut blocks = outcome.blocks;
     let clean = crate::model::suppress_flat_text(&original, &mut blocks);
     let document_digest = crate::model::digest(original.as_raw());
     let detected = if crop.is_some() { "Document region detected" } else { "Full source · no confident page boundary" };
     let uncertain = blocks.iter().filter(|block| block.background.is_none()).count();
-    Ok(PageFrame { original, clean, blocks, title, page_index: 0, page_count: 1, quality: format!("{detected} · Windows OCR · {uncertain} regions use paired text to preserve raster artwork"), document_digest })
+    // `engine=` is read back from this note by the `ocr page=…` log line.
+    let quality = format!("{detected} · {} OCR · {uncertain} regions use paired text to preserve raster artwork", outcome.engine.title());
+    Ok(PageFrame { original, clean, blocks, title, page_index: 0, page_count: 1, quality, document_digest })
 }
 
+/// The Windows OCR pass alone. Callers go through `crate::ocr_fallback::recognize`,
+/// which uses this first and Tesseract only when it fails or finds nothing.
 #[cfg(windows)]
 pub fn recognize(image: &RgbaImage) -> Result<Vec<TextBlock>> {
     use windows::{core::HSTRING, Globalization::Language, Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap}, Media::Ocr::OcrEngine, Storage::Streams::DataWriter};

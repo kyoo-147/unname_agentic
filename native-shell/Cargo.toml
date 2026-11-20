@@ -43,6 +43,12 @@ objc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-registry = "0.5"
+# C19 voice input: `Windows::Media::SpeechRecognition::{SpeechRecognizer,
+# SpeechRecognitionResult}` — the WinRT recogniser that runs against the default
+# microphone without leaving the machine. One feature is the whole list:
+# `Media_SpeechRecognition` pulls in `Media`, which pulls in `Foundation`
+# (`IClosable` for Close, the async operations behind RecognizeAsync).
+windows = { version = "0.62", features = ["Media_SpeechRecognition"] }
 
 # GPUI 0.2.2 with local changes: glyphs are rasterized without font
 # smoothing (Feishu's `-webkit-font-smoothing: antialiased`) and grids take
