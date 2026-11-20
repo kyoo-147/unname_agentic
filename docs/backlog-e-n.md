@@ -178,7 +178,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | L05 | **P2** | Quick actions từ selection (menu/dropdown) | Chọn là ra hành động đúng ngữ cảnh. | ✅ `src/core/selection-actions.ts` + 35 test: translate/copy/cite/note/glossary/search/web/define/redact, disable kèm lý do |
 | L06 | **P2** | Reading modes: original/translation/bilingual/interleave | Chuyển mode giữ đúng vị trí đọc. | 🟡 `src/core/reading-modes.ts` + 12 test: 4 mode phủ kín viewport, đổi mode giữ trang và progress <1%; **UI chưa nối** |
 | L07 | **P2** | Selection → glossary/citation với 1 click | Tạo glossary/citation nhanh. | ✅ cùng `selection-actions.ts`: nhóm `annotate` + `research`, phân loại selection (word/phrase/sentence/number/email/url) |
-| L08 | **P2** | System-wide capture selection & OCR translate in-place | Chọn màn hình/window/vùng, overlay không tự chụp.  ⬜ |
+| **P2** | Drag/drop nhiều file, thư mục | Drop folder hoạt động. | ✅ `src/core/drop.ts` + 24 test: format theo extension, duplicate theo tên+size, folder defer có lý do, caps tham lam, code lỗi rõ |
 | L09 | **P2** | Quick actions/palette từ selection | Chọn text hiện palette hành động. | 🟡 `src/core/commands.ts` + 29 test: registry fuzzy + chord + nhóm; **UI palette chưa nối** |
 | L10 | **P3** | Offline desktop model manager với download/checksum/quantization | Model download opt-in, xoá được, báo RAM/VRAM.  ⬜ |
 
