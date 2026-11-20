@@ -111,7 +111,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | H09 | **P2** | Export HTML/Markdown faithful với ảnh và assets | Gói ZIP có media và link đúng.  ⬜ |
 | H10 | **P2** | Diff hai phiên bản tài liệu (text + visual) | Chỉ ra thay đổi có toạ độ. | 🟡 `src/core/diff.ts` + 13 test: diff text theo block/từ, bỏ nhiễu whitespace/1-2 ký tự; **visual diff chưa** |
 | H11 | **P1** | Redaction PII: CCCD/CMND, số tài khoản, MST, địa chỉ | Redact đúng vùng, không lộ số. | ✅ `src/core/redact.ts` + 30 test: mỗi rule cần label/checksum/Luhn, plan gộp span + confidence floor, apply giữ nguyên phần còn lại, report không chứa giá trị |
-| H12 | **P2** | PDF forms: phát hiện field, fill, flatten, export data | Dữ liệu lưu được và flatten không mất trường.  ⬜ |
+| H12 | **P1** | Redaction có review trước khi áp dụng | Preview và diff trước/sau. | ✅ `planRedaction` trả `kept`/`skipped` kèm lý do để duyệt trước khi `applyRedaction` |
 | H13 | **P2** | Chữ ký điện tử cơ bản + kiểm tra chữ ký hiện có | Tách ký tay đơn giản khỏi chữ ký số certificate.  ⬜ |
 | H14 | **P2** | PDF/A, OCR archival, document metadata & sanitization | Validate chuẩn bằng công cụ độc lập.  ⬜ |
 | H15 | **P3** | PDF/UA tagged accessibility export | Semantic structure/tag tree đọc được qua assistive tech.  ⬜ |
