@@ -1215,6 +1215,11 @@ impl Render for Workspace {
             .on_action(|_: &ToggleFullScreen, window, _| window.toggle_fullscreen())
             .on_action(cx.listener(|w, _: &OpenSettings, _, cx| w.show_view(View::Settings, cx)))
             .on_action(cx.listener(|w, _: &OpenAbout, _, cx| w.open_settings(crate::settings::Page::About, cx)))
+                // 快捷键: the screen lives in Settings, so the chord toggles it from anywhere.
+                .on_action(cx.listener(|w, _: &crate::modes::ToggleShortcuts, _, cx| {
+                    let showing = w.view == View::Settings && w.settings_page == crate::settings::Page::Shortcuts;
+                    if showing { w.show_view(View::Home, cx); } else { w.open_settings(crate::settings::Page::Shortcuts, cx); }
+                }))
             .on_action(cx.listener(|w, _: &GoHome, _, cx| w.show_view(View::Home, cx)))
             .on_action(cx.listener(|w, _: &NewDoc, window, cx| w.new_doc(window, cx)))
             .on_action(cx.listener(|w, _: &ImportDoc, window, cx| w.open_import(window, cx)))

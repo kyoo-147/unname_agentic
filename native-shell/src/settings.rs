@@ -218,7 +218,7 @@ impl Page {
 
 /// The sidebar list, one evenly spaced run (six rows need no unlabelled
 /// groups); `None` is 回收站 (its own view, shown with this sidebar).
-const NAV: [Option<Page>; 4] = [Some(Page::General), Some(Page::Appearance), Some(Page::Library), Some(Page::About)];
+const NAV: [Option<Page>; 5] = [Some(Page::General), Some(Page::Appearance), Some(Page::Shortcuts), Some(Page::Library), Some(Page::About)];
 
 // ---- controls (switch on the accent, 30pt buttons, grouped rows)
 
