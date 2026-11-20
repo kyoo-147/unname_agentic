@@ -121,7 +121,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
-| I01 | **P0** | Chat answers với citation trang+vùng source | Click citation highlight đúng block, không chỉ page. | ✅ `src/core/citations.ts` + 24 test: 5 dạng citation, resolve vào IR, `highlightShape` ra toạ độ 0..1 |
+| I01 | **P0** | Chat answers với citation trang+vùng source | Click citation highlight đúng block, không chỉ page. | 🟡 Parser + resolve đã xong ở cả web (24 test) và native (15 test); phần highlight trong UI là wave sau |
 | I02 | **P1** | Hybrid retrieval BM25 + vector + metadata filter | Có kết quả lexical và semantic với trace.  ⬜ |
 | I03 | **P1** | Section/table-aware chunking theo Document IR | Không xé bảng/công thức giữa chunks.  ⬜ |
 | I04 | **P1** | Multi-PDF chat trong project/workspace | Trả lời dẫn nguồn phân biệt từng tài liệu.  ⬜ |
