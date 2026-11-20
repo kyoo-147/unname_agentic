@@ -63,13 +63,13 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | F01 | **P1** | Chọn engine OCR theo loại trang + ghi lý do | Mỗi trang ghi engine đã chọn và vì sao. | ✅ `src/core/engine-plan.ts` + 32 test: digital→none, scan→engine nhanh nhất có sẵn, ngôn ngữ không hỗ trợ bị demote, offline loại cloud, budget ước lượng |
 | F02 | **P1** | Deskew/denoise/binarize ảnh scan trước OCR | OCR tăng chất lượng trên ảnh nghiêng/mờ. | ✅ `src/core/deskew.ts` + 17 test: matrix affine, box map/invert trong 0.01pt, crop tight (kèm giải thích), quarter turn bị từ chối; `preprocess.ts` lo binarize/denoise |
 | F03 | **P1** | Preprocessing: deskew/binarize/denoise/upscale pipeline | OCR tăng chất lượng đo được. | ✅ `src/core/preprocess.ts` + 19 test: đo stats, ước lượng skew bằng projection profile, quyết định kèm lý do, ngưỡng export |
-| **P1** | Phân tích bảng từ ảnh scan (row/col detection) | Bảng scan thành cell có toạ độ. | ✅ `src/core/table-grid.ts` + 18 test: profile theo trục, merge có ink, speck bị loại, confidence = 1 - biến thiên pitch, từ chối có lý do |
+| F04 | **P1** | Phân tích bảng từ ảnh scan (row/col detection) | Bảng scan thành cell có toạ độ. | ✅ `src/core/table-grid.ts` + 18 test: profile theo trục, merge có ink, speck bị loại, confidence = 1 - biến thiên pitch, từ chối có lý do |
 | F05 | **P1** | Searchable PDF tạo text layer từ scan | Copy/search đúng vị trí mà ảnh gốc không mất. | ✅ `src/export/searchable.ts` + 20 test: text render mode 3, đúng baseline, pdfjs trích được chữ |
 | F06 | **P1** | Mixed OCR theo vùng, bỏ qua text gốc đã tốt | Không tạo 2 lớp chữ trùng nhau.  ⬜ |
 | F07 | **P1** | Agentic OCR query-driven chỉ đọc vùng cần thiết | Một câu hỏi kích hoạt inspect/crop/zoom/extract có trace. | 🟡 `native-shell/src/vision_tools.rs` + 9 test: crop/zoom/rotate OCR một vùng, map toạ độ về trang, ToolTrace + budget; chưa nối vào chat agent |
 | F08 | **P1** | Visual grounding/citation vào bbox đa giác | Click answer focus đúng box nguồn. | 🟡 Core có `citations.ts` (web) và `Chat::citations` (native, 15 test); UI chưa vẽ chip click |
 | F09 | **P2** | OCR lặp lại có chọn lọc với crop/scale/contrast/rotation | Chỉ re-OCR vùng lỗi, không OCR lại toàn PDF.  ⬜ |
-| **P1** | Offline/no-network mode e2e (không cloud call) | 0 request ra ngoài, có test. | ✅ `src/core/network-guard.ts` + 14 test: ghi mọi attempt kể cả bị chặn, policy deny/loopback/origin list, wrap transport để test cả lỗi lẫn log |
+| F10 | **P1** | Offline/no-network mode e2e (không cloud call) | 0 request ra ngoài, có test. | ✅ `src/core/network-guard.ts` + 14 test: ghi mọi attempt kể cả bị chặn, policy deny/loopback/origin list, wrap transport để test cả lỗi lẫn log |
 | F11 | **P2** | So sánh nhiều OCR engines bằng confidence và consensus | Ghi engine winner theo vùng và chi phí.  ⬜ |
 | F12 | **P2** | Image understanding: biểu đồ, sơ đồ, hình kỹ thuật | Kết quả mô tả được gắn với ảnh nguồn.  ⬜ |
 | F13 | **P2** | Phát hiện mâu thuẫn OCR bằng kiểm tra số/ngày/đơn vị | Flag số hoặc ký tự rủi ro cao để duyệt.  ⬜ |
