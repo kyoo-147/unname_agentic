@@ -41,12 +41,12 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
-| E01 | **P0** | Phát hiện PDF born-digital, scanned, hybrid theo trang | Tự chọn extraction/OCR từng trang và ghi lý do chọn engine.  ⬜ |
+| E01 | **P0** | Phát hiện PDF born-digital, scanned, hybrid theo trang | Tự chọn extraction/OCR từng trang và ghi lý do chọn engine. | ✅ `src/core/classify.ts` + 18 test: quy tắc có thứ tự, ngưỡng là hằng số có giải thích, mỗi biên được test đúng điểm |
 | E02 | **P1** | Đọc thứ tự đa cột và xuyên trang | Chuẩn hoá reading-order không lẫn cột, header/footer.  ⬜ |
-| E03 | **P1** | Phân loại block: heading, paragraph, list, table, figure, formula, footnote | Lưu type, bbox, confidence và quan hệ cha-con.  ⬜ |
+| E03 | **P1** | Phân loại block: heading, paragraph, list, table, figure, formula, footnote | Lưu type, bbox, confidence và quan hệ cha-con. | ✅ `src/core/blocks.ts` + 27 test: mỗi loại một fixture, heading level 1-3, confidence + lý do |
 | E04 | P1 | Lưu Document IR có provenance | Block có page, polygon, reading-order, source bytes hash, version. | ✅ src/core/ir.ts: contract + validate + serialize versioned; 21 test |
 | E05 | **P1** | Tái tạo cấu trúc heading/section và mục lục tự động | Click heading đưa đúng đến đoạn gốc.  ⬜ |
-| E06 | **P1** | Tách bảng thành cell/row/col, merged cells | Xuất table có header, rowspan, colspan mà không mất dữ liệu.  ⬜ |
+| E06 | **P1** | Tách bảng thành cell/row/col, merged cells | Xuất table có header, rowspan, colspan mà không mất dữ liệu. | ✅ `src/core/tables.ts` + 13 test: gom hàng theo baseline, cột theo corridor, colSpan, CSV RFC4180, Markdown |
 | E07 | **P1** | Nhận diện phương trình inline/display và LaTeX | Giữ công thức khi dịch, sao chép được LaTeX.  ⬜ |
 | E08 | **P1** | Tách hình, caption, bảng và liên kết caption | Click caption focus hình/bảng tương ứng.  ⬜ |
 | E09 | **P2** | Nhận diện header/footer/page-number để loại khỏi dịch tuỳ chọn | Không trùng nội dung mỗi trang.  ⬜ |
@@ -64,7 +64,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | F02 | **P1** | Tiền xử lý ảnh: deskew, rotate, denoise, binarize | Có before/after và OCR quality gain.  ⬜ |
 | F03 | **P1** | Dewarp trang cong/ảnh điện thoại | Text line baseline được chỉnh thẳng.  ⬜ |
 | F04 | **P1** | OCR confidence và vùng nghi ngờ | Highlight vùng confidence thấp, cho sửa thủ công.  ⬜ |
-| F05 | P1 | Searchable PDF tạo text layer từ scan | Copy/search đúng vị trí mà ảnh gốc không mất. | ⬜ |
+| F05 | **P1** | Searchable PDF tạo text layer từ scan | Copy/search đúng vị trí mà ảnh gốc không mất. | ✅ `src/export/searchable.ts` + 20 test: text render mode 3, đúng baseline, pdfjs trích được chữ |
 | F06 | **P1** | Mixed OCR theo vùng, bỏ qua text gốc đã tốt | Không tạo 2 lớp chữ trùng nhau.  ⬜ |
 | F07 | **P1** | Agentic OCR query-driven chỉ đọc vùng cần thiết | Một câu hỏi kích hoạt inspect/crop/zoom/extract có trace.  ⬜ |
 | F08 | **P1** | Visual grounding/citation vào bbox đa giác | Click answer focus đúng box nguồn.  ⬜ |
@@ -82,14 +82,14 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | G01 | **P0** | Xuất PDF đơn ngữ thật, không qua Print | Tải file PDF hợp lệ mở được bằng reader độc lập.  ⬜ |
 | G02 | **P1** | Xuất PDF song ngữ thật (dual PDF) | Có tuỳ chọn chia trang đối chiếu hoặc xếp xen kẽ.  ⬜ |
 | G03 | **P1** | Dịch theo paragraph/section có cross-page context | Không tách câu sai qua page boundary.  ⬜ |
-| G04 | **P1** | Translation memory (TM) theo segment và version | Đoạn lặp được tái sử dụng và truy nguyên bản gốc.  ⬜ |
+| G04 | **P1** | Translation memory (TM) theo segment và version | Đoạn lặp được tái sử dụng và truy nguyên bản gốc. | ✅ `src/core/tm.ts` + 17 test: exact 1.0, gần đúng 0.875, import/export byte-identical |
 | G05 | **P1** | Glossary đa ngôn ngữ cấp workspace + bảo vệ thuật ngữ | Bảo toàn thuật ngữ khi dịch/đổi provider.  ⬜ |
 | G06 | P1 | Protect placeholders: số, SKU, URL, công thức, citation, tag | Bản dịch không thay đổi các token bị khoá. | ✅ protect.ts + prompt v2 + transport mask/restore; 20 test |
 | G07 | **P1** | Tự động sửa text overflow bằng layout optimizer | Ưu tiên wrap/reflow rồi mới font scaling với cờ cảnh báo.  ⬜ |
 | G08 | **P1** | Preview diff source/target từng block trước khi export | Cho accept/retranslate/edit từng block.  ⬜ |
 | G09 | **P1** | Dịch theo vùng trang hoặc page range khi xuất | Xuất chỉ các trang được chọn.  ⬜ |
 | G10 | **P2** | Lựa chọn văn phong formal/technical/legal/academic | Profile được lưu và đưa vào prompt versioned.  ⬜ |
-| G11 | **P2** | Translation QA: số, thuật ngữ, câu phủ định, đơn vị | Hiển thị lỗi có bằng chứng để reviewer duyệt.  ⬜ |
+| G11 | **P2** | Translation QA: số, thuật ngữ, câu phủ định, đơn vị | Hiển thị lỗi có bằng chứng để reviewer duyệt. | ✅ `src/core/qa.ts` + 22 test: số/đơn vị/phủ định/glossary/placeholder, mỗi issue có trích nguồn hai phía |
 | G12 | **P2** | Dịch bảng giữ cell alignment và công thức số | Bảng bản dịch không đổi cấu trúc/giá trị.  ⬜ |
 | G13 | **P2** | Dịch ảnh chứa text (figure OCR) tuỳ chọn | Có toggle giữ nguyên hoặc tạo image translated overlay.  ⬜ |
 | G14 | **P2** | Auto route engine theo ngôn ngữ, độ dài, chi phí, privacy | Có rule/override và telemetry cục bộ.  ⬜ |
@@ -101,7 +101,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
 | H01 | **P0** | Native Save As PDF/Markdown/TXT/DOCX/HTML/JSON | Hộp thoại Save As và kiểm tra bytes thực.  ⬜ |
-| H02 | **P1** | Nhúng/subset fonts đa ngôn ngữ CJK/RTL cho bản dịch | Không tofu khi mở trên máy khác.  ⬜ |
+| H02 | **P1** | Nhúng/subset fonts đa ngôn ngữ CJK/RTL cho bản dịch | Không tofu khi mở trên máy khác. | ✅ `src/export/fonts.ts`: Noto Sans (OFL) + fontkit, "Tiếng Việt — số 42" trích lại đúng dấu; CJK báo thiếu glyph rõ ràng |
 | H03 | **P1** | Bảo toàn images/vector/hyperlinks/bookmarks ở bản PDF xuất | So sánh ảnh kết quả với bản gốc.  ⬜ |
 | H04 | **P1** | PDF annotations: highlight, underline, strikeout, sticky note | Mở lại file vẫn thấy annotations.  ⬜ |
 | H05 | **P1** | Chèn text, callout, hình, shape, watermark | Export lại PDF và giữ được toạ độ.  ⬜ |
