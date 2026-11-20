@@ -131,6 +131,10 @@ pub struct PdfReader {
     selected_request: bool,
     translate_all: bool,
     fields: ProfileFields,
+    /// 页码跳转: an in-place page field created on demand, so the pill stays a label
+    /// until the reader actually wants to type a page number.
+    page_entry: Option<Entity<TextField>>,
+    page_entry_sub: Option<Subscription>,
     profile_dirty: bool,
     profile_saving: bool,
     show_settings: bool,
@@ -268,7 +272,7 @@ impl PdfReader {
         let mut reader = Self {
             source, epoch: Epoch::default(), page, page_count: 0, rotation: 0, prepared: None, loading: false, load_needed: true,
             profile_loading: true, provider_busy: None, failed: false, paused: false, active: true, browser_linked: false, pending_external: None, capture_live: true,
-            capture_due: Instant::now(), draft_kind: profile.kind, draft_consent: profile.cloud_consent, profile, fields, selected_request: false, translate_all: false, profile_dirty: false, profile_saving: false, show_settings: false,
+            capture_due: Instant::now(), draft_kind: profile.kind, draft_consent: profile.cloud_consent, profile, fields, page_entry: None, page_entry_sub: None, selected_request: false, translate_all: false, profile_dirty: false, profile_saving: false, show_settings: false,
             split: true, zoom: 1., split_ratio: 0.5, divider_drag: false, show_paired: false,
             scrolls: [ScrollHandle::new(), ScrollHandle::new()], scrollbars: [Rc::default(), Rc::default()],
             viewport: Rc::new(Cell::new(Bounds::new(point(px(0.), px(0.)), size(px(800.), px(650.))))),
@@ -456,13 +460,43 @@ impl PdfReader {
     }
     fn navigate(&mut self, step: i32, cx: &mut Context<Self>) {
         if !matches!(self.source, Source::Pdf(_)) { return; }
-        let next = state::page_step(self.page, self.page_count.max(1), step);
+        self.goto_page(state::page_step(self.page, self.page_count.max(1), step), cx);
+    }
+    /// Show `page` (0-based) and reset everything that belongs to the old page.
+    fn goto_page(&mut self, page: u16, cx: &mut Context<Self>) {
+        if !matches!(self.source, Source::Pdf(_)) || self.page_count == 0 { return; }
+        let next = page.min(self.page_count - 1);
         if next == self.page { return; }
+        self.page_entry = None; self.page_entry_sub = None;
         self.native_scroll_input.set(false);
         self.page = next; self.epoch.source(); self.prepared = None; self.last_digest.clear(); self.selected = None;
         self.load_needed = true; self.failed = false; self.error = None; self.external_position = None; self.linked_scroll = geometry::LinkedScroll::default();
         for scroll in &self.scrolls { scroll.set_offset(point(px(0.), px(0.))); }
         self.status = tr3("正在打开原始像素…", "Opening original pixels…", "Đang mở ảnh gốc…").into(); self.pump(cx); cx.notify();
+    }
+    /// 页码跳转: turn the page pill into an editable field with the current page selected.
+    fn begin_page_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page_entry.is_some() || !matches!(self.source, Source::Pdf(_)) || self.page_count == 0 { return; }
+        let field = Self::field(tr3("页码", "Page", "Trang"), &(self.page + 1).to_string(), false, cx);
+        field.update(cx, |field, cx| field.select_all_text(cx));
+        let handle = field.read(cx).focus_handle(cx);
+        window.focus(&handle);
+        let subscription = cx.subscribe(&field, |this, _, event: &TextFieldEvent, cx| match event {
+            TextFieldEvent::Submit => this.submit_page_entry(cx),
+            TextFieldEvent::Cancel => { this.page_entry = None; this.page_entry_sub = None; cx.notify(); }
+            _ => {}
+        });
+        self.page_entry_sub = Some(subscription);
+        self.page_entry = Some(field);
+        cx.notify();
+    }
+    /// Commit the typed page: clamp it, jump, and put the pill back.
+    fn submit_page_entry(&mut self, cx: &mut Context<Self>) {
+        let Some(field) = self.page_entry.take() else { return };
+        self.page_entry_sub = None;
+        let text = field.read(cx).text.clone();
+        if let Some(page) = parse_page_input(&text, self.page_count) { self.goto_page(page - 1, cx); }
+        cx.notify();
     }
     fn toggle_pause(&mut self, cx: &mut Context<Self>) {
         self.paused = !self.paused; self.epoch.cancel();
@@ -527,5 +561,44 @@ impl PdfReader {
                 cx.notify();
             });
         }).detach(); cx.notify();
+    }
+}
+
+/// 页码跳转: read a typed page number.
+///
+/// One-based in, one-based out and clamped to the document, because the field
+/// shows the page the way the pill does. Anything that is not a positive integer
+/// returns None so a stray keypress leaves the reader on its page instead of
+/// jumping to the first one.
+pub(crate) fn parse_page_input(text: &str, page_count: u16) -> Option<u16> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() { return None; }
+    let value: u32 = trimmed.parse().ok()?;
+    if value == 0 { return None; }
+    Some(value.min(u32::from(page_count.max(1))) as u16)
+}
+
+#[cfg(test)]
+mod page_input_tests {
+    use super::parse_page_input;
+
+    #[test]
+    fn accepts_a_plain_number() { assert_eq!(parse_page_input("3", 10), Some(3)); }
+
+    #[test]
+    fn ignores_surrounding_whitespace() { assert_eq!(parse_page_input("  7 ", 10), Some(7)); }
+
+    #[test]
+    fn rejects_zero_empty_and_letters() {
+        assert_eq!(parse_page_input("0", 10), None);
+        assert_eq!(parse_page_input("", 10), None);
+        assert_eq!(parse_page_input("abc", 10), None);
+        assert_eq!(parse_page_input("-2", 10), None);
+    }
+
+    #[test]
+    fn clamps_to_the_document() {
+        assert_eq!(parse_page_input("999", 4), Some(4));
+        assert_eq!(parse_page_input("1", 4), Some(1));
     }
 }

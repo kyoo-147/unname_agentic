@@ -105,9 +105,18 @@ impl PdfReader {
         // Groups are separated by a hairline and the page controls read as one
         // control, so the row has a shape instead of eleven equal buttons.
         let divider = || div().w(px(1.)).h(px(18.)).flex_none().bg(Theme::line_border());
-        let page_pill = div().h(px(28.)).px(px(10.)).flex().items_center().justify_center().rounded(px(6.))
-            .bg(Theme::fill_hover()).text_color(Theme::text())
-            .child(format!("{} / {}", self.page + 1, self.page_count.max(1)));
+        // 页码跳转: the pill is a button until the reader clicks it, then it becomes a
+        // field pre-filled with the current page so a long document is reachable.
+        let page_pill: AnyElement = if let Some(field) = &self.page_entry {
+            div().w(px(72.)).h(px(28.)).child(div().w_full().min_h(px(28.)).px(px(6.)).rounded(px(6.))
+                .border_1().border_color(Theme::primary()).child(field.clone())).into_any_element()
+        } else {
+            div().id("pdf-page-pill").h(px(28.)).px(px(10.)).flex().items_center().justify_center().rounded(px(6.))
+                .bg(Theme::fill_hover()).text_color(Theme::text()).cursor_pointer()
+                .child(format!("{} / {}", self.page + 1, self.page_count.max(1)))
+                .on_click(cx.listener(|reader, _, window, cx| reader.begin_page_entry(window, cx)))
+            .into_any_element()
+        };
         let zoom_label = div().w(px(52.)).flex().items_center().justify_center().text_color(Theme::text()).child(format!("{:.0}%", self.zoom * 100.));
         let target_chip = div().h(px(28.)).px(px(10.)).flex().items_center().gap(px(6.)).rounded(px(6.))
             .bg(Theme::fill_hover()).text_color(Theme::text())
