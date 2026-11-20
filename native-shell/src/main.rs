@@ -16,6 +16,7 @@ mod shared_store;
 mod assets;
 mod clipboard;
 mod crash;
+mod update;
 #[cfg(feature = "devtools")]
 mod devtools;
 /// Without the `devtools` feature (release builds) nothing reads FDL_SCRIPT.
