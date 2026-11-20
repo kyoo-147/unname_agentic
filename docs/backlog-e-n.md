@@ -87,7 +87,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | G06 | P1 | Protect placeholders: số, SKU, URL, công thức, citation, tag | Bản dịch không thay đổi các token bị khoá. | ✅ protect.ts + prompt v2 + transport mask/restore; 20 test |
 | G07 | **P1** | Tự động sửa text overflow bằng layout optimizer | Ưu tiên wrap/reflow rồi mới font scaling với cờ cảnh báo.  ⬜ |
 | G08 | **P2** | Consistency check cho thuật ngữ trong cùng tài liệu | Cùng term phải cùng bản dịch. | ✅ `src/core/consistency.ts` + 15 test: glossary vi phạm = error, 2 cách viết = warn, term xuất hiện 1 lần không báo, applyCanonical chỉ sửa cái được duyệt |
-| G09 | **P1** | Dịch theo vùng trang hoặc page range khi xuất | Xuất chỉ các trang được chọn.  ⬜ |
+| G09 | **P2** | Bilingual/parallel export ghép câu theo segment | Bản song ngữ đọc song song được. | ✅ `src/core/parallel-text.ts` + 24 test: align theo block id, ratio báo cắt cụt, Markdown có anchor, TMX round-trip, XML lỗi báo dòng |
 | G10 | **P2** | Lựa chọn văn phong formal/technical/legal/academic | Profile được lưu và đưa vào prompt versioned.  ⬜ |
 | G11 | **P2** | Translation QA: số, thuật ngữ, câu phủ định, đơn vị | Hiển thị lỗi có bằng chứng để reviewer duyệt. | ✅ `src/core/qa.ts` + 22 test: số/đơn vị/phủ định/glossary/placeholder, mỗi issue có trích nguồn hai phía |
 | G12 | **P2** | Dịch bảng giữ cell alignment và công thức số | Bảng bản dịch không đổi cấu trúc/giá trị. | ✅ `src/core/table-translate.ts` + 20 test: ô số/ngày/tiền giữ nguyên, cache, span giữ, diff/merge theo ô |
