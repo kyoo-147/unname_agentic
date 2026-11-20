@@ -85,7 +85,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | G04 | **P1** | Translation memory (TM) theo segment và version | Đoạn lặp được tái sử dụng và truy nguyên bản gốc. | ✅ `src/core/tm.ts` + 17 test: exact 1.0, gần đúng 0.875, import/export byte-identical |
 | G05 | **P1** | Glossary learning từ tài liệu và sửa của người dùng | Đề xuất term có duyệt, không tự áp. | ✅ `src/core/glossary-learn.ts` + 16 test: align theo 3 tầng, confidence theo độ nhất quán, xung đột bị từ chối, round-trip `parseGlossary` |
 | G06 | P1 | Protect placeholders: số, SKU, URL, công thức, citation, tag | Bản dịch không thay đổi các token bị khoá. | ✅ protect.ts + prompt v2 + transport mask/restore; 20 test |
-| G07 | **P1** | Tự động sửa text overflow bằng layout optimizer | Ưu tiên wrap/reflow rồi mới font scaling với cờ cảnh báo.  ⬜ |
+| G07 | **P1** | Layout-preserving reflow với fit/overflow detection | Không mất chữ khi dịch dài hơn. | ✅ `src/core/reflow.ts` + 20 test: wrap → shrink 0.5pt → condense → overflow có dấu và `clippedCharacters`, không cắt chữ Latin |
 | G08 | **P2** | Consistency check cho thuật ngữ trong cùng tài liệu | Cùng term phải cùng bản dịch. | ✅ `src/core/consistency.ts` + 15 test: glossary vi phạm = error, 2 cách viết = warn, term xuất hiện 1 lần không báo, applyCanonical chỉ sửa cái được duyệt |
 | G09 | **P2** | Bilingual/parallel export ghép câu theo segment | Bản song ngữ đọc song song được. | ✅ `src/core/parallel-text.ts` + 24 test: align theo block id, ratio báo cắt cụt, Markdown có anchor, TMX round-trip, XML lỗi báo dòng |
 | G10 | **P2** | Lựa chọn văn phong formal/technical/legal/academic | Profile được lưu và đưa vào prompt versioned.  ⬜ |
