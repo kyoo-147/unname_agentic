@@ -193,7 +193,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | **P1** | Audit log local: file nào, ai, khi nào, export gì | Truy vết được mọi thao tác. | ✅ `src/core/audit.ts` + 25 test: 8 loại event, chặn detail giống secret, chain SHA-256 phát hiện sửa, report mask giá trị |
 | M06 | **P2** | Audit log consent/cloud route per document/job | Biết file nào dùng engine nào và tại sao.  ⬜ |
 | M07 | **P2** | Workspace-level policy: no-cloud, allowed providers, retention | Rule enforcement trước request.  ⬜ |
-| M08 | **P3** | Compliance export và retention/deletion policy configuration | Quy trình xoá dữ liệu, back-up, audit đều kiểm chứng được.  ⬜ |
+| **P2** | Local-only mode + audit trail cho cloud call | Biết cái gì đã gửi lên cloud. | ✅ cùng `audit.ts`: kind `translate`/`export` + `privacy.ts` chặn mạng; audit ghi lại quyết định |
 
 ### N. Đo chất lượng, quan sát và phát hành — 8 mục
 
