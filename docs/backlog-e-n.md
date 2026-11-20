@@ -155,7 +155,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
-| K01 | **P1** | Template trích fields dưới dạng schema JSON | Field có value, bbox, confidence, type, validator.  ⬜ |
+| K01 | **P1** | Template trích fields dưới dạng schema JSON | Field có value, bbox, confidence, type, validator. | ✅ `src/core/schema.ts` + 26 test: 6 kiểu field, chuẩn hoá số/ngày/tiền, ambiguity báo chứ không đoán |
 | K02 | **P1** | Extract key-value từ invoice/contract/certificate/customs docs | Có review screen và export structured JSON/CSV.  ⬜ |
 | K03 | **P1** | Batch queue nhiều tài liệu nhiều ngôn ngữ | Cho pause/cancel/resume thực và từng job status.  ⬜ |
 | K04 | **P1** | Folder watch tự động import/process theo rule | Chỉ kích hoạt thư mục do user cấp quyền.  ⬜ |
