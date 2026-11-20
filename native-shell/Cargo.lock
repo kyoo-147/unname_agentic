@@ -4255,6 +4255,7 @@ dependencies = [
  "pdf_library",
  "raw-window-handle",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "unicode-segmentation",

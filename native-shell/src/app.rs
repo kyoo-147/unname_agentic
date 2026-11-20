@@ -232,6 +232,11 @@ pub struct Workspace {
     pub shortcut_strokes: Vec<String>,
     /// The failed change: (action, message); an empty action is page-wide.
     pub shortcut_error: Option<(String, String)>,
+    /// 自動更新: last check result, whether a check is running, and the release url
+    /// when one is offered. Empty url means no button.
+    pub update_status: String,
+    pub update_busy: bool,
+    pub update_url: String,
     pub settings_page: crate::settings::Page,
     /// 外观's theme dropdown while open: the theme its preview shows.
     pub theme_menu: Option<String>,
@@ -415,6 +420,9 @@ impl Workspace {
             shortcut_recording: None,
             shortcut_strokes: vec![],
             shortcut_error: None,
+            update_status: String::new(),
+            update_busy: false,
+            update_url: String::new(),
             settings_page: Default::default(),
             theme_menu: None,
             theme_anchor: Default::default(),

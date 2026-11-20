@@ -730,8 +730,62 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn about_page(&self, _cx: &mut Context<Self>) -> AnyElement {
+    /// 自動更新: one explicit, signed check. It never downloads or replaces the app.
+    fn update_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let configured = crate::update::manifest_url().is_some() && crate::update::trusted_key().is_some();
+        let status = if !configured {
+            crate::i18n::tr3("此构建未配置更新源；不会发起任何网络请求。", "Updates are not configured in this build; no network request is made.", "Bản dựng này chưa cấu hình nguồn cập nhật; không có yêu cầu mạng nào.").to_string()
+        } else if self.update_busy {
+            crate::i18n::tr3("正在检查…", "Checking…", "Đang kiểm tra…").to_string()
+        } else {
+            self.update_status.clone()
+        };
+        let mut actions = div().flex().items_center().gap(px(8.));
+        if configured {
+            actions = actions.child(button("update-check", crate::i18n::tr3("检查更新", "Check for updates", "Kiểm tra cập nhật")).on_click(cx.listener(|this, _, _, cx| this.check_updates(cx))));
+        }
+        if !self.update_url.is_empty() {
+            actions = actions.child(button("update-open", crate::i18n::tr3("打开发布页", "Open release page", "Mở trang phát hành")).on_click(cx.listener(|this, _, _, cx| { let url = this.update_url.clone(); cx.open_url(&url); })));
+        }
+        group(Some(crate::i18n::tr3("更新", "Updates", "Cập nhật")), vec![
+            row(crate::i18n::tr3("版本", "Version", "Phiên bản"), desc(env!("CARGO_PKG_VERSION")), actions.into_any_element()).into_any_element(),
+            row(status, desc(crate::i18n::tr3("更新包必须带 minisign 签名；应用只提示版本，不会自动下载或替换程序。", "A release manifest must carry a valid minisign signature; this app only reports a version and never downloads or replaces itself.", "Bản phát hành phải có chữ ký minisign hợp lệ; ứng dụng chỉ báo phiên bản, không tự tải hay thay thế chính nó.")), div()).into_any_element(),
+        ]).into_any_element()
+    }
+
+    fn check_updates(&mut self, cx: &mut Context<Self>) {
+        if self.update_busy { return; }
+        self.update_busy = true;
+        self.update_status = crate::i18n::tr3("正在检查…", "Checking…", "Đang kiểm tra…").to_string();
+        cx.notify();
+        // reqwest's blocking client cannot run on the UI thread and GPUI's async
+        // executor has no Tokio reactor, so the request goes to the background
+        // executor like every other network call in this app.
+        let task = cx.background_executor().spawn(async move {
+            let client = reqwest::blocking::Client::new();
+            crate::update::check(&client, env!("CARGO_PKG_VERSION"))
+        });
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.update_busy = false;
+                match outcome {
+                    Ok(crate::update::Outcome::NotConfigured) => { this.update_status = crate::i18n::tr3("此构建未配置更新源。", "Updates are not configured in this build.", "Bản dựng này chưa cấu hình nguồn cập nhật.").to_string(); }
+                    Ok(crate::update::Outcome::UpToDate { version }) => { this.update_status = crate::i18n::tr3_fill("已是最新版本（{}）。", "You are on the newest version ({}).", "Bạn đang dùng bản mới nhất ({}).", &version); }
+                    Ok(crate::update::Outcome::Available { manifest }) => {
+                        this.update_status = format!("{} — {}", crate::i18n::tr3_fill("有新版本 {}", "Version {} is available", "Đã có phiên bản {}", &manifest.version), manifest.notes);
+                        this.update_url = manifest.url.clone();
+                    }
+                    Err(error) => { this.update_status = format!("{error}"); }
+                }
+                cx.notify();
+            });
+        }).detach();
+    }
+
+    fn about_page(&self, cx: &mut Context<Self>) -> AnyElement {
         div().w_full().flex().flex_col().gap(px(28.))
+            .child(self.update_row(cx))
             .child(group(None, vec![
                 row("Workspace", desc(crate::i18n::tr3("原生 PDF 工作区界面预览。产品名称尚未确定。", "Native PDF reading and translation workspace. No product name has been chosen.", "Không gian đọc và dịch PDF gốc. Chưa chọn tên sản phẩm.")), div()).into_any_element(),
                 row(crate::i18n::tr3("实现", "Interface", "Giao diện"), desc("Rust + GPUI"), div()).into_any_element(),
