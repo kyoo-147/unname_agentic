@@ -1,3 +1,4 @@
+import { PROMPT_VERSION } from './prompt';
 export interface Rect {
   x: number;
   y: number;
@@ -78,6 +79,6 @@ export const defaultSettings: TranslationSettings = {
   sourceLanguage: 'auto',
   targetLanguage: 'vi',
   glossary: {},
-  promptVersion: 'mirror-v1',
+  promptVersion: PROMPT_VERSION,
   allowCloud: false,
 };

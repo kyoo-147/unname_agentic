@@ -1,4 +1,4 @@
-import { buildMessages, buildSystemPrompt, type ChatMessage, type PromptOptions } from './prompt';
+import { buildMessages, buildProtectedMessages, buildSystemPrompt, restoreProtectedText, type ChatMessage, type PromptOptions } from './prompt';
 import { normalizeLanguageCode } from './language';
 import { TranslationError, abortError, isAbortError, withRetry, type RetryOptions } from './retry';
 import type { ProviderKind, TextBlock, TranslationRequest, TranslationResult, TranslationSettings, TranslationTransport } from './types';
@@ -139,6 +139,32 @@ async function send(fetcher: Fetcher, retryOptions: RetryOptions, request: Provi
   }, { ...retryOptions, signal });
 }
 
+/**
+ * Waits for `promise`, or rejects with an abort error as soon as `signal`
+ * fires. The shared provider call keeps running for the callers that still wait
+ * on it, so one caller's cancellation never turns another caller's request into
+ * a failure — the aborted caller simply stops waiting.
+ */
+function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(abortError(signal.reason));
+    // Attach to `promise` first: an abort that fired while the provider call
+    // was being issued must not leave that call's rejection unobserved.
+    promise.then(
+      value => { signal.removeEventListener('abort', onAbort); resolve(value); },
+      error => { signal.removeEventListener('abort', onAbort); reject(error); },
+    );
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** True when `error` is this signal's own abort or an abort a transport raised. */
+function abortedBy(error: unknown, signal?: AbortSignal): boolean {
+  return signal?.aborted === true || isAbortError(error) || (error instanceof TranslationError && error.kind === 'aborted');
+}
+
 async function readJson(response: Response): Promise<unknown> {
   try {
     return await response.json();
@@ -269,10 +295,27 @@ function matchBatch(chunk: readonly TextBlock[], entries: readonly BatchEntry[])
 
 export function createTranslationTransport(fetcher: Fetcher = fetch, retryOptions: RetryOptions = {}): TranslationTransportWithBatch {
   const translate = async ({ text, settings, signal }: TranslationRequest): Promise<string> => {
-    const request = providerRequest(settings, text, buildMessages(text, promptOptions(settings)));
+    // An aborted translation never reaches the provider, not even to build a
+    // body: the signal is the caller's statement that the answer is not wanted.
+    if (signal?.aborted) throw abortError(signal.reason);
+    // Protect numbers, URLs, citations and formulas before the text leaves the
+    // app: a translator must not be able to rewrite them.
+    const protectedText = buildProtectedMessages(text, promptOptions(settings));
+    const request = providerRequest(settings, text, protectedText.messages);
     const response = await send(fetcher, retryOptions, request, signal);
+    // A fetch implementation that ignores its signal can still answer after the
+    // abort; the single-text path has no partial-result contract, so a result
+    // nobody waits for is reported as the abort it is. Batches keep their
+    // finished chunks instead, see `translateBatch`.
+    if (signal?.aborted) throw abortError(signal.reason);
     const data = await readJson(response);
-    const trimmed = translatedText(settings, data).trim();
+    const raw = translatedText(settings, data).trim();
+    if (!raw) throw new TranslationError('empty', 'Translation service returned no translated text.');
+    const restored = restoreProtectedText(raw, protectedText.tokens);
+    if (restored.missing.length > 0 || restored.duplicated.length > 0) {
+      throw new TranslationError('invalid', `The translator changed ${restored.missing.length + restored.duplicated.length} protected placeholder(s).`);
+    }
+    const trimmed = restored.text.trim();
     if (!trimmed) throw new TranslationError('empty', 'Translation service returned no translated text.');
     return trimmed;
   };
@@ -340,7 +383,8 @@ export class TranslationService {
   }
 
   async translate(request: TranslationRequest): Promise<TranslationResult> {
-    if (request.signal?.aborted) throw abortError(request.signal.reason);
+    const signal = request.signal;
+    if (signal?.aborted) throw abortError(signal.reason);
     const key = this.keyFor(request.text, request.settings);
     const cached = this.cache.get(key);
     if (cached !== undefined) return { text: cached, provider: request.settings.provider, cached: true, characterCount: countCharacters(request.text) };
@@ -349,15 +393,20 @@ export class TranslationService {
     if (!promise) {
       promise = this.transport.translate(request).then(text => {
         if (!text.trim()) throw new TranslationError('empty', 'Translation service returned no translated text.');
+        // A cancelled request must not teach the cache: the caller stopped
+        // waiting, so a late provider answer is stale by definition.
+        if (signal?.aborted) throw abortError(signal.reason);
         this.characters += countCharacters(request.text);
         this.cache.set(key, text);
         if (this.cache.size > this.maxEntries) this.cache.delete(this.cache.keys().next().value!);
         return text;
       }).finally(() => { if (this.pending.get(key)?.promise === promise) this.pending.delete(key); });
-      this.pending.set(key, { promise, signal: request.signal });
+      this.pending.set(key, { promise, signal });
     }
-    const text = await promise;
-    if (request.signal?.aborted) throw abortError(request.signal.reason);
+    // The caller stops waiting the moment its signal fires, even when the
+    // transport cannot cancel an in-flight provider request itself.
+    const text = await withAbort(promise, signal);
+    if (signal?.aborted) throw abortError(signal.reason);
     return { text, provider: request.settings.provider, cached: false, characterCount: countCharacters(request.text) };
   }
 
@@ -399,15 +448,30 @@ export class TranslationService {
     if (typeof transport.translateBatch !== 'function') {
       for (const block of missing) {
         if (signal?.aborted) { result.aborted = true; break; }
-        const translated = await this.translate({ text: block.text, settings, signal });
+        // A transport that cannot cancel may still reject with the abort; that
+        // is a cancellation, not a provider failure the caller should see.
+        const translated = await this.translate({ text: block.text, settings, signal }).catch(error => {
+          if (abortedBy(error, signal)) return undefined;
+          throw error;
+        });
+        if (!translated) { result.aborted = true; break; }
         const sent = translated.cached ? 0 : countCharacters(block.text);
-        result.requests += 1;
+        if (!translated.cached) result.requests += 1;
         result.characterCount += sent;
         collected.set(block.id, { id: block.id, page: block.page, text: translated.text, characterCount: sent });
       }
       return finish();
     }
-    const batch = await transport.translateBatch(missing, settings, signal);
+    const batch = await transport.translateBatch(missing, settings, signal).catch(error => {
+      if (abortedBy(error, signal)) return undefined;
+      throw error;
+    });
+    result.requests = batch?.requests ?? 0;
+    // Anything the provider finished after the abort is stale: the caller has
+    // already stopped waiting, so it must neither enter the cache nor be
+    // reported as a translation. Blocks resolved from the cache before the
+    // abort stay, because they were never in flight.
+    if (!batch || signal?.aborted) { result.aborted = true; return finish(); }
     const sourceById = new Map(missing.map(block => [block.id, block.text]));
     for (const entry of batch.translations) {
       const source = sourceById.get(entry.id);
@@ -418,7 +482,6 @@ export class TranslationService {
       result.characterCount += sent;
       collected.set(entry.id, { id: entry.id, page: entry.page, text: entry.text, characterCount: sent });
     }
-    result.requests = batch.requests;
     result.aborted = batch.aborted;
     return finish();
   }

@@ -1,13 +1,15 @@
 /**
  * Printing and PDF delivery for the bilingual export.
  *
- * Why "save as PDF" is the shipped PDF path: this project ships no PDF writer. pdf-lib is a fixture
- * generator (scripts/fixtures.mjs) and never enters the app bundle, and a writer added just for export
- * would still have to re-implement the print stylesheet that `toBilingualHtml` already emits (page
- * breaks, `@page` margins, avoid-break blocks). Handing the same self-contained HTML to the browser's
- * own print pipeline reuses that layout, needs no dependency, and produces the PDF the user's own
- * print sheet is set up for. The hidden iframe keeps the reader page intact while it does so; the new
- * window is only the fallback for environments that refuse an iframe.
+ * Why there are two PDF paths: `src/export/pdf.ts` writes a real file with
+ * pdf-lib and is what the "Download real PDF" action uses. This print sheet is
+ * kept as the fast fallback for the bilingual layout, because it reuses the
+ * stylesheet that `toBilingualHtml` already emits (page breaks, `@page` margins,
+ * avoid-break blocks) without a second layout engine. Handing the same
+ * self-contained HTML to the browser's own print pipeline needs no dependency and
+ * produces the PDF the user's own print sheet is set up for. The hidden iframe
+ * keeps the reader page intact while it does so; the new window is only the
+ * fallback for environments that refuse an iframe.
  *
  * What this path cannot do, and the UI must not promise:
  * - no page furniture of our own: headers, footers, page numbers and paper size belong to the browser
