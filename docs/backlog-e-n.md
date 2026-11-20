@@ -68,12 +68,12 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | F06 | **P1** | Mixed OCR theo vùng, bỏ qua text gốc đã tốt | Không tạo 2 lớp chữ trùng nhau.  ⬜ |
 | F07 | **P1** | Agentic OCR query-driven chỉ đọc vùng cần thiết | Một câu hỏi kích hoạt inspect/crop/zoom/extract có trace. | 🟡 `native-shell/src/vision_tools.rs` + 9 test: crop/zoom/rotate OCR một vùng, map toạ độ về trang, ToolTrace + budget; chưa nối vào chat agent |
 | F08 | **P1** | Visual grounding/citation vào bbox đa giác | Click answer focus đúng box nguồn. | 🟡 Core có `citations.ts` (web) và `Chat::citations` (native, 15 test); UI chưa vẽ chip click |
-| **P2** | Cost/time estimate trước khi chạy batch | Ước lượng thời gian và tiền trước khi chạy. | ✅ `src/core/estimate.ts` + 34 test: 4 stage, OCR chỉ khi có trang scan, total = tổng stage, cost null khi chưa biết giá, câu 3 ngôn ngữ |
 | F10 | **P1** | Offline/no-network mode e2e (không cloud call) | 0 request ra ngoài, có test. | ✅ `src/core/network-guard.ts` + 14 test: ghi mọi attempt kể cả bị chặn, policy deny/loopback/origin list, wrap transport để test cả lỗi lẫn log |
 | F11 | **P2** | So sánh nhiều OCR engines bằng confidence và consensus | Ghi engine winner theo vùng và chi phí.  ⬜ |
 | F12 | **P2** | Image understanding: biểu đồ, sơ đồ, hình kỹ thuật | Kết quả mô tả được gắn với ảnh nguồn.  ⬜ |
 | F13 | **P2** | Phát hiện mâu thuẫn OCR bằng kiểm tra số/ngày/đơn vị | Flag số hoặc ký tự rủi ro cao để duyệt.  ⬜ |
 | F14 | **P3** | Human-in-the-loop sửa OCR và tái sử dụng correction | Không sửa file gốc trừ khi người dùng xác nhận.  ⬜ |
+| F09 | **P2** | Cost/time estimate trước khi chạy batch | Ước lượng thời gian và tiền trước khi chạy. | ✅ `src/core/estimate.ts` + 34 test: 4 stage, OCR chỉ khi có trang scan, total = tổng stage, cost null khi chưa biết giá, câu 3 ngôn ngữ |
 
 ### G. Dịch thuật chuyên nghiệp — 16 mục
 
@@ -132,10 +132,10 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | I08 | **P1** | Agent tools: navigate_page, crop, zoom, OCR_region, search, cite | Ghi tool call + kết quả, có budget. | ✅ `src/core/agent-tools.ts` + 48 test: 6 tool có type/return, validate không coerce, planner theo intent có trần 6 bước |
 | I10 | **P2** | Figure/formula explanation dưới dạng multimodal | Nhận thức từ image crop và trả giải thích. | ✅ `src/core/multimodal.ts` + 26 test: plan theo pixel budget (không upscale), prompt theo loại figure/chart/formula, parse số bịa thì bỏ và đếm, thiếu description thì từ chối |
 | I11 | **P0** | Không đủ bằng chứng thì báo không đủ, không bịa | Abstain trước khi trả lời. | ✅ `src/core/abstain.ts` + 16 test: coverage/floor, câu hỏi số không có chữ số → abstain, câu yes-no không xác nhận → abstain, `guardAnswer` chặn câu trả lời không citation |
-| **P2** | Multi-turn conversation với context window | Hội thoại nhiều lượt vẫn đúng nguồn. | ✅ `src/core/conversation.ts` + 31 test: giữ 4 lượt cuối bất kể budget, đếm `droppedTurns`, citation gộp theo lượt, prune không để lại 0 lượt user |
-| **P2** | Notes/flashcards tự sinh từ tài liệu | Tạo ghi chú học tập có nguồn. | ✅ `src/core/notes.ts` + 25 test: section theo outline, point có trần mỗi section, definition EN/VI, formula kèm LaTeX, mọi entry có page+blockId, Anki CSV RFC4180 |
 | I09 | **P2** | Table Q&A có cell provenance và phép tính kiểm chứng | Trả kết quả số + cách tính. | ✅ `src/core/table-qa.ts` + 21 test: sum/count/max/min/compare/lookup kèm cell đã dùng, phát hiện total lệch 1 và cột % cộng 102 |
 | I12 | **P1** | Eval harness cho answer quality (citation hit, abstention) | Bảng điểm theo case cố định. | 🟡 `src/core/eval-harness.ts` + `docs/evaluation.md` + 24 test: pass chỉ khi đủ phrase + citation + abstain đúng, rate rỗng = null; bộ case mới 4 case tổng hợp |
+| I13 | **P2** | Multi-turn conversation với context window | Hội thoại nhiều lượt vẫn đúng nguồn. | ✅ `src/core/conversation.ts` + 31 test: giữ 4 lượt cuối bất kể budget, đếm `droppedTurns`, citation gộp theo lượt, prune không để lại 0 lượt user |
+| I14 | **P2** | Notes/flashcards tự sinh từ tài liệu | Tạo ghi chú học tập có nguồn. | ✅ `src/core/notes.ts` + 25 test: section theo outline, point có trần mỗi section, definition EN/VI, formula kèm LaTeX, mọi entry có page+blockId, Anki CSV RFC4180 |
 
 ### J. Research & paper workflow — 10 mục
 
@@ -147,17 +147,16 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | J04 | **P2** | Semantic Scholar/Crossref enrichment | Có metadata, abstract, citation count. | ✅ `src/core/scholar.ts` + 32 test: DOI/arXiv normalise, build URL, parse 2 nguồn, merge có provenance |
 | J05 | **P2** | Notes/backlinks liên kết tới trang và trích đoạn | Note trỏ đúng vị trí, hiện backlink. | ✅ cùng module `annotations.ts`: quote, backlinks, reanchor |
 | J06 | **P2** | Paper comparison matrix method/data/metrics/limitations | Cell có citation cụ thể, tránh suy diễn.  ⬜ |
-| **P2** | So sánh methodology/dataset/metric giữa paper | Bảng so sánh có trích dẫn. | ✅ `src/core/paper-compare.ts` + 23 test: mỗi cell có câu trích + section + score, gap có lý do, consensus/divergence chỉ từ cell |
 | J08 | **P2** | Clean/reflow reading mode for papers | Giữ công thức, footnote, citations khi reflow.  ⬜ |
 | J09 | **P3** | Study pack: flashcards, questions, concept map | Generated content liên kết tới sources.  ⬜ |
 | J10 | **P3** | Research library smart collections theo topic/author/year | Filter, tag, duplicate merge có xác nhận.  ⬜ |
+| J07 | **P2** | So sánh methodology/dataset/metric giữa paper | Bảng so sánh có trích dẫn. | ✅ `src/core/paper-compare.ts` + 23 test: mỗi cell có câu trích + section + score, gap có lý do, consensus/divergence chỉ từ cell |
 
 ### K. Document workflow & structured extraction — 10 mục
 
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
 | K01 | **P1** | Template trích fields dưới dạng schema JSON | Field có value, bbox, confidence, type, validator. | ✅ `src/core/schema.ts` + 26 test: 6 kiểu field, chuẩn hoá số/ngày/tiền, ambiguity báo chứ không đoán |
-| **P1** | Folder watcher + import tự động | Thả file vào folder là tự xử lý. | ✅ `src/core/watcher.ts` + 38 test: glob + ignore mặc định, diff snapshot (mtime-only → `maybeTouch`), coalesce theo cửa sổ cố định |
 | K03 | **P1** | Batch jobs: pause/cancel/retry, progress | Hàng đợi có trạng thái rõ, không treo. | 🟡 `src/core/queue.ts` + 12 test: concurrency, pause/resume/cancel, retry failed, progress nguyên; **chưa có UI** |
 | K04 | **P1** | Batch API/CLI với folder watcher | Chạy được batch không cần UI. | 🟡 `src/core/cli-args.ts` + `scripts/mirror-cli.mjs` + `docs/cli.md` + 63 test: parse 4 lệnh/9 flag, drift guard, `check` chạy thật trên 41 PDF; extract/translate/export mới plan (exit 7) vì core chưa import được từ Node |
 | K05 | **P1** | Human review queue cho field thiếu chắc chắn | Confidence thấp vào queue, có accept/reject. | ✅ `src/core/review.ts` + 15 test: chỉ field dưới ngưỡng hoặc lỗi vào queue, quyết định có audit, lần hai trả AlreadyDecided, export/apply round-trip |
@@ -166,6 +165,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | K08 | **P2** | Webhook/REST API/CLI hoặc local MCP document tools | Auth, permission, audit và rate limits.  ⬜ |
 | K09 | **P2** | Document versioning với immutable source và derived artifacts | Khôi phục/so sánh từng phiên bản.  ⬜ |
 | K10 | **P3** | Team workspace chia sẻ, quyền theo document/collection | RBAC và audit đủ cho tổ chức.  ⬜ |
+| K02 | **P1** | Folder watcher + import tự động | Thả file vào folder là tự xử lý. | ✅ `src/core/watcher.ts` + 38 test: glob + ignore mặc định, diff snapshot (mtime-only → `maybeTouch`), coalesce theo cửa sổ cố định |
 
 ### L. Reader UX, Chrome extension & desktop — 10 mục
 
@@ -187,13 +187,13 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
 | M01 | **P0** | Privacy modes Offline-only/Ask/Cloud-enabled | Không network trong Offline-only, e2e test. | ✅ `src/core/privacy.ts` + 20 test: offline = **0 fetch** kể cả batch, loopback vẫn chạy, ask cần consent |
-| **P1** | Data retention + xoá vĩnh viễn có xác nhận | Không giữ dữ liệu ngoài ý muốn. | ✅ `src/core/capabilities.ts` + 39 test: 4 mode × 6 capability, 7 action được phân loại, `CapabilityError` nêu capability thiếu; xoá nằm ở `deleteDocument` + store purge 30 ngày |
-| **P2** | Permission model theo mode (reader/local/cloud/automation) | Mỗi mode chỉ làm được việc đã khai. | ✅ cùng `capabilities.ts`: matrix frozen, mode lạ/action lạ bị từ chối thay vì map mặc định |
 | M04 | **P1** | Encryption at rest cho dữ liệu local | File DB mã hoá bằng key/passphrase. | ✅ `src/core/crypto.ts` + 24 test: PBKDF2 600k + AES-GCM, salt/IV mỗi lần, sai passphrase hay tamper đều WrongPassphrase, 1 KB thành 1505 B |
 | M05 | **P1** | Audit log local: file nào, ai, khi nào, export gì | Truy vết được mọi thao tác. | ✅ `src/core/audit.ts` + 25 test: 8 loại event, chặn detail giống secret, chain SHA-256 phát hiện sửa, report mask giá trị |
 | M06 | **P2** | Audit log consent/cloud route per document/job | Biết file nào dùng engine nào và tại sao.  ⬜ |
 | M08 | **P2** | Local-only mode + audit trail cho cloud call | Biết cái gì đã gửi lên cloud. | ✅ cùng `audit.ts` (kind translate/export) + `privacy.ts` chặn mạng; audit ghi lại quyết định |
 | M07 | **P1** | Preview chính xác nội dung sẽ gửi cloud | Xem payload trước khi consent. | ✅ `src/core/payload-preview.ts` + 21 test: characters/bytes tính từ text thật (không từ preview), endpoint scope theo effective endpoint, redact preview, cost null khi thiếu giá |
+| M02 | **P1** | Data retention + xoá vĩnh viễn có xác nhận | Không giữ dữ liệu ngoài ý muốn. | ✅ `src/core/capabilities.ts` + 39 test: 4 mode × 6 capability, 7 action phân loại, `CapabilityError`; xoá qua `deleteDocument` + purge 30 ngày |
+| M03 | **P2** | Permission model theo mode (reader/local/cloud/automation) | Mỗi mode chỉ làm được việc đã khai. | ✅ cùng `capabilities.ts`: matrix frozen, mode lạ/action lạ bị từ chối thay vì map mặc định |
 
 ### N. Đo chất lượng, quan sát và phát hành — 8 mục
 
