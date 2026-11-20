@@ -122,7 +122,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
 | I01 | **P0** | Chat answers với citation trang+vùng source | Click citation highlight đúng block, không chỉ page. | 🟡 Parser + resolve đã xong ở cả web (24 test) và native (15 test); phần highlight trong UI là wave sau |
-| I02 | **P1** | Hybrid retrieval BM25 + vector + metadata filter | Có kết quả lexical và semantic với trace.  ⬜ |
+| I02 | **P1** | Hybrid retrieval BM25 + embeddings trên Document IR | Truy vấn trả top-k kèm score và nguồn. | 🟡 `src/core/retrieval.ts` BM25 (k1 1.5, b 0.75) + heading boost + fold dấu tiếng Việt, 18 test; **chưa có embeddings** |
 | I03 | **P1** | Section/table-aware chunking theo Document IR | Không xé bảng/công thức giữa chunks.  ⬜ |
 | I04 | **P1** | Multi-PDF chat trong project/workspace | Trả lời dẫn nguồn phân biệt từng tài liệu.  ⬜ |
 | I05 | **P1** | Ask selected text/figure/table and explain | Context ưu tiên vùng người dùng chọn.  ⬜ |
