@@ -52,7 +52,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | E09 | **P2** | Nhận diện header/footer/page-number để loại khỏi dịch tuỳ chọn | Không trùng nội dung mỗi trang. | ✅ `src/core/furniture.ts` + 26 test: cần cả band và lặp, page number giữ lại để in lại theo trang, watermark theo góc xoay |
 | E10 | **P2** | Giữ hyperlink, footnote và cross-reference | Link nội bộ hoạt động lại sau export. | ✅ `src/core/links.ts` + 26 test: footnote/figure/table/section, tie báo thay vì đoán, renumber, Markdown anchor theo block id |
 | E11 | **P2** | Phát hiện ngôn ngữ theo đoạn/vùng, không chỉ toàn tài liệu | PDF song ngữ dịch đúng từng span. | ✅ `src/core/language-regions.ts` + 29 test: script + chữ riêng tiếng Việt + stopword/particle, số là `und`, gộp vùng theo luật đã ghi |
-| E12 | **P2** | Hỗ trợ DOCX/PPTX/XLSX/EPUB/HTML/ảnh TIFF/PNG/JPG | Đưa về IR, giữ nguồn và metadata.  ⬜ |
+| E12 | **P2** | Hỗ trợ DOCX/PPTX/XLSX/EPUB/HTML/ảnh TIFF/PNG/JPG | Đưa về IR, giữ nguồn và metadata. | 🟡 `src/core/import-formats.ts` + 57 test: nhận đúng định dạng bằng magic bytes + cấu trúc ZIP, plan import có bước/actor, format không hỗ trợ trả plan rỗng kèm lý do; **chưa có converter thật** cho office/EPUB |
 | E13 | **P2** | Phát hiện PDF hỏng, font lỗi, text encoding lỗi | Cảnh báo và tự đề xuất extraction fallback.  ⬜ |
 | E14 | **P3** | Trích metadata tài liệu: title/author/date/DOI/language | Cho phép người dùng duyệt/chỉnh metadata.  ⬜ |
 
