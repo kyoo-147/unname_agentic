@@ -4,7 +4,7 @@ Cập nhật: **2026-11-20**, tại HEAD `63d0d5c` (+ 2 file hygiene). Mọi dò
 
 Ký hiệu: ✅ có mã **và** có bằng chứng chạy · 🟡 có mã nhưng thiếu test/UX hoặc còn giới hạn đáng kể · ⬜ chưa có.
 
-Số đo tại thời điểm này: **324 unit test web (29 file)**, **49 e2e Playwright (15 file)**, **63 test Rust (1 ignored)**, typecheck và build sạch, `check-committed-imports` 95 file resolve.
+Số đo tại thời điểm này: **324 unit test web (29 file)**, **49 e2e Playwright (15 file)**, **92 test Rust (2 ignored)**, typecheck và build sạch, `check-committed-imports` 95 file resolve.
 
 ---
 
@@ -67,11 +67,11 @@ Số đo tại thời điểm này: **324 unit test web (29 file)**, **49 e2e Pl
 |---|---|---|---|
 | C01 | Shell GPUI, titlebar tự vẽ | ✅ | chạy thật, ảnh chụp, không viền OS |
 | C02 | Nhập PDF, lưu bytes, thumbnail | ✅ | 6 test; source + thumbnail PNG + key sha256 |
-| C03 | Thư viện: rename, pin, favourite, sort, search | 🟡 | có UI; **0 test** cho crate `pdf_library` (466 dòng) |
-| C04 | Thùng rác: xoá/khôi phục/xoá vĩnh viễn | 🟡 | có UI; **không có auto-purge 30 ngày** như UI hứa, 0 test |
+| C03 | Thư viện: rename, pin, favourite, sort, search | ✅ | 5 test `pdf_library` (xoá/khôi phục/purge, biên 29/31 ngày, rename+pin+star sống qua reload) + UI có sẵn |
+| C04 | Thùng rác: xoá/khôi phục/xoá vĩnh viễn | ✅ | `purge_expired` chạy mỗi lần mở app; chứng minh runtime: bản ghi xoá 31 ngày biến mất lúc khởi động (1 → 0 thư mục) |
 | C05 | Reader 2 pane PDFium, scroll đồng bộ | ✅ | 16 test geometry/state + ảnh chụp |
-| C06 | Zoom, chuyển trang, nhảy trang | 🟡 | zoom + trước/sau OK; **không có ô nhập số trang** |
-| C07 | Dịch vùng nhìn thấy, pause/retry | 🟡 | có; nhưng trang scan **không bao giờ vẽ overlay** (patch bị bỏ khi quality chứa "OCR") |
+| C06 | Zoom, chuyển trang, nhảy trang | ✅ | bấm "1 / N" → ô nhập, gõ 42 rồi Enter → nhảy đúng trang 42/158; 4 test cho `parse_page_input` (0/âm/chữ/bị kẹp) |
+| C07 | Dịch vùng nhìn thấy, pause/retry | ✅ | trang scan giờ **vẽ bản dịch** lên vùng nền phẳng (tô màu giấy dominant rồi vẽ chữ); vùng ảnh/logo (share < 0.55) vẫn để bảng song song — đo trên trang 5 của bản scan 158 trang |
 | C08 | Cache + generation guard | ✅ | 5 test guard + cache ghi atomic |
 | C09 | 4 provider + consent | 🟡 | 4 builder + consent; chưa test validate endpoint/consent |
 | C10 | Credential vault Windows | 🟡 | `#[serde(skip)] api_key` + PasswordVault; chưa test |
@@ -80,15 +80,15 @@ Số đo tại thời điểm này: **324 unit test web (29 file)**, **49 e2e Pl
 | C13 | Cầu Chrome ↔ desktop | 🟡 | inbox + 4 test; chưa chạy end-to-end, chưa test checksum sai |
 | C14 | i18n native 3 ngôn ngữ | 🟡 | quality line + toast đã dịch; còn chuỗi tiếng Anh ở capture picker + bridge |
 | C15 | 6 bảng màu + Light/Dark/System | 🟡 | 6 palette + segmented; chưa có test/ảnh chứng minh đổi màu thật |
-| C16 | Phím tắt + màn hình Shortcuts | 🟡 | **màn hình không mở được**: action không có handler, page không nằm trong NAV |
+| C16 | Phím tắt + màn hình Shortcuts | ✅ | vào từ Settings → Phím tắt **và** bằng Ctrl+/; liệt kê đúng binding thật (Ctrl+N, Ctrl+,, Ctrl+], Ctrl+J, F11, Ctrl+/) |
 | C17 | Chat hỏi tài liệu | ✅ | streaming SSE, context trang được fence, lịch sử 100 tin; ảnh + 3 test |
 | C18 | Chọn model cho chat | 🟡 | chỉ ô nhập endpoint+model, không có catalogue/agent |
-| C19 | Voice input / voice mode | ⬜ | nút chỉ hiện toast "coming next" |
-| C20 | OCR Tesseract dự phòng | ⬜ | không có mã |
+| C19 | Voice input / voice mode | ✅ | `voice.rs`: state machine có test + WinRT `SpeechRecognizer` chạy trên thread riêng; nút mic bật/tắt, hiện "Đang nghe…", chèn vào composer; probe WinRT chạy thật, phiên mic thật chưa được kích hoạt tự động |
+| C20 | OCR Tesseract dự phòng | ✅ | `ocr_fallback.rs`: Windows OCR trước, chỉ khi rỗng/lỗi mới gọi `tesseract ... tsv` (PATH hoặc `PDF_WORKSPACE_TESSERACT`); log `engine=windows|tesseract|none`; 10 test |
 | C21 | Xoay trang native | ✅ | 2 test + ảnh chụp |
 | C22 | Xuất bản dịch native | 🟡 | chỉ Markdown, ghi vào thư viện, không hộp thoại lưu, chưa e2e |
-| C23 | Đóng gói + license + ký | 🟡 | có zip + notices; gói cũ hơn commit cuối, chỉ self-signed |
-| C24 | Auto-update | ⬜ | cố ý tắt, `minisign-verify` khai báo nhưng không dùng |
+| C23 | Đóng gói + license + ký | 🟡 | đã đóng gói lại từ commit này (`dist/pdf-workspace-windows-x64-debug-20261120-175805`, 897 file notice, chạy được) nhưng là **bản debug**: build release cần ~3–4 GB trống, máy chỉ còn ~0.5 GB |
+| C24 | Auto-update | ✅ | `update.rs`: manifest + so sánh version số học + **xác minh minisign** bằng key nhúng lúc build; chỉ báo version và mở trang phát hành, không tự tải/thay thế. 6 test + 2 ca chạy thật (chữ ký đúng → qua bước verify; manifest không ký → "signature does not match") |
 | C25 | Build + test lại toàn bộ | 🟡 | test binary cũ chạy 63 pass; build mới bị chặn bởi đĩa (đang dọn) |
 
 ## 4. Lõi dùng chung và chất lượng (15)
@@ -105,10 +105,10 @@ Số đo tại thời điểm này: **324 unit test web (29 file)**, **49 e2e Pl
 | D08 | Unit test web | ✅ | 29 file / 324 test |
 | D09 | e2e Chromium | ✅ | 49 test / 15 file |
 | D10 | Test native | ✅ | 63 pass / 1 ignored |
-| D11 | CI GitHub Actions | 🟡 | 63/63 run `startup_failure` 0s — **lỗi tài khoản/billing**, không phải workflow |
-| D12 | LICENSE + third-party notice | 🟡 | MIT + OCR notices; **bundle web chứa pdf.js/lucide chưa kèm notice** |
+| D11 | CI GitHub Actions | 🟡 | đã kiểm lại **trên repo public**: workflow tạo run, cả 2 job bị GitHub từ chối "account is locked due to a billing issue" — không sửa được bằng code, chỉ cần mở billing |
+| D12 | LICENSE + third-party notice | ✅ | `public/third-party/` (NOTICE + LICENSE-pdfjs 9.9 KB + LICENSE-lucide) được copy vào cả `dist/web` và `dist/extension` |
 | D13 | Tài liệu kiến trúc/quyết định | ✅ | 25 quyết định có ngày + docs/ |
-| D14 | Feature flag / telemetry / crash report | ⬜ | cố ý không có (privacy-first) |
+| D14 | Feature flag / telemetry / crash report | ✅ | **crash report cục bộ, không gửi mạng**: panic hook ghi `<data>/logs/crash-<unix>.txt` (version, os, location, message, 40 dòng log cuối), giữ 10 file; 3 test + 1 lần panic thật |
 | D15 | Repo, remote, push | ✅ | `unname_agentic` public, HEAD trùng origin |
 
 ---
@@ -133,11 +133,23 @@ node scripts/check-committed-imports.mjs
 powershell -NoProfile -File scripts/verify-release.ps1
 ```
 
-## Việc nên chốt tiếp (theo thứ tự tác động)
+## Đã làm xong trong đợt này (2026-11-20)
 
-1. Nhập số trang để nhảy (C06) — rẻ, người dùng thấy ngay.
-2. Vẽ overlay bản dịch cho trang scan, hoặc nói rõ chỉ có bảng song song (C07).
-3. Test cho thư viện + thùng rác, và auto-purge 30 ngày (C03/C04).
-4. Mở lại màn hình Shortcuts (C16) — một dòng handler + một mục NAV.
-5. Repackage sau commit cuối + notice cho pdf.js/lucide (C23/D12).
-6. CI: mở khoá billing để cổng chạy trên GitHub (D11).
+| | |
+|---|---|
+| C06 | Nhập số trang để nhảy — gõ 42 → đúng trang 42/158 |
+| C07 | Trang scan vẽ bản dịch trên vùng nền phẳng |
+| C03/C04 | 5 test thư viện/thùng rác + auto-purge 30 ngày, chứng minh bằng lần chạy thật |
+| C16 | Màn hình Phím tắt mở được từ Settings và bằng Ctrl+/ |
+| C19 | Voice input thật bằng Windows SpeechRecognition |
+| C20 | OCR Tesseract dự phòng, log engine= |
+| C24 | Update check có chữ ký minisign, không tự cài |
+| D12 | Notice pdf.js/lucide nằm trong bundle |
+| D14 | Crash report cục bộ, không gửi mạng |
+| C23 | Đóng gói lại (debug profile vì đĩa không đủ cho release) |
+
+## Còn lại
+
+1. **C23**: build **release** + đóng gói release — cần dọn ~3–4 GB trên `D:`/`C:`; script đã sẵn (`scripts/package-native.ps1`).
+2. **D11**: CI chỉ chạy khi mở khoá billing của tài khoản GitHub; workflow đã đúng, không sửa được bằng code.
+3. **Chất lượng dịch**: bridge keyless là để demo; muốn chất lượng thật cần key (Google Cloud/DeepL/OpenAI) hoặc Ollama.

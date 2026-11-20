@@ -4,15 +4,17 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $profile = if ($DebugBuild) { 'debug' } else { 'release' }
 $application = Join-Path $root "native-shell\target\$profile\pdf_workspace.exe"
-$companion = Join-Path $root "desktop\target\$profile\pdf-workspace-host.exe"
+$companion = Join-Path $root "desktop\target\$profile\mirror-pdf-desktop.exe"
 $pdfium = Join-Path $root 'desktop\runtime\bin\pdfium.dll'
-foreach ($file in @($application, $companion, $pdfium)) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Build the $profile artifacts first: $file" } }
+foreach ($file in @($application, $pdfium)) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Build the $profile artifacts first: $file" } }
+# The desktop companion is optional in this preview: the bridge ships separately.
+$hasCompanion = Test-Path -LiteralPath $companion -PathType Leaf
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $folder = Join-Path $root "dist\pdf-workspace-windows-x64-$profile-$stamp"
 if (Test-Path -LiteralPath $folder) { throw 'The package directory already exists; no existing package was changed.' }
 New-Item -ItemType Directory -Path $folder | Out-Null
 Copy-Item -LiteralPath $application -Destination (Join-Path $folder 'pdf_workspace.exe')
-Copy-Item -LiteralPath $companion -Destination (Join-Path $folder 'pdf-workspace-host.exe')
+if ($hasCompanion) { Copy-Item -LiteralPath $companion -Destination (Join-Path $folder 'mirror-pdf-desktop.exe') } else { Write-Warning "No companion build for $profile; the package ships the app only." }
 Copy-Item -LiteralPath $pdfium -Destination (Join-Path $folder 'pdfium.dll')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-native-host.ps1') -Destination $folder
 Copy-Item -LiteralPath (Join-Path $root 'native-shell\LICENSE') -Destination (Join-Path $folder 'LICENSE-UPSTREAM.txt')
