@@ -62,7 +62,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 |---|---|---|---|---|
 | F01 | **P0** | Tăng số ngôn ngữ OCR qua OCR engine adapter | Chọn engine theo script, language packs tải riêng.  ⬜ |
 | F02 | **P1** | Tiền xử lý ảnh: deskew, rotate, denoise, binarize | Có before/after và OCR quality gain.  ⬜ |
-| F03 | **P1** | Dewarp trang cong/ảnh điện thoại | Text line baseline được chỉnh thẳng.  ⬜ |
+| F03 | **P1** | Preprocessing: deskew/binarize/denoise/upscale pipeline | OCR tăng chất lượng đo được. | ✅ `src/core/preprocess.ts` + 19 test: đo stats, ước lượng skew bằng projection profile, quyết định kèm lý do, ngưỡng export |
 | F04 | **P1** | OCR confidence và vùng nghi ngờ | Highlight vùng confidence thấp, cho sửa thủ công.  ⬜ |
 | F05 | **P1** | Searchable PDF tạo text layer từ scan | Copy/search đúng vị trí mà ảnh gốc không mất. | ✅ `src/export/searchable.ts` + 20 test: text render mode 3, đúng baseline, pdfjs trích được chữ |
 | F06 | **P1** | Mixed OCR theo vùng, bỏ qua text gốc đã tốt | Không tạo 2 lớp chữ trùng nhau.  ⬜ |
