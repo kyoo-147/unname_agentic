@@ -30,7 +30,7 @@ Tiến độ cập nhật bằng script: `scripts/backlog-status.mjs` (đếm t�
 | C13 | Bridge desktop/extension end-to-end | Event delivery, reconnect, duplicate delivery, timeout  🟡 |
 | C14/C15 | Native i18n/theme | Screenshot matrix ngôn ngữ × theme × DPI |
 | C18 | Model catalogue | Discovery/config, capabilities, health check, context size  🟡 |
-| C22 | File save dialog native | Save As Markdown/PDF + conflict/permission path handling  🟡 |
+| C22 | Xuất bản dịch native | 🟡 | ✅ `export_native.rs` (Markdown/Text/JSON, ghi atomic, hỏi đường dẫn) + 14 test; nút header đang xuất tiêu đề + text trang vì PdfReader chưa expose bản dịch |
 | D02 | Cancel/abort thật | ✅ scheduler có AbortController thật, abortAll, 10 test đếm request; transport không gửi request sau abort |
 | D11 | CI | Chạy được trong account hợp lệ; nếu billing block, test runner alternative  🟡 |
 
