@@ -65,8 +65,8 @@ The web reader and the extension are the verified surface: 318 unit tests, 42 en
 Known limits, stated rather than hidden:
 
 - Source-glyph removal and preserved chart pixels pass on the generated digital PDF. This is not fidelity proof for scans, clipped text, Type 3 fonts, textured backgrounds, or arbitrary languages.
-- GitHub Actions cannot run on this repository: every workflow, including a trivial probe, fails at startup because the account is locked for a billing issue. The gate scripts run locally and are wired into `ci.yml`, but CI itself is unproven.
-- The native GPUI shell cannot be built on the current machine (about 3 GB free on `D:`); every native row in the feature board stays unverified rather than claimed.
+- GitHub Actions cannot run on this repository: every workflow, including a trivial six-line probe, fails at startup because the account is locked for a billing issue. Re-verified on 2026-11-20 **after the repository became public**: `gh workflow run ci` creates a run, both jobs are created, and GitHub rejects each one with "The job was not started because your account is locked due to a billing issue." Making the repository public does not lift the lock, and no workflow change can. The gate scripts still run locally and are wired into `ci.yml`, so the day Billing is fixed CI starts working with no code change.
+- The native GPUI shell builds and runs on this machine now (the earlier "cannot build" note was the disk; `native-shell/target` moved to `C:` behind a junction). What is genuinely unverified is narrower: the live-mirror capture path, the Chrome↔desktop bridge end to end, and any cloud translation quality.
 - RTL and CJK rendering is proven for translated regions (Arabic and Chinese targets); a source PDF that itself contains an RTL script is not in the fixtures.
 
 See `docs/product-contract.md`, `docs/implementation-plan.md`, `docs/feature-board.md` and `docs/decisions.tsv` for the requirements, architecture choices, evidence trail and current status.
