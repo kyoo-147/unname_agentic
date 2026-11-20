@@ -126,7 +126,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | I03 | **P1** | Chunking hiểu bảng và section thay vì chia text máy móc | Chunk theo section/bảng, không cắt giữa công thức. | ✅ `chunkDocument`: section theo outline, bảng + caption riêng, cắt câu có overlap, không cắt trong công thức; 18 test |
 | I04 | **P1** | Hỏi đáp trên nhiều PDF với citation theo tài liệu | Câu trả lời nêu rõ tài liệu/trang. | ✅ `src/core/multi-document.ts` + 20 test: chia budget, fence theo doc, citation không có trong context bị báo unsupported, evidence matrix |
 | I05 | **P1** | Ask selected text/figure/table and explain | Context ưu tiên vùng người dùng chọn.  ⬜ |
-| I06 | **P1** | Tóm tắt toàn tài liệu và từng mục với nguồn | Có outline, findings, caveats gắn citation.  ⬜ |
+| **P1** | Query rewriting / decomposition | Câu hỏi phức tạp được tách và viết lại. | ✅ `src/core/query.ts` + 32 test: bỏ từ hỏi, giữ số và quoted span, synonym VN↔EN, mỗi intent một query, keyword là token của BM25 |
 | I07 | **P1** | So sánh nhiều tài liệu và tạo evidence matrix | Mỗi khác biệt có trích dẫn hai phía.  ⬜ |
 | I08 | **P1** | Agent tools: navigate_page, crop, zoom, OCR_region, search, cite | Ghi tool trace, giới hạn bước/chi phí và allowlist.  ⬜ |
 | I09 | **P2** | Table Q&A có cell provenance và phép tính kiểm chứng | Trả kết quả số + cell nguồn + phép tính.  ⬜ |
