@@ -140,7 +140,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
-| J01 | **P1** | Tự lấy title/authors/DOI/venue/references từ paper | Cho kiểm tra trước khi nhập vào thư viện.  ⬜ |
+| J01 | **P1** | DOI/arXiv detection, authors, venue, references | Metadata đúng, tạo được BibTeX. | 🟡 `src/core/bibtex.ts` (parse/emit/stable key/dedupe, 26 test); **chưa fetch DOI/arXiv** |
 | J02 | **P1** | Import/export BibTeX/RIS và kết nối Zotero | Citation keys ổn định, không duplicate.  ⬜ |
 | J03 | **P1** | Tạo notes từ highlight có backlink page+bbox | Click note quay về đúng PDF đoạn gốc.  ⬜ |
 | J04 | **P1** | Tìm DOI và đồng bộ metadata qua Crossref/Semantic Scholar | Chỉ metadata, không tự tải bản quyền bị hạn chế.  ⬜ |
