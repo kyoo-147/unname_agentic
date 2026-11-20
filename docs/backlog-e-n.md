@@ -174,7 +174,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | L02 | **P0** | Live mirror thực tế với capture permissions | Test tab/window/screen, không loop capture.  ⬜ |
 | L03 | **P1** | Một unified job progress UI web/extension/desktop | Có phần trăm từng stage và cancel thật.  ⬜ |
 | L04 | **P1** | Bi-directional scroll/selection sync theo document coordinates | Click highlight pane nguồn focus đúng pane dịch.  ⬜ |
-| L05 | **P1** | Hover quick translate, dictionary, copy, pronunciation | Không gửi cloud nếu consent chưa cấp.  ⬜ |
+| L05 | **P2** | Quick actions từ selection (menu/dropdown) | Chọn là ra hành động đúng ngữ cảnh. | ✅ `src/core/selection-actions.ts` + 35 test: translate/copy/cite/note/glossary/search/web/define/redact, disable kèm lý do |
 | L06 | **P2** | Reading modes: original/translation/bilingual/interleave | Chuyển mode giữ đúng vị trí đọc. | 🟡 `src/core/reading-modes.ts` + 12 test: 4 mode phủ kín viewport, đổi mode giữ trang và progress <1%; **UI chưa nối** |
 | L07 | **P1** | Reader annotations sync desktop↔web qua local bridge | Merge conflict rõ ràng; offline giữ local.  ⬜ |
 | L08 | **P2** | System-wide capture selection & OCR translate in-place | Chọn màn hình/window/vùng, overlay không tự chụp.  ⬜ |
