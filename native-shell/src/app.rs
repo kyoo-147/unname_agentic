@@ -341,6 +341,8 @@ impl Workspace {
         crate::settings::load();
         if !cx.has_global::<SharedStore>() { cx.set_global(SharedStore::open().expect("open document library")); }
         let mut store = cx.global::<SharedStore>().clone();
+        // 回收站 30 天: the trash promised a countdown, so honor it on every start.
+        if let Err(error) = store.purge_expired(crate::time::now()) { log::warn!(target: "pdf_workspace", "trash purge failed: {error:#}"); }
         let entries = store.list();
         let search = cx.new(|cx| {
             let mut f = TextField::new("搜索", cx);

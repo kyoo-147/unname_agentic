@@ -18,6 +18,7 @@ impl SharedStore {
     pub fn list_trash(&mut self) -> Vec<TrashEntry> { self.0.borrow_mut().list_trash() }
     pub fn restore(&mut self, id: &str) -> Result<bool> { self.0.borrow_mut().restore(id) }
     pub fn purge(&mut self, id: &str) -> Result<()> { self.0.borrow_mut().purge(id) }
+    pub fn purge_expired(&mut self, now: u64) -> Result<usize> { self.0.borrow_mut().purge_expired(now) }
     pub fn update_meta(&mut self, id: &str, f: impl FnOnce(&mut Meta)) -> Result<()> { self.0.borrow_mut().update_meta(id, f) }
     pub fn settings(&self) -> Settings { self.0.borrow().settings() }
     pub fn save_settings(&self, s: &Settings) -> Result<()> { self.0.borrow().save_settings(s) }

@@ -341,6 +341,29 @@ impl Store {
         Ok(true)
     }
 
+    /// 回收站 30 天: remove every trashed record whose countdown has elapsed.
+    ///
+    /// `now` is passed in (unix seconds) so the boundary is testable and the
+    /// caller owns the clock. A record with no readable deletion time is kept:
+    /// losing a document is worse than keeping it a day longer.
+    pub fn purge_expired(&mut self, now: u64) -> Result<usize> {
+        let cut = now.saturating_sub(TRASH_DAYS * 86_400);
+        let trash = self.path("trash");
+        if !trash.is_dir() { return Ok(0) }
+        let mut expired = Vec::new();
+        for entry in fs::read_dir(&trash)? {
+            let entry = entry?;
+            if !entry.path().is_dir() { continue }
+            let Some(id) = entry.file_name().to_str().map(str::to_string) else { continue };
+            let Ok(text) = fs::read_to_string(entry.path().join("record.json")) else { continue };
+            let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
+            let deleted = value.get("deleted").and_then(Value::as_u64).unwrap_or(0);
+            if deleted > 0 && deleted <= cut { expired.push(id); }
+        }
+        for id in &expired { self.purge(id)?; }
+        Ok(expired.len())
+    }
+
     /// Delete a trashed record for good.
     pub fn purge(&mut self, id: &str) -> Result<()> {
         let dir = self.path(&format!("trash/{id}"));
@@ -463,4 +486,104 @@ pub fn export_path(root: &Path, rel: &str) -> Option<PathBuf> {
     let candidate = root.join(rel);
     let canonical = candidate.canonicalize().ok()?;
     canonical.starts_with(root.canonicalize().ok()?).then_some(canonical)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    fn scratch() -> (std::path::PathBuf, Store) {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("mirror-library-test-{}-{n}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = Store::open_at(dir.clone()).expect("open scratch store");
+        (dir, store)
+    }
+
+    fn imported(store: &mut Store, key: &str, title: &str) -> String {
+        let png = [0x89u8, b'P', b'N', b'G'];
+        store.create_pdf_once(title, b"%PDF-1.7\n", &png, 3, (1, 1), key).expect("import")
+    }
+
+    fn age_trash(store: &Store, id: &str, deleted: u64) {
+        let path = store.path(&format!("trash/{id}/record.json"));
+        let text = fs::read_to_string(&path).expect("read trash record");
+        let mut value: Value = serde_json::from_str(&text).expect("parse trash record");
+        value["deleted"] = json!(deleted);
+        write_json(&path, &value).expect("rewrite trash record");
+    }
+
+    #[test]
+    fn delete_moves_a_record_to_the_trash_and_restore_brings_it_back() {
+        let (dir, mut store) = scratch();
+        let id = imported(&mut store, "a", "Alpha");
+        store.delete(&id, None).expect("delete");
+        assert!(store.meta.get(&id).is_none(), "the record leaves the library index");
+        let trash = store.list_trash();
+        assert_eq!(trash.len(), 1);
+        assert_eq!(trash[0].title, "Alpha");
+        assert!(store.restore(&id).expect("restore"));
+        assert!(store.meta.contains_key(&id), "restore puts it back");
+        assert!(store.list_trash().is_empty());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn purge_removes_a_trashed_record_for_good() {
+        let (dir, mut store) = scratch();
+        let id = imported(&mut store, "b", "Beta");
+        store.delete(&id, None).expect("delete");
+        store.purge(&id).expect("purge");
+        assert!(store.list_trash().is_empty());
+        assert!(!store.path(&format!("trash/{id}")).is_dir(), "the trash folder is gone");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_thirty_day_boundary_is_exact_and_keeps_younger_records() {
+        let (dir, mut store) = scratch();
+        let now = 1_800_000_000_u64;
+        let fresh = imported(&mut store, "c", "Fresh");
+        let old = imported(&mut store, "d", "Old");
+        store.delete(&fresh, None).expect("delete fresh");
+        store.delete(&old, None).expect("delete old");
+        age_trash(&store, &fresh, now - 29 * 86_400);
+        age_trash(&store, &old, now - 31 * 86_400);
+        let purged = store.purge_expired(now).expect("purge expired");
+        assert_eq!(purged, 1, "exactly the record past the window");
+        let left: Vec<String> = store.list_trash().into_iter().map(|entry| entry.title).collect();
+        assert_eq!(left, vec!["Fresh".to_string()]);
+        assert!(!store.path(&format!("trash/{old}")).is_dir());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_trashed_record_without_a_deletion_time_is_kept() {
+        let (dir, mut store) = scratch();
+        let id = imported(&mut store, "e", "Undated");
+        store.delete(&id, None).expect("delete");
+        age_trash(&store, &id, 0);
+        assert_eq!(store.purge_expired(1_800_000_000).expect("purge"), 0);
+        assert_eq!(store.list_trash().len(), 1, "never delete what we cannot date");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn rename_pin_and_star_survive_a_reload() {
+        let (dir, mut store) = scratch();
+        let id = imported(&mut store, "f", "Gamma");
+        store.rename(&id, "Gamma renamed").expect("rename");
+        store.set_pinned(&id, true).expect("pin");
+        assert!(store.set_starred(&id, true).expect("star") > 0, "starring stamps the record with the current second");
+        drop(store);
+        let mut reloaded = Store::open_at(dir.clone()).expect("reopen");
+        let entry = reloaded.list().into_iter().find(|entry| entry.id == id).expect("record survives");
+        assert_eq!(entry.title, "Gamma renamed");
+        assert!(entry.meta.pinned, "pin survives a reload");
+        assert!(entry.meta.starred > 0, "star survives a reload");
+        let _ = fs::remove_dir_all(dir);
+    }
 }
