@@ -1,6 +1,6 @@
 ts	phase	decision	why	evidence	result
 2026-11-08T11:05:00+07:00	frame	Keep automatic detection and geometry fidelity as acceptance gates	The user explicitly rejected a manual-open-only reduced workflow	docs/product-contract.md	open
-2026-11-08T11:05:01+07:00	workflow	Read installed pstack skill sources when invocation was disabled	The skill tool rejected pstack and Superpowers aliases but installed pstack files exist	C:/Users/hoang/.agents/skills/figure-it-out/SKILL.md	read
+2026-11-08T11:05:01+07:00	workflow	Read installed pstack skill sources when invocation was disabled	The skill tool rejected pstack and Superpowers aliases but installed pstack files exist	~/.agents/skills/figure-it-out/SKILL.md	read
 2026-11-08T11:05:02+07:00	architecture	Run document-first and capture-first candidates in separate files	Compare two full designs before committing implementation boundaries	docs/arena/	open
 2026-11-08T11:05:03+07:00	tooling	Use available openai-codex model for both candidates	Only one provider and model are registered in this session	functions.list_subagent_models	cross-family review unavailable
 2026-11-08T11:08:38.9468437+07:00	synthesis	Select document-first and graft capture generation guards	Structured extraction preserves PDF geometry and OCR remains available for opaque sources	docs/implementation-plan.md	implementation started

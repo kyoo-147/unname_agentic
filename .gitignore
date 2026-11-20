@@ -8,3 +8,13 @@ test-results/
 .env.*
 !.env.example
 .pi/
+# public-repo hygiene (carried over from the pre-consolidation repo)
+docs/proof/
+proof/
+*.log
+*.pdb
+*.ilk
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
