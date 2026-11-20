@@ -15,17 +15,25 @@
  * and is unit-tested without a DOM; `buildPdf` embeds the plan with pdf-lib. `canvasToPng` is the only
  * browser-only helper and no DOM object is resolved at module scope, so the module imports in node.
  *
- * Font limitation (deliberate, reported, never silent): pdf-lib can only embed a custom TrueType face
- * after `@pdf-lib/fontkit` is registered, which would be a second dependency, and this project ships
- * no redistributable Unicode font file either. The build therefore uses the standard Helvetica face,
- * which is WinAnsi-only, and folds non-WinAnsi letters to their closest Latin form: "Tiếng Việt" is
- * printed as "Tieng Viet" rather than as tofu. Digits, Latin text and punctuation are left exactly as
- * they are. `FONT_LIMITATION` says this in words and `buildPdf` returns it, so the caller can warn.
+ * Fonts: `fonts.ts` embeds the bundled Noto Sans face (SIL OFL 1.1) once per document, so Vietnamese
+ * is written with its diacritics. The fallback order is Noto Sans -> Helvetica (WinAnsi): when the
+ * face cannot be loaded the build folds non-WinAnsi letters to their closest Latin form ("Tiếng Việt"
+ * prints as "Tieng Viet") instead of drawing tofu, and `FONT_LIMITATION` says so. Characters the
+ * embedded face has no glyph for (CJK, emoji) are left out rather than folded, and
+ * `UNICODE_GAP_LIMITATION` reports that. Either limitation is absent when the document needed nothing
+ * beyond what its face covers.
  */
 
-import { PDFDocument, StandardFonts, degrees, rgb } from 'pdf-lib';
+import { PDFDocument, degrees, rgb } from 'pdf-lib';
 import type { Rect } from '../core/types';
 import { fitText } from '../pdf/layout';
+import { FALLBACK_FACE_NAME, foldToWinAnsi, registerPdfFonts } from './fonts';
+import type { PdfFontsOptions, PreparedText } from './fonts';
+
+// Folding is a font concern and now lives in `fonts.ts`; it is re-exported here so the module that
+// documented WinAnsi keeps its surface.
+export { foldToWinAnsi, isWinAnsiText } from './fonts';
+export type { FoldResult } from './fonts';
 
 export type Measure = (text: string, size: number) => number;
 
@@ -74,9 +82,9 @@ export interface PlannedBlock {
   direction: 'ltr' | 'rtl';
   /** True when the translated text did not fit and trailing lines were dropped. */
   truncated: boolean;
-  /** True when WinAnsi folding changed at least one character. */
+  /** True when preparing the text changed at least one character for the drawing face. */
   folded: boolean;
-  /** Characters that had no WinAnsi form and were removed. */
+  /** Characters removed because the drawing face had no glyph for them. */
   dropped: number;
 }
 
@@ -103,6 +111,8 @@ export interface PagePlanOptions {
   minimumFontSize?: number;
   /** Baseline offset from the top of a line box, as a fraction of the font size. */
   baselineRatio?: number;
+  /** Rewrites text for the face that will draw it. Defaults to WinAnsi folding. */
+  prepare?: (text: string) => PreparedText;
 }
 
 export interface BuildPdfOptions {
@@ -111,6 +121,11 @@ export interface BuildPdfOptions {
   minimumFontSize?: number;
   /** Producer line written into the PDF metadata. */
   producer?: string;
+  /**
+   * Which face to embed. Omitted, the bundled Unicode face is fetched; `{ bytes: null }` forces the
+   * WinAnsi fallback. The face is embedded once per document.
+   */
+  fonts?: PdfFontsOptions;
 }
 
 export interface BuildPdfResult {
@@ -119,14 +134,20 @@ export interface BuildPdfResult {
   blockCount: number;
   imagePages: number;
   skipped: SkippedBlock[];
-  /** Human-readable limits of this build, always including the font limitation. */
+  /**
+   * Human-readable limits of this build. It is empty when the document was written inside what its
+   * face covers: no folding note for Vietnamese, no coverage note for text the face can draw.
+   */
   limitations: string[];
   fontName: string;
 }
 
-export const FONT_NAME = 'Helvetica (WinAnsi)';
+/** Name of the WinAnsi fallback face, also reported when the Unicode face could not be used. */
+export const FONT_NAME = FALLBACK_FACE_NAME;
 export const FONT_LIMITATION =
-  'PDF export uses the built-in Helvetica face, which covers WinAnsi only. Vietnamese and other non-WinAnsi letters are folded to their closest Latin form ("Tiếng Việt" prints as "Tieng Viet") instead of being drawn as tofu. Digits, Latin text and punctuation are unchanged. Embedding a Unicode face needs @pdf-lib/fontkit plus a redistributable font file, and this export ships no extra dependency.';
+  'PDF export could not use its bundled Unicode face, so it fell back to the built-in Helvetica face, which covers WinAnsi only. Vietnamese and other non-WinAnsi letters are folded to their closest Latin form ("Tiếng Việt" prints as "Tieng Viet") instead of being drawn as tofu. Digits, Latin text and punctuation are unchanged. The bundled face is public/fonts/NotoSans-Regular.ttf (Noto Sans, SIL OFL 1.1); while it can be loaded the diacritics are written as they are.';
+export const UNICODE_GAP_LIMITATION =
+  'The embedded Noto Sans face does not cover every script. Characters it has no glyph for were left out rather than drawn as tofu: Chinese, Japanese and Korean text needs a CJK face, which this export does not ship.';
 export const BIDI_LIMITATION =
   'Right-to-left text is written in logical order: glyph shaping and bidi reordering are not applied by this writer.';
 export const NO_CANVAS_MESSAGE = 'PDF export needs a canvas to read the page image; this environment has none.';
@@ -148,76 +169,6 @@ export class PdfExportError extends Error {
     super(message);
     this.name = 'PdfExportError';
   }
-}
-
-/**
- * Characters that WinAnsi cannot encode but whose intent is unambiguous. Applied before
- * decomposition, so typographic quotes and arrows degrade to the ASCII the reader expects.
- */
-const FOLD_MAP: Record<string, string> = {
-  '\u2018': "'", '\u2019': "'", '\u201a': "'", '\u201b': "'",
-  '\u201c': '"', '\u201d': '"', '\u201e': '"',
-  '\u2013': '-', '\u2014': '-', '\u2012': '-', '\u2212': '-',
-  '\u2026': '...', '\u2022': '*', '\u00b7': '.', '\u2032': "'", '\u2033': '"',
-  '\u2192': '->', '\u2190': '<-', '\u2194': '<->', '\u21d2': '=>',
-  '\u2264': '<=', '\u2265': '>=', '\u2260': '!=', '\u00d7': 'x', '\u00f7': '/',
-  '\u0110': 'D', '\u0111': 'd', '\u01a0': 'O', '\u01a1': 'o', '\u01af': 'U', '\u01b0': 'u',
-  '\u00a0': ' ', '\u2007': ' ', '\u202f': ' ', '\u2009': ' ', '\u200a': ' ', '\u200b': '', '\ufeff': '',
-  '\u00ad': '', '\u2010': '-', '\u2011': '-',
-};
-
-/** Code points Windows-1252 actually maps: ASCII, the 0xA0-0xFF range and the 0x80-0x9F specials. */
-function isWinAnsiCodePoint(code: number): boolean {
-  if (code > 0x1f && code < 0x7f) return true;
-  if (code >= 0xa0 && code <= 0xff) return true;
-  return code === 0x80 || (code >= 0x82 && code <= 0x8c) || code === 0x8e
-    || (code >= 0x91 && code <= 0x9c) || (code >= 0x9e && code <= 0x9f);
-}
-
-const COMBINING_MARK = /^[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]$/u;
-
-export interface FoldResult {
-  text: string;
-  /** True when at least one code point was replaced or removed. */
-  changed: boolean;
-  /** Code points that vanished entirely (no WinAnsi form and no decomposition base). */
-  dropped: number;
-}
-
-/**
- * Rewrites text into the WinAnsi repertoire: decomposes accented letters and drops the marks, keeps
- * every character WinAnsi already has (so "café" stays "café"), and removes whatever is left. ASCII
- * digits are never touched — that is what "numbers must not be altered" means here.
- */
-export function foldToWinAnsi(input: string): FoldResult {
-  const source = typeof input === 'string' ? input : '';
-  let text = '';
-  let changed = false;
-  let dropped = 0;
-  for (const character of source) {
-    const code = character.codePointAt(0) ?? 0;
-    if (isWinAnsiCodePoint(code)) { text += character; continue; }
-    const mapped = FOLD_MAP[character];
-    if (mapped !== undefined) { text += mapped; changed = true; continue; }
-    const decomposed = character.normalize('NFD');
-    let kept = '';
-    for (const part of decomposed) {
-      const partCode = part.codePointAt(0) ?? 0;
-      if (isWinAnsiCodePoint(partCode)) kept += part;
-      // Combining marks and anything still unencodable are removed; `dropped` below records a
-      // character that left nothing behind at all.
-    }
-    if (kept) { text += kept; changed = true; continue; }
-    changed = true;
-    dropped++;
-  }
-  return { text, changed, dropped };
-}
-
-/** True when every code point of `text` can be written with WinAnsi as it stands. */
-export function isWinAnsiText(text: string): boolean {
-  for (const character of text) if (!isWinAnsiCodePoint(character.codePointAt(0) ?? 0)) return false;
-  return true;
 }
 
 const defaultMeasure: Measure = (text, size) => text.length * size * DEFAULT_MEASURE_RATIO;
@@ -283,11 +234,15 @@ export function compareReadingOrder(left: PdfBlockSource, right: PdfBlockSource)
 /**
  * Pure per-page plan. No DOM, no pdf-lib: page size, image placement, and one entry per translated
  * block holding the paper cover and the wrapped runs, already converted into PDF space (y-up).
+ *
+ * `opts.prepare` decides how text reaches the drawing face. The default folds to WinAnsi; a caller
+ * holding a Unicode face passes `PdfFontSet.prepare`, which only removes characters the face lacks.
  */
 export function pagePlan(page: PdfPageSource, opts: PagePlanOptions = {}): PlannedPage {
   const width = positive(page.width, 'width');
   const height = positive(page.height, 'height');
   const measure = opts.measure ?? defaultMeasure;
+  const prepare = opts.prepare ?? foldToWinAnsi;
   const minimumFontSize = Math.max(1, finite(opts.minimumFontSize ?? DEFAULT_MINIMUM_FONT_SIZE, DEFAULT_MINIMUM_FONT_SIZE));
   const baselineRatio = Math.max(0, Math.min(1.2, finite(opts.baselineRatio ?? DEFAULT_BASELINE_RATIO, DEFAULT_BASELINE_RATIO)));
 
@@ -304,10 +259,10 @@ export function pagePlan(page: PdfPageSource, opts: PagePlanOptions = {}): Plann
 
   const planned: PlannedBlock[] = [];
   for (const { block, index } of candidates.sort((left, right) => compareReadingOrder(left.block, right.block))) {
-    const folded = foldToWinAnsi(block.text);
-    const text = normalizeBlockText(folded.text);
+    const prepared = prepare(typeof block.text === 'string' ? block.text : '');
+    const text = normalizeBlockText(prepared.text);
     if (!text) {
-      skipped.set(index, folded.dropped > 0 ? 'unrepresentable' : 'empty');
+      skipped.set(index, prepared.dropped > 0 ? 'unrepresentable' : 'empty');
       continue;
     }
     const rect = clampRect(block.rect, width, height);
@@ -357,8 +312,8 @@ export function pagePlan(page: PdfPageSource, opts: PagePlanOptions = {}): Plann
       // `fitText` also reports a line wider than the rect; that text spills past the cover, which
       // counts as not fitting.
       truncated: truncated || fit.overflow,
-      folded: folded.changed,
-      dropped: folded.dropped,
+      folded: prepared.changed,
+      dropped: prepared.dropped,
     });
   }
 
@@ -378,11 +333,17 @@ export function pagePlan(page: PdfPageSource, opts: PagePlanOptions = {}): Plann
 /**
  * Writes the plan into a PDF. Covers are drawn for every block before any text, so an overlapping
  * cover can never paint over text that was already written.
+ *
+ * The face is resolved once for the whole document (`registerPdfFonts`), so every page of one export
+ * shares one embedded font and one subset. A document drawn with the Unicode face reports no folding
+ * note; a document drawn with the WinAnsi fallback reports `FONT_LIMITATION`; missing glyphs on the
+ * Unicode face are reported through `UNICODE_GAP_LIMITATION` instead of being drawn as tofu.
  */
 export async function buildPdf(pages: readonly PdfPageSource[], opts: BuildPdfOptions = {}): Promise<BuildPdfResult> {
   if (!pages.length) throw new PdfExportError(EMPTY_DOCUMENT_MESSAGE);
   const doc = await PDFDocument.create();
-  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const fonts = await registerPdfFonts(doc, opts.fonts);
+  const font = fonts.font;
   const ink = parseInk(DEFAULT_INK);
   const paper = parseInk(PAPER_COLOR);
   const measure: Measure = opts.measure ?? ((text, size) => {
@@ -392,16 +353,20 @@ export async function buildPdf(pages: readonly PdfPageSource[], opts: BuildPdfOp
       return defaultMeasure(text, size);
     }
   });
-  const limitations = new Set<string>([FONT_LIMITATION]);
+  const limitations = new Set<string>();
+  if (!fonts.unicode) limitations.add(FONT_LIMITATION);
   const skipped: SkippedBlock[] = [];
   let blockCount = 0;
   let imagePages = 0;
   let rightToLeft = false;
+  let glyphGap = false;
 
   for (const source of pages) {
-    const plan = pagePlan(source, { measure, minimumFontSize: opts.minimumFontSize });
+    const plan = pagePlan(source, { measure, minimumFontSize: opts.minimumFontSize, prepare: fonts.prepare });
     const target = doc.addPage([plan.width, plan.height]);
     skipped.push(...plan.skipped);
+    // A block with no glyphs at all never reaches `plan.blocks`, so its gap is noticed here.
+    for (const entry of plan.skipped) if (entry.reason === 'unrepresentable') glyphGap = true;
     if (source.image && source.image.bytes.length > 0) {
       try {
         const embedded = source.image.format === 'jpeg' ? await doc.embedJpg(source.image.bytes) : await doc.embedPng(source.image.bytes);
@@ -416,6 +381,7 @@ export async function buildPdf(pages: readonly PdfPageSource[], opts: BuildPdfOp
     }
     for (const block of plan.blocks) {
       if (block.direction === 'rtl') rightToLeft = true;
+      if (block.dropped > 0) glyphGap = true;
       for (const run of block.runs) {
         target.drawText(run.text, {
           x: run.x,
@@ -430,6 +396,7 @@ export async function buildPdf(pages: readonly PdfPageSource[], opts: BuildPdfOp
     }
   }
 
+  if (fonts.unicode && glyphGap) limitations.add(UNICODE_GAP_LIMITATION);
   if (rightToLeft) limitations.add(BIDI_LIMITATION);
   const title = typeof opts.title === 'string' ? opts.title.trim() : '';
   if (title) doc.setTitle(title);
@@ -443,7 +410,7 @@ export async function buildPdf(pages: readonly PdfPageSource[], opts: BuildPdfOp
     imagePages,
     skipped,
     limitations: [...limitations],
-    fontName: FONT_NAME,
+    fontName: fonts.name,
   };
 }
 
