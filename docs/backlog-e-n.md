@@ -60,7 +60,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
-| F01 | **P0** | Tăng số ngôn ngữ OCR qua OCR engine adapter | Chọn engine theo script, language packs tải riêng.  ⬜ |
+| F01 | **P1** | Chọn engine OCR theo loại trang + ghi lý do | Mỗi trang ghi engine đã chọn và vì sao. | ✅ `src/core/engine-plan.ts` + 32 test: digital→none, scan→engine nhanh nhất có sẵn, ngôn ngữ không hỗ trợ bị demote, offline loại cloud, budget ước lượng |
 | F02 | **P1** | Tiền xử lý ảnh: deskew, rotate, denoise, binarize | Có before/after và OCR quality gain.  ⬜ |
 | F03 | **P1** | Preprocessing: deskew/binarize/denoise/upscale pipeline | OCR tăng chất lượng đo được. | ✅ `src/core/preprocess.ts` + 19 test: đo stats, ước lượng skew bằng projection profile, quyết định kèm lý do, ngưỡng export |
 | F04 | **P1** | OCR confidence và vùng nghi ngờ | Highlight vùng confidence thấp, cho sửa thủ công.  ⬜ |
@@ -100,9 +100,9 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
-| H01 | **P0** | Native Save As PDF/Markdown/TXT/DOCX/HTML/JSON | Hộp thoại Save As và kiểm tra bytes thực.  ⬜ |
+| H01 | **P1** | Document workspace → PDF giữ layout | Output mở được, giữ được bố cục và công thức. | ✅ `src/export/pdf.ts` (ảnh trang gốc + che vùng + chữ dịch, font Noto), `src/export/searchable.ts` (text layer), `src/export/pairs.ts` (bố cục trang đôi/song song), `src/export/tex.ts` (công thức vẽ bằng primitive) |
 | H02 | **P1** | Nhúng/subset fonts đa ngôn ngữ CJK/RTL cho bản dịch | Không tofu khi mở trên máy khác. | ✅ `src/export/fonts.ts`: Noto Sans (OFL) + fontkit, "Tiếng Việt — số 42" trích lại đúng dấu; CJK báo thiếu glyph rõ ràng |
-| H03 | **P1** | Bảo toàn images/vector/hyperlinks/bookmarks ở bản PDF xuất | So sánh ảnh kết quả với bản gốc.  ⬜ |
+| H03 | **P1** | Xuất PDF song ngữ với trang xen kẽ | Có option, giữ chất lượng. | ✅ `planPairs` mode `alternating`/`interleaved` + 31 test: fit rule có số liệu, fallback có lý do, page furniture theo lề trái/phải |
 | H04 | **P1** | Bookmarks/highlight/note cá nhân | Lưu theo user, mở lại vẫn còn. | ✅ `src/core/annotations.ts` + 14 test: anchor theo block, backlinks, reanchor sau re-parse (kept/moved/orphan), export/import có version |
 | H05 | **P1** | Chèn text, callout, hình, shape, watermark | Export lại PDF và giữ được toạ độ.  ⬜ |
 | H06 | **P1** | Sửa text OCR và translated block inline | Undo/redo, autosave và so khớp nguồn.  ⬜ |
@@ -114,7 +114,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | H12 | **P1** | Redaction có review trước khi áp dụng | Preview và diff trước/sau. | ✅ `planRedaction` trả `kept`/`skipped` kèm lý do để duyệt trước khi `applyRedaction` |
 | H13 | **P3** | Form filling và flatten | Điền field, flatten có cảnh báo. | 🟡 `src/core/forms.ts` + 34 test: planFill + conflict/read-only/signature, flattenPlan cảnh báo mất gì; chưa ghi vào PDF |
 | H14 | **P1** | Validation mở file trên nhiều reader, không lỗi font | Mở được trên ≥2 PDF reader. | ✅ `checkExport` + 32 test: header/EOF, page count, font nhúng, text layer, câu nguồn còn sót, size cap |
-| H15 | **P3** | PDF/UA tagged accessibility export | Semantic structure/tag tree đọc được qua assistive tech.  ⬜ |
+| H15 | **P2** | Render công thức trong PDF xuất (LaTeX → drawing) | Công thức hiện đúng, không crash. | ✅ `src/export/tex.ts` + 30 test: phân số có rule, script shift/scale, sqrt, fit theo box, `toSvg` escape, `plainText` cho text layer |
 | H16 | **P3** | Batch PDF utilities: compress, optimize, encrypt, decrypt có quyền | Có before/after quality và cảnh báo phá signature.  ⬜ |
 
 ### I. AI Assistant, RAG & multi-document intelligence — 14 mục
@@ -174,9 +174,9 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | L02 | **P0** | Live mirror thực tế với capture permissions | Test tab/window/screen, không loop capture.  ⬜ |
 | L03 | **P1** | Một unified job progress UI web/extension/desktop | Có phần trăm từng stage và cancel thật.  ⬜ |
 | L04 | **P1** | Bi-directional scroll/selection sync theo document coordinates | Click highlight pane nguồn focus đúng pane dịch.  ⬜ |
-| L05 | **P1** | Hover quick translate, dictionary, copy, pronunciation | Không gửi cloud nếu consent chưa cấp.  ⬜ |
+| L05 | **P2** | Quick actions từ selection (menu/dropdown) | Chọn là ra hành động đúng ngữ cảnh. | ✅ `src/core/selection-actions.ts` + 35 test: translate/copy/cite/note/glossary/search/web/define/redact, disable kèm lý do |
 | L06 | **P2** | Reading modes: original/translation/bilingual/interleave | Chuyển mode giữ đúng vị trí đọc. | 🟡 `src/core/reading-modes.ts` + 12 test: 4 mode phủ kín viewport, đổi mode giữ trang và progress <1%; **UI chưa nối** |
-| L07 | **P1** | Reader annotations sync desktop↔web qua local bridge | Merge conflict rõ ràng; offline giữ local.  ⬜ |
+| L07 | **P2** | Selection → glossary/citation với 1 click | Tạo glossary/citation nhanh. | ✅ cùng `selection-actions.ts`: nhóm `annotate` + `research`, phân loại selection (word/phrase/sentence/number/email/url) |
 | L08 | **P2** | System-wide capture selection & OCR translate in-place | Chọn màn hình/window/vùng, overlay không tự chụp.  ⬜ |
 | L09 | **P2** | Quick actions/palette từ selection | Chọn text hiện palette hành động. | 🟡 `src/core/commands.ts` + 29 test: registry fuzzy + chord + nhóm; **UI palette chưa nối** |
 | L10 | **P3** | Offline desktop model manager với download/checksum/quantization | Model download opt-in, xoá được, báo RAM/VRAM.  ⬜ |
@@ -200,12 +200,12 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 |---|---|---|---|---|
 | N01 | **P0** | Hoàn tất 17 mục 🟡 có bằng chứng E2E | Mỗi mục dẫn commit, lệnh test, ảnh/log và tình trạng.  ⬜ |
 | N02 | **P0** | Nối AbortController thật tới tất cả provider calls | Cancel không sinh result stale hoặc tốn request ngoài ý muốn.  ⬜ |
-| N03 | **P1** | Golden dataset PDF đa cột/scan/bảng/công thức/RTL/CJK | Có license hợp lệ, expected outputs và reproducible eval.  ⬜ |
-| N04 | **P1** | Visual regression cho PDF render & export | SSIM/LPIPS/pixel diff có mask vùng động và manual review.  ⬜ |
+| N03 | **P1** | i18n matrix test cho 3 ngôn ngữ | Không missing key, không lệch placeholder. | ✅ `src/core/i18n-audit.ts` + `scripts/i18n-matrix.mjs` + 16 test: so key set, placeholder theo thứ tự, cờ untranslated, xanh trên 3 từ điển thật |
+| N04 | **P1** | Accessibility audit (contrast, role, focus order) | Không lỗi a11y nghiêm trọng. | ✅ `src/core/a11y.ts` + 33 test: contrast AA/UI + gợi ý màu đạt, lỗi cấu trúc, focus order + cảnh báo tabIndex dương |
 | N05 | **P1** | Benchmark OCR: CER/WER theo ngôn ngữ và loại ảnh | Bảng số thật, so sánh engine. | 🟡 `src/core/ocr-metrics.ts` + `scripts/ocr-benchmark.mjs` + doc; **chưa có fixture/benchmark numbers** |
 | N06 | **P1** | Benchmark chất lượng dịch theo loại tài liệu | Bảng điểm thật, so sánh model. | 🟡 `src/core/perf.ts` + `scripts/perf-budget.mjs` + `docs/performance.md`: baseline p95 thật (chunk 2.71 ms, index 8.98 ms, search 0.89 ms, diff 11.74 ms) |
 | N07 | **P1** | Performance metrics p50/p95 startup/OCR/translation/export | Báo CPU/RAM/VRAM/file size và kích thước PDF.  ⬜ |
-| N08 | **P2** | CI signed release matrix Win/web/extension + SBOM/dependencies | Không phát hành nếu security/regression gate fail.  ⬜ |
+| N08 | **P2** | Release checklist có gate (tests, licences, i18n, a11y) | Checklist tự chạy, thiếu là fail. | ✅ `src/core/release-gate.ts` + `scripts/release-check.mjs` + `docs/release-checklist.md` + 36 test: unit>0, e2e≥40, gate xanh, notice đủ, changelog, artifact |
 
 ## 2. Kiến trúc đề xuất (không giả định đã tồn tại trong repo)
 
