@@ -200,7 +200,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 |---|---|---|---|---|
 | N01 | **P0** | Hoàn tất 17 mục 🟡 có bằng chứng E2E | Mỗi mục dẫn commit, lệnh test, ảnh/log và tình trạng.  ⬜ |
 | N02 | **P0** | Nối AbortController thật tới tất cả provider calls | Cancel không sinh result stale hoặc tốn request ngoài ý muốn.  ⬜ |
-| N03 | **P1** | Golden dataset PDF đa cột/scan/bảng/công thức/RTL/CJK | Có license hợp lệ, expected outputs và reproducible eval.  ⬜ |
+| N03 | **P1** | i18n matrix test cho 3 ngôn ngữ | Không missing key, không lệch placeholder. | ✅ `src/core/i18n-audit.ts` + `scripts/i18n-matrix.mjs` + 16 test: so key set, placeholder theo thứ tự, cờ untranslated, xanh trên 3 từ điển thật |
 | N04 | **P1** | Visual regression cho PDF render & export | SSIM/LPIPS/pixel diff có mask vùng động và manual review.  ⬜ |
 | N05 | **P1** | Benchmark OCR: CER/WER theo ngôn ngữ và loại ảnh | Bảng số thật, so sánh engine. | 🟡 `src/core/ocr-metrics.ts` + `scripts/ocr-benchmark.mjs` + doc; **chưa có fixture/benchmark numbers** |
 | N06 | **P1** | Benchmark chất lượng dịch theo loại tài liệu | Bảng điểm thật, so sánh model. | 🟡 `src/core/perf.ts` + `scripts/perf-budget.mjs` + `docs/performance.md`: baseline p95 thật (chunk 2.71 ms, index 8.98 ms, search 0.89 ms, diff 11.74 ms) |
