@@ -133,7 +133,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | I10 | **P2** | Figure/formula explanation dưới dạng multimodal | Nhận thức từ image crop và trả giải thích. | ✅ `src/core/multimodal.ts` + 26 test: plan theo pixel budget (không upscale), prompt theo loại figure/chart/formula, parse số bịa thì bỏ và đếm, thiếu description thì từ chối |
 | I11 | **P0** | Không đủ bằng chứng thì báo không đủ, không bịa | Abstain trước khi trả lời. | ✅ `src/core/abstain.ts` + 16 test: coverage/floor, câu hỏi số không có chữ số → abstain, câu yes-no không xác nhận → abstain, `guardAnswer` chặn câu trả lời không citation |
 | **P2** | Multi-turn conversation với context window | Hội thoại nhiều lượt vẫn đúng nguồn. | ✅ `src/core/conversation.ts` + 31 test: giữ 4 lượt cuối bất kể budget, đếm `droppedTurns`, citation gộp theo lượt, prune không để lại 0 lượt user |
-| I14 | **P3** | Sinh outline/report/slide brief từ bằng chứng | Đính kèm citations; không claim là kết quả đã được kiểm duyệt.  ⬜ |
+| **P2** | Notes/flashcards tự sinh từ tài liệu | Tạo ghi chú học tập có nguồn. | ✅ `src/core/notes.ts` + 25 test: section theo outline, point có trần mỗi section, definition EN/VI, formula kèm LaTeX, mọi entry có page+blockId, Anki CSV RFC4180 |
 | I09 | **P2** | Table Q&A có cell provenance và phép tính kiểm chứng | Trả kết quả số + cách tính. | ✅ `src/core/table-qa.ts` + 21 test: sum/count/max/min/compare/lookup kèm cell đã dùng, phát hiện total lệch 1 và cột % cộng 102 |
 | I12 | **P1** | Eval harness cho answer quality (citation hit, abstention) | Bảng điểm theo case cố định. | 🟡 `src/core/eval-harness.ts` + `docs/evaluation.md` + 24 test: pass chỉ khi đủ phrase + citation + abstain đúng, rate rỗng = null; bộ case mới 4 case tổng hợp |
 
