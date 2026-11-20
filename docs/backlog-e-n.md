@@ -128,7 +128,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | I05 | **P1** | Ask selected text/figure/table and explain | Context ưu tiên vùng người dùng chọn. | ✅ `src/core/ask-selection.ts` + 21 test: mở rộng về whole block, secondary có giới hạn, fence chống đóng sớm, `grounded=false` khi không overlap |
 | I06 | **P1** | Query rewriting / decomposition | Câu hỏi phức tạp được tách và viết lại. | ✅ `src/core/query.ts` + 32 test: bỏ từ hỏi, giữ số và quoted span, synonym VN↔EN, mỗi intent một query, keyword là token của BM25 |
 | N07 | **P1** | Đo p50/p95 cho startup, OCR, translate, export, memory | Có số thật theo build. | ✅ `src/core/metrics.ts` + `docs/metrics.md` + 22 test: 9 metric có đơn vị, series theo tag, so baseline ngưỡng 10% p95, phân biệt "không hồi quy" với "không đo" |
-| I07 | **P1** | So sánh nhiều tài liệu và tạo evidence matrix | Mỗi khác biệt có trích dẫn hai phía.  ⬜ |
+| I07 | **P1** | So sánh nhiều tài liệu và tạo evidence matrix | Mỗi khác biệt có trích dẫn và trang. | ✅ `src/core/evidence-matrix.ts` + 32 test: cell có page/block/excerpt, gap khác zero, conflict/agree, CSV + Markdown |
 | I08 | **P1** | Agent tools: navigate_page, crop, zoom, OCR_region, search, cite | Ghi tool trace, giới hạn bước/chi phí và allowlist.  ⬜ |
 | I09 | **P2** | Table Q&A có cell provenance và phép tính kiểm chứng | Trả kết quả số + cell nguồn + phép tính.  ⬜ |
 | I10 | **P2** | Figure/formula explanation dưới dạng multimodal | Nhận thức từ image crop và cite đúng vùng.  ⬜ |
