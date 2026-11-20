@@ -115,7 +115,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | H13 | **P3** | Form filling và flatten | Điền field, flatten có cảnh báo. | 🟡 `src/core/forms.ts` + 34 test: planFill + conflict/read-only/signature, flattenPlan cảnh báo mất gì; chưa ghi vào PDF |
 | H14 | **P1** | Validation mở file trên nhiều reader, không lỗi font | Mở được trên ≥2 PDF reader. | ✅ `checkExport` + 32 test: header/EOF, page count, font nhúng, text layer, câu nguồn còn sót, size cap |
 | H15 | **P2** | Render công thức trong PDF xuất (LaTeX → drawing) | Công thức hiện đúng, không crash. | ✅ `src/export/tex.ts` + 30 test: phân số có rule, script shift/scale, sqrt, fit theo box, `toSvg` escape, `plainText` cho text layer |
-| H16 | **P3** | Batch PDF utilities: compress, optimize, encrypt, decrypt có quyền | Có before/after quality và cảnh báo phá signature.  ⬜ |
+| H16 | **P1** | Xử lý tài liệu rất dài (500+ trang) | Chunk, checkpoint, resume. | ✅ `src/core/longform.ts` + 32 test: chunk theo budget, checkpoint ghi trước khi tính done, crash ở chunk 33/500 vẫn resume đúng một lần mỗi trang |
 
 ### I. AI Assistant, RAG & multi-document intelligence — 14 mục
 
