@@ -109,7 +109,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | H07 | **P1** | Tách, ghép, đổi thứ tự, xoay, xoá/trích trang | Page thumbnails phản ánh edit tức thời.  ⬜ |
 | H08 | **P1** | Trích bảng ra CSV/XLSX và công thức ra LaTeX | Dữ liệu đúng row/col và chọn đúng bảng.  ⬜ |
 | H09 | **P2** | Export HTML/Markdown faithful với ảnh và assets | Gói ZIP có media và link đúng.  ⬜ |
-| H10 | **P2** | Diff hai phiên bản PDF text+visual | Nêu vùng thêm/xoá/sửa, lọc noise OCR.  ⬜ |
+| H10 | **P2** | Diff hai phiên bản tài liệu (text + visual) | Chỉ ra thay đổi có toạ độ. | 🟡 `src/core/diff.ts` + 13 test: diff text theo block/từ, bỏ nhiễu whitespace/1-2 ký tự; **visual diff chưa** |
 | H11 | **P2** | Bảo vệ/redaction vĩnh viễn PII | Không thể copy/search/trích text đã xoá.  ⬜ |
 | H12 | **P2** | PDF forms: phát hiện field, fill, flatten, export data | Dữ liệu lưu được và flatten không mất trường.  ⬜ |
 | H13 | **P2** | Chữ ký điện tử cơ bản + kiểm tra chữ ký hiện có | Tách ký tay đơn giản khỏi chữ ký số certificate.  ⬜ |
