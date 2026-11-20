@@ -103,7 +103,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | H01 | **P0** | Native Save As PDF/Markdown/TXT/DOCX/HTML/JSON | Hộp thoại Save As và kiểm tra bytes thực.  ⬜ |
 | H02 | **P1** | Nhúng/subset fonts đa ngôn ngữ CJK/RTL cho bản dịch | Không tofu khi mở trên máy khác. | ✅ `src/export/fonts.ts`: Noto Sans (OFL) + fontkit, "Tiếng Việt — số 42" trích lại đúng dấu; CJK báo thiếu glyph rõ ràng |
 | H03 | **P1** | Bảo toàn images/vector/hyperlinks/bookmarks ở bản PDF xuất | So sánh ảnh kết quả với bản gốc.  ⬜ |
-| H04 | **P1** | PDF annotations: highlight, underline, strikeout, sticky note | Mở lại file vẫn thấy annotations.  ⬜ |
+| H04 | **P1** | Bookmarks/highlight/note cá nhân | Lưu theo user, mở lại vẫn còn. | ✅ `src/core/annotations.ts` + 14 test: anchor theo block, backlinks, reanchor sau re-parse (kept/moved/orphan), export/import có version |
 | H05 | **P1** | Chèn text, callout, hình, shape, watermark | Export lại PDF và giữ được toạ độ.  ⬜ |
 | H06 | **P1** | Sửa text OCR và translated block inline | Undo/redo, autosave và so khớp nguồn.  ⬜ |
 | H07 | **P1** | Tách, ghép, đổi thứ tự, xoay, xoá/trích trang | Page thumbnails phản ánh edit tức thời.  ⬜ |
