@@ -1,3 +1,4 @@
+import { assertCanSend, effectiveEndpoint, privacyPolicy, type PrivacyMode } from './privacy';
 import { buildMessages, buildProtectedMessages, buildSystemPrompt, restoreProtectedText, type ChatMessage, type PromptOptions } from './prompt';
 import { normalizeLanguageCode } from './language';
 import { TranslationError, abortError, isAbortError, withRetry, type RetryOptions } from './retry';
@@ -293,11 +294,22 @@ function matchBatch(chunk: readonly TextBlock[], entries: readonly BatchEntry[])
   return matched;
 }
 
-export function createTranslationTransport(fetcher: Fetcher = fetch, retryOptions: RetryOptions = {}): TranslationTransportWithBatch {
+export interface TransportPrivacyOptions { privacyMode?: PrivacyMode | (() => PrivacyMode); }
+
+export function createTranslationTransport(fetcher: Fetcher = fetch, retryOptions: RetryOptions = {}, privacy: TransportPrivacyOptions = {}): TranslationTransportWithBatch {
+  // Default 'ask' keeps every historical caller behaving exactly as before.
+  const modeNow = (): PrivacyMode => (typeof privacy.privacyMode === 'function' ? privacy.privacyMode() : privacy.privacyMode) ?? 'ask';
+  const guard = (settings: TranslationSettings): void => {
+    const policy = privacyPolicy(modeNow(), effectiveEndpoint(settings));
+    assertCanSend(policy, settings);
+  };
   const translate = async ({ text, settings, signal }: TranslationRequest): Promise<string> => {
     // An aborted translation never reaches the provider, not even to build a
     // body: the signal is the caller's statement that the answer is not wanted.
     if (signal?.aborted) throw abortError(signal.reason);
+    // Privacy first: a refusal here means no request is even built, so no
+    // provider, key or body can leak past an offline policy.
+    guard(settings);
     // Protect numbers, URLs, citations and formulas before the text leaves the
     // app: a translator must not be able to rewrite them.
     const protectedText = buildProtectedMessages(text, promptOptions(settings));
@@ -324,6 +336,8 @@ export function createTranslationTransport(fetcher: Fetcher = fetch, retryOption
     const result: BatchTranslationResult = { translations: [], requests: 0, characterCount: 0, aborted: false };
     if (signal?.aborted) return { ...result, aborted: true };
     if (blocks.length === 0) return result;
+    // The batch path is refused on the same policy before its first chunk is built.
+    guard(settings);
 
     if (!supportsBatch(settings.provider)) {
       for (const block of blocks) {
