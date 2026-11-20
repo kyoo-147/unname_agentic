@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { countCharacters, createTranslationTransport, TranslationService } from '../src/core/translation';
 import { TranslationError } from '../src/core/retry';
+import { mask, placeholderFor } from '../src/core/protect';
 import { defaultSettings } from '../src/core/types';
 
 const settings = { ...defaultSettings, model: 'test', targetLanguage: 'vi' };
@@ -71,14 +72,18 @@ describe('translation service', () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it('passes an abort signal and sends context as plain text', async () => {
-    const fetcher = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ choices: [{ message: { content: 'Bonjour' } }] }), { status: 200 }));
+  it('passes an abort signal and sends masked context to the provider', async () => {
+    // G06: the provider must echo every placeholder back, so the stub answers with
+    // the placeholders and the transport restores the locked tokens afterwards.
+    const protectedText = mask('<script>text</script>');
+    const echo = ['Bonjour', ...protectedText.tokens.map((token) => placeholderFor(token.index))].join(' ');
+    const fetcher = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ choices: [{ message: { content: echo } }] }), { status: 200 }));
     const signal = new AbortController().signal;
     const text = await createTranslationTransport(fetcher).translate({ text: '<script>text</script>', settings, signal });
-    expect(text).toBe('Bonjour');
+    expect(text).toBe('Bonjour /script');
     const init = fetcher.mock.calls[0]?.[1] as RequestInit;
     expect(init.signal).toBe(signal);
-    expect(JSON.parse(String(init.body)).messages[1].content).toBe('<script>text</script>');
+    expect(JSON.parse(String(init.body)).messages[1].content).toBe(protectedText.masked);
   });
 });
 
@@ -118,7 +123,9 @@ describe('translation transports', () => {
   });
 
   it('builds an OpenAI-compatible payload with the versioned prompt and glossary', async () => {
-    const fetcher = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => okResponse('Bonjour'));
+    const protectedText = mask('<b>Hello</b>');
+    const echo = ['Bonjour', ...protectedText.tokens.map((token) => placeholderFor(token.index))].join(' ');
+    const fetcher = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => okResponse(echo));
     const transport = createTranslationTransport(fetcher);
     await transport.translate({
       text: '<b>Hello</b>',
@@ -140,7 +147,8 @@ describe('translation transports', () => {
     const body = JSON.parse(String(init!.body));
     expect(body.model).toBe('gpt-test');
     expect(body.temperature).toBe(0);
-    expect(body.messages[1]).toEqual({ role: 'user', content: '<b>Hello</b>' });
+    expect(body.messages[1]).toEqual({ role: 'user', content: mask('<b>Hello</b>').masked });
+    expect(body.messages[1].content).not.toBe('<b>Hello</b>');
     expect(body.messages[0].content).toContain('prompt = câu lệnh');
     expect(body.messages[0].content).toContain('Prompt version: mirror-test');
     expect(JSON.stringify(body)).not.toContain('secret');
