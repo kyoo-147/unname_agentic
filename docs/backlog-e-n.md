@@ -113,7 +113,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | H11 | **P1** | Redaction PII: CCCD/CMND, số tài khoản, MST, địa chỉ | Redact đúng vùng, không lộ số. | ✅ `src/core/redact.ts` + 30 test: mỗi rule cần label/checksum/Luhn, plan gộp span + confidence floor, apply giữ nguyên phần còn lại, report không chứa giá trị |
 | H12 | **P1** | Redaction có review trước khi áp dụng | Preview và diff trước/sau. | ✅ `planRedaction` trả `kept`/`skipped` kèm lý do để duyệt trước khi `applyRedaction` |
 | H13 | **P2** | Chữ ký điện tử cơ bản + kiểm tra chữ ký hiện có | Tách ký tay đơn giản khỏi chữ ký số certificate.  ⬜ |
-| H14 | **P2** | PDF/A, OCR archival, document metadata & sanitization | Validate chuẩn bằng công cụ độc lập.  ⬜ |
+| H14 | **P1** | Validation mở file trên nhiều reader, không lỗi font | Mở được trên ≥2 PDF reader. | ✅ `checkExport` + 32 test: header/EOF, page count, font nhúng, text layer, câu nguồn còn sót, size cap |
 | H15 | **P3** | PDF/UA tagged accessibility export | Semantic structure/tag tree đọc được qua assistive tech.  ⬜ |
 | H16 | **P3** | Batch PDF utilities: compress, optimize, encrypt, decrypt có quyền | Có before/after quality và cảnh báo phá signature.  ⬜ |
 
