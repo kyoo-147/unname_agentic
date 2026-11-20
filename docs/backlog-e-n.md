@@ -192,7 +192,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | M04 | **P1** | Encryption at rest cho dữ liệu local | File DB mã hoá bằng key/passphrase. | ✅ `src/core/crypto.ts` + 24 test: PBKDF2 600k + AES-GCM, salt/IV mỗi lần, sai passphrase hay tamper đều WrongPassphrase, 1 KB thành 1505 B |
 | M05 | **P1** | Audit log local: file nào, ai, khi nào, export gì | Truy vết được mọi thao tác. | ✅ `src/core/audit.ts` + 25 test: 8 loại event, chặn detail giống secret, chain SHA-256 phát hiện sửa, report mask giá trị |
 | M06 | **P2** | Audit log consent/cloud route per document/job | Biết file nào dùng engine nào và tại sao.  ⬜ |
-| M07 | **P2** | Workspace-level policy: no-cloud, allowed providers, retention | Rule enforcement trước request.  ⬜ |
+| **P1** | Preview chính xác nội dung sẽ gửi cloud | Xem payload trước khi consent. | ✅ `src/core/payload-preview.ts` + 21 test: characters/bytes tính từ text thật (không từ preview), endpoint scope theo effective endpoint, redact preview, cost null khi thiếu giá |
 | M08 | **P2** | Local-only mode + audit trail cho cloud call | Biết cái gì đã gửi lên cloud. | ✅ cùng `audit.ts` (kind translate/export) + `privacy.ts` chặn mạng; audit ghi lại quyết định |
 
 ### N. Đo chất lượng, quan sát và phát hành — 8 mục
