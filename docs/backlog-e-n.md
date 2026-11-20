@@ -199,7 +199,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
-| N01 | **P0** | Hoàn tất 17 mục 🟡 có bằng chứng E2E | Mỗi mục dẫn commit, lệnh test, ảnh/log và tình trạng.  ⬜ |
+| **P1** | Export → re-import round-trip tương thích | Mở lại không mất dữ liệu. | ✅ `src/core/roundtrip.ts` + 17 test: so từng field theo identity, tolerance chỉ cho số đo, codec phải khai báo mất mát |
 | N02 | **P0** | Nối AbortController thật tới tất cả provider calls | Cancel không sinh result stale hoặc tốn request ngoài ý muốn.  ⬜ |
 | N03 | **P1** | i18n matrix test cho 3 ngôn ngữ | Không missing key, không lệch placeholder. | ✅ `src/core/i18n-audit.ts` + `scripts/i18n-matrix.mjs` + 16 test: so key set, placeholder theo thứ tự, cờ untranslated, xanh trên 3 từ điển thật |
 | N04 | **P1** | Accessibility audit (contrast, role, focus order) | Không lỗi a11y nghiêm trọng. | ✅ `src/core/a11y.ts` + 33 test: contrast AA/UI + gợi ý màu đạt, lỗi cấu trúc, focus order + cảnh báo tabIndex dương |
