@@ -546,3 +546,227 @@ describe('PageThumbnailDeck state manager and undo sync', () => {
     assertContiguousThumbnails(deck.getThumbnails());
   });
 });
+
+describe('H07 expanded round-trip verification — multi-doc merge, cumulative rotations, and thumbnail parity', () => {
+  it('merges selective page ranges from 3+ heterogeneous PDFs with mixed orientations and pre-existing rotations', async () => {
+    const doc1 = await makeFixturePdf([
+      { text: 'M1-P1', width: 612, height: 792, rotation: 0 },
+      { text: 'M1-P2-SKIP', width: 612, height: 792 },
+      { text: 'M1-P3', width: 420, height: 595, rotation: 90 },
+    ]);
+    const doc2 = await makeFixturePdf([
+      { text: 'M2-P1', width: 595, height: 842, rotation: 180 },
+      { text: 'M2-P2', width: 792, height: 612, rotation: 270 },
+    ]);
+    const doc3 = await makeFixturePdf([
+      { text: 'M3-P1-SKIP', width: 500, height: 500 },
+      { text: 'M3-P2', width: 842, height: 595, rotation: -90 },
+    ]);
+
+    const merged = await mergePdfs([
+      { bytes: doc1, pages: '3, 1' },
+      doc2,
+      { bytes: doc3, pages: { start: 2, end: 2 } },
+    ]);
+
+    expect(merged.pageCount).toBe(5);
+    expect(merged.pages.map(p => ({ doc: p.sourceDocIndex, src: p.sourcePageNumber, rot: p.rotation }))).toEqual([
+      { doc: 0, src: 3, rot: 90 },
+      { doc: 0, src: 1, rot: 0 },
+      { doc: 1, src: 1, rot: 180 },
+      { doc: 1, src: 2, rot: 270 },
+      { doc: 2, src: 2, rot: 270 },
+    ]);
+
+    const report = await inspectRoundTrip(merged.bytes);
+    expect(report.pageCount).toBe(5);
+    expect(report.pages.map(p => p.text)).toEqual(['M1-P3', 'M1-P1', 'M2-P1', 'M2-P2', 'M3-P2']);
+    expect(report.pages.map(p => p.pdfJsRotation)).toEqual([90, 0, 180, 270, 270]);
+    expect(report.pages.map(p => p.pdfLibRotation)).toEqual([90, 0, 180, 270, 270]);
+    expect(report.pages.map(p => [p.viewportWidth, p.viewportHeight])).toEqual([
+      [595, 420],
+      [612, 792],
+      [595, 842],
+      [612, 792],
+      [595, 842],
+    ]);
+  });
+
+  it('preserves cumulative rotation normalization across chained merge -> rotate -> reorder -> delete -> extract -> split', async () => {
+    const docA = await makeFixturePdf([
+      { text: 'CHAIN-A1', width: 612, height: 792 },
+      { text: 'CHAIN-A2', width: 595, height: 842, rotation: 90 },
+    ]);
+    const docB = await makeFixturePdf([
+      { text: 'CHAIN-B1', width: 500, height: 700, rotation: 180 },
+      { text: 'CHAIN-B2', width: 400, height: 600, rotation: 270 },
+    ]);
+
+    // Step 1: merge -> [A1(0), A2(90), B1(180), B2(270)]
+    const s1 = await mergePdfs([docA, docB]);
+    // Step 2: rotate pages 2-3 by +90 -> [A1(0), A2(180), B1(270), B2(270)]
+    const s2 = await rotatePages(s1.bytes, { pages: '2-3', angle: 90 });
+    // Step 3: rotate pages 1,2 by +270 -> [A1(270), A2(90), B1(270), B2(270)]
+    const s3 = await rotatePages(s2.bytes, { pages: [1, 2], angle: 270 });
+    // Step 4: rotate pages 3,4 by -180 -> [A1(270), A2(90), B1(90), B2(90)]
+    const s4 = await rotatePages(s3.bytes, { pages: [3, 4], angle: -180 });
+    // Step 5: reorder [4, 2, 1, 3] -> [B2(90), A2(90), A1(270), B1(90)]
+    const s5 = await reorderPages(s4.bytes, [4, 2, 1, 3]);
+    // Step 6: delete page 2 (A2) -> [B2(90), A1(270), B1(90)]
+    const s6 = await deletePages(s5.bytes, [2]);
+    // Step 7: extract [3, 1, 2] -> [B1(90), B2(90), A1(270)]
+    const s7 = await extractPages(s6.bytes, [3, 1, 2]);
+    // Step 8: split chunkSize 2 -> [[B1(90), B2(90)], [A1(270)]]
+    const s8 = await splitPdf(s7.bytes, { chunkSize: 2 });
+
+    expect(s8.chunks).toHaveLength(2);
+
+    const chunk0 = await inspectRoundTrip(s8.chunks[0]!.bytes);
+    expect(chunk0.pages.map(p => ({ text: p.text, rot: p.pdfJsRotation, w: p.viewportWidth, h: p.viewportHeight }))).toEqual([
+      { text: 'CHAIN-B1', rot: 90, w: 700, h: 500 },
+      { text: 'CHAIN-B2', rot: 90, w: 600, h: 400 },
+    ]);
+
+    const chunk1 = await inspectRoundTrip(s8.chunks[1]!.bytes);
+    expect(chunk1.pages.map(p => ({ text: p.text, rot: p.pdfJsRotation, w: p.viewportWidth, h: p.viewportHeight }))).toEqual([
+      { text: 'CHAIN-A1', rot: 270, w: 792, h: 612 },
+    ]);
+  });
+
+  it('maintains 1:1 parity between PageThumbnailDeck edits/splits and pdf-lib/pdfjs-dist PDF bytes', async () => {
+    const pdfA = await makeFixturePdf([
+      { text: 'PARITY-A1', width: 612, height: 792 },
+      { text: 'PARITY-A2', width: 595, height: 842, rotation: 90 },
+      { text: 'PARITY-A3', width: 500, height: 700 },
+    ]);
+    const pdfB = await makeFixturePdf([
+      { text: 'PARITY-B1', width: 420, height: 595, rotation: 180 },
+      { text: 'PARITY-B2', width: 400, height: 600 },
+    ]);
+
+    const deck = await PageThumbnailDeck.fromPdf(pdfA, 0);
+    const deckB = await PageThumbnailDeck.fromPdf(pdfB, 0);
+
+    // Merge deckB -> [A1, A2(90), A3, B1(180), B2]
+    deck.merge(deckB);
+    deck.selectPages('2, 4');
+    deck.setActivePage(5);
+
+    // Rotate pages 2, 3, 5 by +90, then page 2 by +180 (cumulative on A2: 90 + 90 + 180 = 360 -> 0)
+    // Resulting rotations: [A1:0, A2:0, A3:90, B1:180, B2:90]
+    deck.rotate([2, 3, 5], 90);
+    deck.rotate([2], 180);
+
+    // Move page 5 (B2) to position 1 -> [B2(90), A1(0), A2(0), A3(90), B1(180)]
+    deck.movePage(5, 1);
+
+    // Delete page 3 (A2), undo, redo -> [B2(90), A1(0), A3(90), B1(180)]
+    deck.delete([3]);
+    expect(deck.undo()).toBe(true);
+    expect(deck.pageCount).toBe(5);
+    expect(deck.redo()).toBe(true);
+    expect(deck.pageCount).toBe(4);
+
+    // Reorder [4, 2, 1, 3] -> [B1(180), A1(0), B2(90), A3(90)]
+    deck.reorder([4, 2, 1, 3]);
+    expect(deck.activePage).toBe(3); // B2 moved from 1 to 3
+    expect(deck.selectedPages).toEqual([1]); // B1 moved from 4 to 1 (A2 was deleted)
+
+    // Materialize deck to PDF bytes and compare directly with standalone operations
+    const deckResult = await deck.exportPdf([pdfA, pdfB]);
+
+    let ops = await mergePdfs([pdfA, pdfB]);
+    ops = await rotatePages(ops.bytes, { pages: [2, 3, 5], angle: 90 });
+    ops = await rotatePages(ops.bytes, { pages: [2], angle: 180 });
+    ops = await reorderPages(ops.bytes, [5, 1, 2, 3, 4]);
+    ops = await deletePages(ops.bytes, [3]);
+    ops = await reorderPages(ops.bytes, [4, 2, 1, 3]);
+
+    const deckReport = await inspectRoundTrip(deckResult.bytes);
+    const opsReport = await inspectRoundTrip(ops.bytes);
+    const thumbnails = deck.getThumbnails();
+
+    expect(deckReport.pageCount).toBe(4);
+    expect(opsReport.pageCount).toBe(4);
+    expect(deckReport.pages.map(p => p.text)).toEqual(['PARITY-B1', 'PARITY-A1', 'PARITY-B2', 'PARITY-A3']);
+    expect(opsReport.pages.map(p => p.text)).toEqual(deckReport.pages.map(p => p.text));
+
+    thumbnails.forEach((thumb, idx) => {
+      const deckPage = deckReport.pages[idx]!;
+      const opsPage = opsReport.pages[idx]!;
+      const resultMeta = deckResult.pages[idx]!;
+
+      expect(thumb.pageNumber).toBe(idx + 1);
+      expect(thumb.index).toBe(idx);
+      expect(thumb.rotation).toBe(deckPage.pdfJsRotation);
+      expect(thumb.rotation).toBe(deckPage.pdfLibRotation);
+      expect(thumb.rotation).toBe(opsPage.pdfJsRotation);
+      expect(thumb.width).toBe(deckPage.viewportWidth);
+      expect(thumb.height).toBe(deckPage.viewportHeight);
+      expect(thumb.width).toBe(opsPage.viewportWidth);
+      expect(thumb.height).toBe(opsPage.viewportHeight);
+      expect(thumb.baseWidth).toBe(deckPage.baseWidth);
+      expect(thumb.baseHeight).toBe(deckPage.baseHeight);
+      expect(resultMeta).toMatchObject({
+        pageNumber: thumb.pageNumber,
+        index: thumb.index,
+        rotation: thumb.rotation,
+        width: thumb.width,
+        height: thumb.height,
+        baseWidth: thumb.baseWidth,
+        baseHeight: thumb.baseHeight,
+      });
+    });
+
+    // Verify deck.split parity against splitPdf on exported bytes
+    const deckChunks = deck.split({ chunkSize: 2 });
+    const pdfChunks = await splitPdf(deckResult.bytes, { chunkSize: 2 });
+    expect(deckChunks).toHaveLength(pdfChunks.chunks.length);
+
+    for (let i = 0; i < deckChunks.length; i++) {
+      const chunkBytes = await deckChunks[i]!.exportPdf([pdfA, pdfB]);
+      const chunkReport = await inspectRoundTrip(chunkBytes.bytes);
+      const splitReport = await inspectRoundTrip(pdfChunks.chunks[i]!.bytes);
+
+      expect(chunkReport.pages).toEqual(splitReport.pages);
+      expect(deckChunks[i]!.getThumbnails().map(t => ({
+        pageNumber: t.pageNumber,
+        rotation: t.rotation,
+        width: t.width,
+        height: t.height,
+      }))).toEqual(
+        splitReport.pages.map(p => ({
+          pageNumber: p.pageNumber,
+          rotation: p.pdfJsRotation,
+          width: p.viewportWidth,
+          height: p.viewportHeight,
+        })),
+      );
+    }
+  });
+
+  it('clamps activePage safely when deleting the active last page and rejects missing exportPdf sources', async () => {
+    const pdf = await makeFixturePdf([
+      { text: 'LAST-1' },
+      { text: 'LAST-2' },
+      { text: 'LAST-3' },
+    ]);
+
+    const deck = await PageThumbnailDeck.fromPdf(pdf);
+    deck.setActivePage(3);
+    expect(deck.activePage).toBe(3);
+
+    deck.delete([3]);
+    expect(deck.pageCount).toBe(2);
+    expect(deck.activePage).toBe(2);
+
+    expect(deck.undo()).toBe(true);
+    expect(deck.pageCount).toBe(3);
+    expect(deck.activePage).toBe(3);
+
+    await expect(deck.exportPdf([])).rejects.toThrow(PdfExportError);
+    const mergedDeck = PageThumbnailDeck.fromPages([{ width: 612, height: 792 }]);
+    deck.merge(mergedDeck);
+    await expect(deck.exportPdf([pdf])).rejects.toThrow(PdfExportError);
+  });
+});
