@@ -72,7 +72,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | F11 | **P2** | So sánh nhiều OCR engines bằng confidence và consensus | Ghi engine winner theo vùng và chi phí. | ✅ \src/core/ocr-consensus.ts\ + 23 test: so sánh Levenshtein/token/dấu Việt/số, consensus vượt outlier tự tin thái quá, ghi winner và chi phí từng vùng |
 | F12 | **P2** | Image understanding: biểu đồ, sơ đồ, hình kỹ thuật | Kết quả mô tả được gắn với ảnh nguồn. | ✅ \src/core/image-understanding.ts\ + 26 test: phân loại chart/diagram/flowchart/technical, gắn caption+bbox, chặn số bịa và abstain khi ảnh mờ |
 | F13 | **P2** | Phát hiện mâu thuẫn OCR bằng kiểm tra số/ngày/đơn vị | Flag số hoặc ký tự rủi ro cao để duyệt. | ✅ \src/core/ocr-verify.ts\ + 22 test: bắt nhầm 0/O, 1/l/I, 5/S, 8/B, dấu thập phân, ngày trái ngược, đơn vị lỗi và tổng cột lệch |
-| F14 | **P3** | Human-in-the-loop sửa OCR và tái sử dụng correction | Không sửa file gốc trừ khi người dùng xác nhận.  ⬜ |
+| F14 | **P3** | Human-in-the-loop sửa OCR và tái sử dụng correction | Không sửa file gốc trừ khi người dùng xác nhận. | ✅ \src/core/ocr-corrections.ts\ + 8 test: bất biến SHA-256 nguồn, bắt buộc \confirmed: true\, preview/rollback và rút rule tái sử dụng |
 | F09 | **P2** | Cost/time estimate trước khi chạy batch | Ước lượng thời gian và tiền trước khi chạy. | ✅ `src/core/estimate.ts` + 34 test: 4 stage, OCR chỉ khi có trang scan, total = tổng stage, cost null khi chưa biết giá, câu 3 ngôn ngữ |
 
 ### G. Dịch thuật chuyên nghiệp — 16 mục
