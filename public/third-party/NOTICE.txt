@@ -25,6 +25,17 @@ Components bundled into the web reader / extension
    public/ocr/NOTICE.txt with their own licences.
 
 4. Vite and esbuild — MIT / Apache-2.0
+4. pdf-lib — MIT License
+   Copyright 2019 Andrew Dillon.
+   Used for: generating translated/searchable PDF exports in the web reader.
+   Full licence text: LICENSE-pdf-lib.txt.
+
+5. @pdf-lib/fontkit — MIT License
+   Copyright 2019 Andrew Dillon; Copyright Devon Govett and contributors.
+   Used for: embedding and subsetting fonts in generated PDFs.
+   Full licence text: LICENSE-fontkit.txt.
+
+6. Vite and esbuild — MIT / Apache-2.0
    Build-time only: no Vite or esbuild code is shipped in the bundles.
 
 What is NOT a dependency of the shipped bundle

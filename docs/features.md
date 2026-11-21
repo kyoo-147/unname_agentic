@@ -1,10 +1,21 @@
 # Chức năng và trạng thái xác minh
 
-Cập nhật: **2026-11-20**, tại HEAD `63d0d5c` (+ 2 file hygiene). Mọi dòng dưới đây được **rà lại bằng mã + lệnh chạy thật** trong ngày, không phải chép từ tài liệu cũ.
+Cập nhật: **2026-11-21**, trên nền inventory `63d0d5c`, với wave-N checkpoint `5a5dda7`. Các số liệu web bên dưới được cập nhật theo lần chạy local gần nhất; phần native và CI vẫn giữ nhãn giới hạn khi chưa có bằng chứng mới.
 
 Ký hiệu: ✅ có mã **và** có bằng chứng chạy · 🟡 có mã nhưng thiếu test/UX hoặc còn giới hạn đáng kể · ⬜ chưa có.
 
-Số đo tại thời điểm này: **324 unit test web (29 file)**, **49 e2e Playwright (15 file)**, **92 test Rust (2 ignored)**, typecheck và build sạch, `check-committed-imports` 95 file resolve.
+Số đo tại thời điểm này: **2.429 unit test web**, **51 e2e Playwright**, typecheck/build/import checks sạch local. Native Cargo tests đã chạy với Windows SDK `rc.exe` trong PATH.
+
+## Wave-N release checkpoint (2026-11-21)
+
+| Hạng mục | Bằng chứng hiện có | Trạng thái |
+|---|---|---|
+| Native Markdown/plain-text/JSON export | `native-shell` tests và overwrite-protection coverage | ✅ local |
+| Full-document cancellation | Playwright cancellation coverage | ✅ 51/51 local |
+| Changelog và third-party notices | `CHANGELOG.md`, `public/third-party/` | ✅ |
+| Web typecheck/unit/build/imports | release check: 2.429 tests, exit 0 | ✅ local |
+| Native Cargo tests | 149 passed, 2 ignored; `rc.exe` được nạp từ Windows SDK | ✅ local |
+| GitHub Actions | account bị khóa billing, web job không khởi động | 🟡 external |
 
 ---
 

@@ -7,12 +7,15 @@
 //! system save panel and calls [`write_export_path`].
 //!
 //! - Markdown keeps both languages: the title, a heading per page, and every
-//!   block as its quoted source with the translation under it.
+//!   block as its quoted source with the translation under it; a block with no
+//!   translation keeps its source and says it is not translated yet.
 //! - Plain text keeps the translation alone, pages separated by a form feed.
 //! - JSON keeps everything, as
-//!   `{document, pages, blocks: [{id, page, type, source, translation}]}`: a
-//!   title, the page count, and every block with its 1-based page, so another
-//!   tool can read one flat list without walking the document.
+//!   `{document, pages, blocks: [{id, page, type, source, translation,
+//!   untranslated}]}`: a title, the page count, and every block with its 1-based
+//!   page, so another tool can read one flat list without walking the document.
+//!   A block without a translation carries `translation: null` and
+//!   `untranslated: true`, so its source is the fallback and the flag says so.
 
 use crate::i18n::{tr3, tr3_fill};
 use anyhow::{Context, Result};
@@ -48,6 +51,16 @@ impl ExportFormat {
     /// not have to choose a format in a dialog as well as a name.
     pub fn from_path(path: &Path) -> Self {
         path.extension().and_then(|extension| extension.to_str()).map_or(Self::Markdown, Self::from_extension)
+    }
+
+    /// The menu label: the format's own name, except plain text, which each
+    /// interface language names for itself.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Markdown => "Markdown",
+            Self::Text => tr3("纯文本", "Plain text", "Văn bản thuần"),
+            Self::Json => "JSON",
+        }
     }
 
     /// Case-insensitive, because Windows save panels upper-case extensions. A
@@ -135,6 +148,26 @@ impl ExportDocument {
         self.pages.push(ExportPage { blocks });
     }
 
+    /// Build the document from page-numbered groups: `pages` pairs a 0-based
+    /// page position with the blocks the reader holds for it, so a page nobody
+    /// held leaves a gap instead of shifting every later page down. Later entries
+    /// for the same position are appended, in the order given.
+    pub fn from_pages(title: impl Into<String>, pages: impl IntoIterator<Item = (usize, Vec<ExportBlock>)>) -> Self {
+        let mut document = Self::new(title);
+        let mut groups: Vec<(usize, Vec<ExportBlock>)> = pages.into_iter().collect();
+        groups.sort_by_key(|(page, _)| *page);
+        for (page, mut blocks) in groups {
+            while document.pages.len() < page {
+                document.push_page(Vec::new());
+            }
+            match document.pages.get_mut(page) {
+                Some(existing) => existing.blocks.append(&mut blocks),
+                None => document.push_page(blocks),
+            }
+        }
+        document
+    }
+
     /// Every block with its 1-based page, in document order.
     pub fn blocks(&self) -> impl Iterator<Item = (usize, &ExportBlock)> {
         self.pages.iter().enumerate().flat_map(|(index, page)| page.blocks.iter().map(move |block| (index + 1, block)))
@@ -168,6 +201,9 @@ struct JsonBlock {
     kind: BlockKind,
     source: String,
     translation: Option<String>,
+    /// True when `translation` is null: the source is what this block falls back
+    /// to, and a consumer that shows one side should say it is untranslated.
+    untranslated: bool,
 }
 
 /// The document in the chosen form.
@@ -239,12 +275,9 @@ fn json(document: &ExportDocument) -> String {
         pages: document.pages.len(),
         blocks: document
             .blocks()
-            .map(|(page, block)| JsonBlock {
-                id: block.id.clone(),
-                page,
-                kind: block.kind,
-                source: block.source.clone(),
-                translation: block.translated_text().map(str::to_string),
+            .map(|(page, block)| {
+                let translation = block.translated_text().map(str::to_string);
+                JsonBlock { id: block.id.clone(), page, kind: block.kind, source: block.source.clone(), untranslated: translation.is_none(), translation }
             })
             .collect(),
     };
@@ -335,6 +368,18 @@ mod tests {
         document
     }
 
+    /// The same two pages assembled the way `app.rs` hands the reader's page
+    /// blocks to the exporter.
+    fn assembled() -> ExportDocument {
+        ExportDocument::from_pages(
+            "Quarterly report",
+            [
+                (0, vec![ExportBlock::text("p1-r1", "Revenue rose", Some("Doanh thu tăng".into()))]),
+                (1, vec![ExportBlock::text("p2-r1", "Outlook", None)]),
+            ],
+        )
+    }
+
     /// A throwaway folder. Tests remove it themselves; a panic leaves only the
     /// operating system's temporary folder to clean.
     fn temp_dir() -> PathBuf {
@@ -389,8 +434,9 @@ mod tests {
         assert_eq!(parsed.document, "Quarterly report");
         assert_eq!(parsed.pages, 2);
         assert_eq!(parsed.blocks.len(), 3);
-        assert_eq!(parsed.blocks[0], JsonBlock { id: "p1-b1".into(), page: 1, kind: BlockKind::Text, source: "Revenue rose".into(), translation: Some("Doanh thu tăng".into()) });
+        assert_eq!(parsed.blocks[0], JsonBlock { id: "p1-b1".into(), page: 1, kind: BlockKind::Text, source: "Revenue rose".into(), translation: Some("Doanh thu tăng".into()), untranslated: false });
         assert_eq!(parsed.blocks[1].translation, None, "an untranslated block is exported, without a translation");
+        assert!(parsed.blocks[1].untranslated, "and it is marked as untranslated");
         assert_eq!(parsed.blocks[2].page, 2, "each block names its own page");
         assert!(text.contains("\"type\": \"text\""), "a consumer reads the block type from the key named type: {text}");
     }
@@ -402,6 +448,65 @@ mod tests {
         assert_eq!(serde_json::to_string_pretty(&parsed).expect("print the parsed export"), text, "parsing and printing again must not change a byte");
         let blocks: Vec<(&str, usize, &str, Option<&str>)> = parsed.blocks.iter().map(|block| (block.id.as_str(), block.page, block.source.as_str(), block.translation.as_deref())).collect();
         assert_eq!(blocks, vec![("p1-b1", 1, "Revenue rose", Some("Doanh thu tăng")), ("p1-b2", 1, "Costs fell", None), ("p2-b1", 2, "Outlook", Some("Triển vọng"))]);
+    }
+
+    #[test]
+    fn an_assembled_document_keeps_page_order_pairs_markdown_and_marks_json() {
+        let document = assembled();
+        let blocks: Vec<(usize, &str, Option<&str>)> = document.blocks().map(|(page, block)| (page, block.source.as_str(), block.translation.as_deref())).collect();
+        assert_eq!(blocks, vec![(1, "Revenue rose", Some("Doanh thu tăng")), (2, "Outlook", None)], "the reader's pages keep their numbers and reading order");
+        let markdown = export_document(&document, ExportFormat::Markdown);
+        assert!(markdown.starts_with("# Quarterly report\n"), "{markdown}");
+        assert!(markdown.contains("> Revenue rose\n\nDoanh thu tăng"), "a translated block keeps both languages: {markdown}");
+        assert!(markdown.contains("> Outlook"), "an untranslated block keeps its source: {markdown}");
+        assert!(markdown.contains(tr3("（尚未翻译）", "(not translated yet)", "(chưa dịch)")), "{markdown}");
+        assert!(markdown.find(&page_heading(1)) < markdown.find("> Revenue rose"), "{markdown}");
+        assert!(markdown.find("> Revenue rose") < markdown.find(&page_heading(2)), "{markdown}");
+        assert!(markdown.find(&page_heading(2)) < markdown.find("> Outlook"), "{markdown}");
+        let text = export_document(&document, ExportFormat::Text);
+        assert!(text.contains("Doanh thu tăng"));
+        assert!(!text.contains("Outlook"), "the plain text keeps translations only: {text:?}");
+        let parsed: JsonExport = serde_json::from_str(&export_document(&document, ExportFormat::Json)).expect("the export is JSON");
+        assert_eq!(parsed.pages, 2);
+        assert_eq!((parsed.blocks[0].page, parsed.blocks[0].untranslated), (1, false));
+        assert_eq!((parsed.blocks[1].page, parsed.blocks[1].untranslated), (2, true), "the untranslated block says so instead of passing its source off as a translation");
+        assert_eq!(parsed.blocks[1].source, "Outlook", "JSON keeps the source a consumer falls back to");
+        assert_eq!(parsed.blocks[1].translation, None);
+    }
+
+    #[test]
+    fn a_page_gap_keeps_a_later_page_number_true() {
+        let document = ExportDocument::from_pages("Report", [(2, vec![ExportBlock::text("p3-r1", "Outlook", Some("Triển vọng".into()))])]);
+        assert_eq!(document.pages.len(), 3, "pages nobody held stay as gaps, so page three is still page three");
+        assert!(document.pages[0].blocks.is_empty() && document.pages[1].blocks.is_empty());
+        let parsed: JsonExport = serde_json::from_str(&export_document(&document, ExportFormat::Json)).expect("the export is JSON");
+        assert_eq!(parsed.pages, 3);
+        assert_eq!(parsed.blocks[0].page, 3);
+    }
+
+    #[test]
+    fn an_assembled_document_without_pages_still_writes_a_valid_file() {
+        let dir = temp_dir();
+        let empty = ExportDocument::from_pages("Empty report", []);
+        assert!(empty.is_empty());
+        for format in [ExportFormat::Markdown, ExportFormat::Text, ExportFormat::Json] {
+            let content = export_document(&empty, format);
+            let path = write_export(&dir, &suggested_name(&empty.title, format), &content, false).expect("an empty document is still a file");
+            assert_eq!(std::fs::read_to_string(&path).expect("read the written file"), content);
+            if format == ExportFormat::Json {
+                let parsed: JsonExport = serde_json::from_str(&content).expect("an empty export is still JSON");
+                assert_eq!((parsed.document.as_str(), parsed.pages, parsed.blocks.len()), ("Empty report", 0, 0));
+            }
+        }
+        assert_eq!(files(&dir).len(), 3, "one file per format and no temporary: {:?}", files(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_format_names_itself_for_the_menu() {
+        assert_eq!(ExportFormat::Markdown.label(), "Markdown");
+        assert_eq!(ExportFormat::Text.label(), tr3("纯文本", "Plain text", "Văn bản thuần"));
+        assert_eq!(ExportFormat::Json.label(), "JSON");
     }
 
     #[test]
