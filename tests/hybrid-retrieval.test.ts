@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildDocument, type Block, type DocumentIR } from '../src/core/ir';
 import { createGuard } from '../src/core/network-guard';
-import { chunkDocument, index as indexBm25, search as searchBm25 } from '../src/core/retrieval';
+import {
+  DEFAULT_SEARCH_LIMIT,
+  chunkDocument,
+  index as indexBm25,
+  search as searchBm25,
+} from '../src/core/retrieval';
 import {
   DEFAULT_EMBEDDING_DIMENSIONS,
   DEFAULT_RRF_K,
@@ -503,5 +508,200 @@ describe('persistence and serialization', () => {
       embedder: { id: 'custom-v1', dimensions: 2, embed: () => [1, 0] },
     });
     expect(restoredCustom.search('anything')).toHaveLength(1);
+  });
+});
+
+describe('bilingual Vietnamese/English semantic overlap and diacritic folding', () => {
+  it('folds Vietnamese diacritics and đ/Đ identically in embeddings and hybrid search', () => {
+    const embedder = createLocalEmbedder({ dimensions: 384 });
+    const accented = 'Hệ thống quản lý nhiệt độ tại đường phố Hà Nội.';
+    const unaccented = 'He thong quan ly nhiet do tai duong pho Ha Noi.';
+
+    expect(embedder.embed(accented)).toEqual(embedder.embed(unaccented));
+
+    const viDoc = makeDoc([{ text: accented }], { documentId: 'vi-doc', language: 'vi' });
+    const viIdx = indexDocuments([viDoc]);
+
+    const hitsPlainQuery = viIdx.search('he thong quan ly duong pho');
+    const hitsAccentedQuery = viIdx.search('Hệ thống quản lý đường phố');
+    expect(hitsPlainQuery).toHaveLength(1);
+    expect(hitsAccentedQuery).toEqual(hitsPlainQuery);
+    expect(hitsPlainQuery[0]?.matchedTerms).toEqual(['duong', 'he', 'ly', 'pho', 'quan', 'thong']);
+    expect(hitsPlainQuery[0]?.trace.semanticScore).toBeGreaterThan(0.5);
+
+    const asciiDoc = makeDoc([{ text: unaccented }], { documentId: 'ascii-doc', language: 'vi' });
+    const asciiHits = indexDocuments([asciiDoc]).search('hệ thống đường phố');
+    expect(asciiHits).toHaveLength(1);
+    expect(asciiHits[0]?.trace.semanticScore).toBeGreaterThan(0.5);
+  });
+
+  it('recalls cross-lingual Vietnamese and English passages semantically even with zero BM25 overlap', () => {
+    const bilingualCorpus = [
+      makeDoc(
+        [
+          { text: '1 Điều khoản thanh toán', type: 'heading' },
+          { text: 'Thanh toán hợp đồng dịch vụ được thực hiện trong vòng ba mươi ngày.' },
+        ],
+        { documentId: 'doc-vi-contract', language: 'vi' },
+      ),
+      makeDoc(
+        [
+          { text: '1 Termination', type: 'heading' },
+          { text: 'Termination notice and contract liability clause govern early exit.' },
+        ],
+        { documentId: 'doc-en-termination', language: 'en' },
+      ),
+      makeDoc(
+        [
+          { text: '1 Database backups', type: 'heading' },
+          { text: 'Nightly snapshots verify checksums on cold archival volumes.' },
+        ],
+        { documentId: 'doc-en-backups', language: 'en' },
+      ),
+    ];
+
+    const idx = indexDocuments(bilingualCorpus);
+
+    // Pure English query against Vietnamese-only passage -> zero BM25, recalled semantically.
+    const enToVi = idx.search('contract payment', {
+      filters: { documentId: 'doc-vi-contract' },
+    });
+    expect(enToVi).toHaveLength(1);
+    expect(enToVi[0]?.trace.bm25Rank).toBeNull();
+    expect(enToVi[0]?.trace.bm25Score).toBe(0);
+    expect(enToVi[0]?.trace.semanticRank).toBe(1);
+    expect(enToVi[0]?.trace.semanticScore).toBeGreaterThan(0.08);
+
+    // Pure Vietnamese query (both accented and unaccented) against English-only termination passage.
+    const viToEnAccented = idx.search('chấm dứt hợp đồng trách nhiệm');
+    const viToEnPlain = idx.search('cham dut hop dong trach nhiem');
+    expect(viToEnAccented.length).toBeGreaterThanOrEqual(1);
+    expect(viToEnAccented.some(hit => hit.chunk.documentId === 'doc-en-termination')).toBe(true);
+    expect(viToEnAccented.some(hit => hit.chunk.documentId === 'doc-en-backups')).toBe(false);
+    expect(viToEnPlain).toEqual(viToEnAccented);
+
+    // Disabling bilingual concept bridge removes cross-lingual concept matching when desired.
+    const strictIdx = indexDocuments(bilingualCorpus, { bilingualConceptBridge: false });
+    expect(
+      strictIdx.search('payment', { filters: { documentId: 'doc-vi-contract' } }),
+    ).toEqual([]);
+  });
+
+  it('supports mixed-language sections and diacritic-folded Vietnamese section filters', () => {
+    const mixedDoc = makeDoc(
+      [
+        { text: 'Điều khoản bảo mật và SLA', type: 'heading', language: 'vi', page: 1 },
+        { text: 'Thông tin bảo mật phải được mã hóa ở trạng thái nghỉ.', language: 'vi', page: 1 },
+        { text: 'Confidentiality obligations survive contract termination for five years.', language: 'en', page: 1 },
+      ],
+      { documentId: 'mixed-doc', language: 'vi' },
+    );
+
+    const idx = indexDocuments([mixedDoc]);
+
+    const viFiltered = idx.search('confidentiality', {
+      filters: { language: 'vi', section: 'dieu khoan bao mat' },
+    });
+    expect(viFiltered).toHaveLength(1);
+    expect(viFiltered[0]?.metadata.languages).toEqual(['vi', 'en']);
+
+    const enFiltered = idx.search('bao mat', {
+      filters: { language: 'en' },
+    });
+    expect(enFiltered).toHaveLength(1);
+  });
+});
+
+describe('empty, missing filter, and boundary edge cases', () => {
+  it('treats missing, empty, or blank filter objects as unfiltered', () => {
+    const doc = makeDoc([
+      { text: '1 Architecture', type: 'heading' },
+      { text: 'Vector retrieval indexes document chunks locally.' },
+    ]);
+    const idx = indexDocuments([doc]);
+
+    const baseline = idx.search('vector retrieval');
+    expect(baseline).toHaveLength(1);
+    expect(baseline[0]?.trace.matchedFilter).toBe(true);
+    expect(baseline[0]?.trace.matchedFilterFields).toEqual([]);
+
+    expect(idx.search('vector retrieval', { filters: {} })).toEqual(baseline);
+    expect(
+      idx.search('vector retrieval', {
+        filters: {
+          documentId: '   ',
+          section: '',
+          language: ' ',
+          pageRange: {},
+        },
+      }),
+    ).toEqual(baseline);
+  });
+
+  it('returns empty results for explicit empty allow-lists, inverted ranges, and non-matching filters', () => {
+    const doc = makeDoc(
+      [
+        { text: '1 Overview', type: 'heading', page: 2 },
+        { text: 'Deterministic hybrid retrieval test passage.', page: 2 },
+      ],
+      { documentId: 'doc-1', language: 'en' },
+    );
+    const idx = indexDocuments([doc]);
+
+    expect(idx.search('hybrid retrieval', { filters: { documentIds: [] } })).toEqual([]);
+    expect(idx.search('hybrid retrieval', { filters: { kind: [] } })).toEqual([]);
+    expect(idx.search('hybrid retrieval', { filters: { language: [] } })).toEqual([]);
+    expect(idx.search('hybrid retrieval', { filters: { section: [] } })).toEqual([]);
+    expect(idx.search('hybrid retrieval', { filters: { pageRange: { min: 5, max: 2 } } })).toEqual([]);
+    expect(idx.search('hybrid retrieval', { filters: { pageRange: [5, 2] } })).toEqual([]);
+    expect(idx.search('hybrid retrieval', { filters: { documentId: 'doc-1', documentIds: ['doc-2'] } })).toEqual([]);
+    expect(idx.search('hybrid retrieval', { filters: { language: 'fr' } })).toEqual([]);
+    expect(idx.search('hybrid retrieval', { filters: { section: 'Missing' } })).toEqual([]);
+  });
+
+  it('handles empty corpora, blank queries, zero/negative limits, and invalid options cleanly', () => {
+    const emptyIdx = indexDocuments([]);
+    expect(emptyIdx.chunks).toEqual([]);
+    expect(emptyIdx.search('anything')).toEqual([]);
+    expect(emptyIdx.semanticSearch('anything')).toEqual([]);
+    const restoredEmpty = deserializeHybridIndex(emptyIdx.serialize());
+    expect(restoredEmpty.search('anything')).toEqual([]);
+
+    const specs = Array.from({ length: 12 }, (_, at) => ({
+      text: `Passage ${at + 1} discusses deterministic hybrid search scoring.`,
+    }));
+    const idx = indexDocuments([makeDoc(specs)]);
+
+    expect(idx.search('')).toEqual([]);
+    expect(idx.search('   !!! ???   ')).toEqual([]);
+    expect(idx.semanticSearch('')).toEqual([]);
+    expect(idx.search('hybrid search', { limit: 0 })).toEqual([]);
+    expect(idx.search('hybrid search', { limit: -3 })).toHaveLength(DEFAULT_SEARCH_LIMIT);
+    expect(idx.search('hybrid search', { bm25Weight: 0, semanticWeight: 0 })).toEqual([]);
+
+    expect(() => idx.search('hybrid search', { rrfK: 0 })).toThrowError(HybridRetrievalError);
+    expect(() => idx.search('hybrid search', { bm25Weight: -1 })).toThrowError(HybridRetrievalError);
+  });
+
+  it('breaks score ties deterministically by page and chunk id and supports sidecar metadata on indexChunks', () => {
+    const tieDoc = makeDoc([
+      { text: 'Protocol handshake completes deterministically.', page: 1 },
+      { text: 'Protocol handshake completes deterministically.', page: 2 },
+    ]);
+    const tieHits = indexDocuments([tieDoc]).search('protocol handshake');
+    expect(tieHits).toHaveLength(2);
+    expect(tieHits[0]?.score).toBe(tieHits[1]?.score);
+    expect(tieHits.map(hit => hit.chunk.page)).toEqual([1, 2]);
+    expect(tieHits.map(hit => hit.chunk.id)).toEqual(['doc-1:c1', 'doc-1:c2']);
+
+    const chunks = chunkDocument(tieDoc);
+    const sidecarMeta = new Map([
+      [chunks[0]!.id, { language: 'vi', pageEnd: 1 }],
+      [chunks[1]!.id, { language: 'en', pageEnd: 3 }],
+    ]);
+    const chunkIdx = indexChunks(chunks, { metadata: sidecarMeta });
+    const page3 = chunkIdx.search('protocol', { filters: { pageRange: [3, 3], language: 'en' } });
+    expect(page3).toHaveLength(1);
+    expect(page3[0]?.chunk.id).toBe('doc-1:c2');
   });
 });
