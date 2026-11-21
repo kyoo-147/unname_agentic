@@ -132,8 +132,8 @@ describe('H13 inspectPdfForm: real AcroForm detection and field modeling', () =>
       readOnly: false,
       page: 1,
     });
-    // PDF y=660..684 on height 792 -> reader top-left y = 792 - 684 = 108
-    expect(byName['applicantName']?.rect.y).toBeCloseTo(108, 1);
+    // pdf-lib default borderWidth=1 expands Rect by 0.5pt -> y=659.5..684.5 on height 792 -> 792 - 684.5 = 107.5
+    expect(byName['applicantName']?.rect.y).toBeCloseTo(107.5, 1);
 
     expect(byName['caseId']).toMatchObject({
       type: 'text',
@@ -247,7 +247,8 @@ describe('H13 fillPdfForm & JSON export via planFill', () => {
     expect(widgetOf('caseId')).toMatchObject({ type: 'text', value: 'CASE-2026-001' });
     expect(widgetOf('acceptTerms')).toMatchObject({ type: 'checkbox', value: 'Yes' });
     expect(widgetOf('country')).toMatchObject({ type: 'combobox', value: 'Vietnam' });
-    expect(widgetOf('planTier')).toMatchObject({ type: 'radiobutton', value: 'pro' });
+    // pdf-lib addOptionToPage stores ['starter', 'pro'] in /Opt and writes the option index '/1' in /V
+    expect(widgetOf('planTier')).toMatchObject({ type: 'radiobutton', value: '1' });
   });
 
   it('exports filled field JSON and round-trips exported values into a blank form', async () => {
