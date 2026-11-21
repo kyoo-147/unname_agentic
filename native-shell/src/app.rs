@@ -636,13 +636,16 @@ impl Workspace {
         let title = entry.map(|entry| display_title(&entry.title)).unwrap_or_else(|| crate::i18n::tr3("文档", "Document", "Tài liệu").to_string());
         let reader = self.pdf_reader.as_ref().map(|reader| reader.read(cx));
         if let Some(reader) = &reader {
-            let pages: Vec<(usize, Vec<ExportBlock>)> = reader
-                .document_pages()
+            let reader_pages = reader.document_pages();
+            let identity = reader_pages.first().map(|page| (page.source_id.clone(), page.generation));
+            let pages: Vec<(usize, Vec<ExportBlock>)> = reader_pages
                 .into_iter()
-                .map(|page| (page.page, page.blocks.into_iter().map(|block| ExportBlock::text(block.id, block.source, block.translation)).collect()))
+                .map(|page| (page.page, page.blocks.into_iter().map(|block| ExportBlock::text(block.id, block.source, block.translation).with_polygon(block.polygon)).collect()))
                 .collect();
             if !pages.is_empty() {
-                return Some(ExportDocument::from_pages(title, pages));
+                let mut document = ExportDocument::from_pages(title, pages);
+                if let Some((source_id, generation)) = identity { document.set_identity(source_id, generation); }
+                return Some(document);
             }
         }
         let text = reader.and_then(|reader| reader.document_context()).map(|(_, text)| text).or_else(|| entry.map(|entry| entry.body.clone())).unwrap_or_default();
