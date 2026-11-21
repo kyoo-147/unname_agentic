@@ -5,6 +5,8 @@ import {
   SMART_COLLECTIONS_EXPORT_KIND,
   SMART_COLLECTIONS_SCHEMA_VERSION,
   SmartCollectionError,
+  authorsMatch,
+  normalizeAuthor,
   type ApplyMergeOptions,
   type SmartCollectionSnapshot,
 } from '../src/core/smart-collections';
@@ -425,5 +427,295 @@ describe('Duplicate candidate detection and confirmed merge', () => {
     expect(restored.evaluateCollection('survey-col').papers.map(p => p.id)).toEqual(['surv']);
     expect(restored.getMergeHistory()).toHaveLength(1);
     expect(restored.getAuditLog().length).toBe(lib.getAuditLog().length);
+  });
+});
+
+describe('Year range edge cases', () => {
+  it('enforces inclusive min/max bounds, single-year slices, missing-year exclusion, and sort order', () => {
+    const lib = new ResearchLibrary({ now: tickingClock() });
+    lib.registerPaper({ id: 'y2019', title: 'Early Work', year: 2019 });
+    lib.registerPaper({ id: 'y2020', title: 'Boundary Start', year: 2020 });
+    lib.registerPaper({ id: 'y2022', title: 'Middle Paper', year: 2022 });
+    lib.registerPaper({ id: 'y2024', title: 'Boundary End', year: 2024 });
+    lib.registerPaper({ id: 'undated', title: 'Undated Draft' });
+    lib.registerPaper({ id: 'undated-b', title: 'Another Draft' });
+
+    expect(lib.query({ yearMin: 2020 }).map(p => p.id)).toEqual(['y2020', 'y2022', 'y2024']);
+    expect(lib.query({ yearMax: 2022 }).map(p => p.id)).toEqual(['y2019', 'y2020', 'y2022']);
+    expect(lib.query({ yearMin: 2020, yearMax: 2024 }).map(p => p.id)).toEqual(['y2020', 'y2022', 'y2024']);
+    expect(lib.query({ yearMin: 2022, yearMax: 2022 }).map(p => p.id)).toEqual(['y2022']);
+
+    // Papers missing year appear when no year range constraint is active and sort last in year sorts
+    expect(lib.query({ sortBy: 'year-desc' }).map(p => p.id)).toEqual([
+      'y2024',
+      'y2022',
+      'y2020',
+      'y2019',
+      'undated-b',
+      'undated',
+    ]);
+    expect(lib.query({ sortBy: 'year-asc' }).map(p => p.id)).toEqual([
+      'y2019',
+      'y2020',
+      'y2022',
+      'y2024',
+      'undated-b',
+      'undated',
+    ]);
+
+    // Clearing a paper's year removes it from a year-bounded collection automatically
+    lib.createCollection({ id: 'recent', name: '2020+', query: { yearMin: 2020 } });
+    expect(lib.evaluateCollection('recent').papers.map(p => p.id)).toEqual(['y2020', 'y2022', 'y2024']);
+    lib.updatePaper('y2022', { year: undefined });
+    expect(lib.evaluateCollection('recent').papers.map(p => p.id)).toEqual(['y2020', 'y2024']);
+
+    // Inverted or malformed year ranges fail with typed errors
+    expectError(() => lib.query({ yearMin: 2025, yearMax: 2020 }), 'invalid-query');
+    expectError(() => lib.query({ yearMin: 2022.5 }), 'invalid-query');
+    expectError(() => lib.createCollection({ name: 'Bad', query: { yearMin: 2026, yearMax: 2021 } }), 'invalid-query');
+    expectError(() => lib.registerPaper({ title: 'Bad Year', year: 0 }), 'invalid-field');
+  });
+});
+
+describe('Diacritic and cross-format author matching', () => {
+  it('matches Vietnamese Đ/đ, German ü/ß, Polish ł, Scandinavian ø, Spanish accents, and initials', () => {
+    const viet = normalizeAuthor('{Nguyễn}, {Văn An}');
+    expect(viet.raw).toBe('Nguyễn, Văn An');
+    expect(viet.display).toBe('Văn An Nguyễn');
+    expect(viet.normalized).toBe('van an nguyen');
+    expect(viet.familyKey).toBe('nguyen');
+
+    const pairs: ReadonlyArray<readonly [string, string, boolean]> = [
+      ['Nguyễn, Văn An', 'Van An Nguyen', true],
+      ['Nguyễn, Văn An', 'Nguyễn Văn An', true],
+      ['Đỗ, Minh Tuấn', 'Minh Tuan Do', true],
+      ['Trần, Đức Thắng', 'Duc Thang Tran', true],
+      ['Müller, Hans-Peter', 'Hans-Peter Muller', true],
+      ['Weiß, Stefan', 'Stefan Weiss', true],
+      ['Kowalski, Łukasz', 'Lukasz Kowalski', true],
+      ['Sørensen, Mikkel', 'Mikkel Sorensen', true],
+      ['García-López, María', 'Maria Garcia Lopez', true],
+      ['François, Jean-Luc', 'Jean-Luc Francois', true],
+      ['Ærø, Bjørn', 'Bjorn Aero', true],
+      ['A. Vaswani', 'Vaswani, Ashish', true],
+      ['J. A. Smith', 'Jane Alice Smith', true],
+      ['Alice Smith', 'Bob Smith', false],
+      ['J. Smith', 'K. Smith', false],
+      ['J. A. Smith', 'J. B. Smith', false],
+      ['Đỗ', 'Jane Doe', false],
+    ];
+
+    for (const [left, right, want] of pairs) {
+      expect(authorsMatch(left, right), `${left} <> ${right}`).toBe(want);
+    }
+
+    const lib = new ResearchLibrary({ now: tickingClock() });
+    lib.registerPaper({
+      id: 'vn1',
+      title: 'Vietnamese Document OCR',
+      authors: ['Đỗ, Minh Tuấn', 'Trần, Đức Thắng'],
+    });
+    lib.registerPaper({
+      id: 'eu1',
+      title: 'Typographic Normalization',
+      authors: ['Müller, Hans', 'Kowalski, Łukasz', 'Sørensen, Mikkel', 'Weiß, Stefan'],
+    });
+    lib.registerPaper({
+      id: 'en1',
+      title: 'English Baseline',
+      authors: ['Jane Doe'],
+    });
+
+    // Searching by folded `Do` finds `Đỗ, Minh Tuấn` without false-matching `Jane Doe`
+    expect(lib.query({ author: 'Do' }).map(p => p.id)).toEqual(['vn1']);
+    expect(lib.query({ author: 'Đỗ Minh Tuấn' }).map(p => p.id)).toEqual(['vn1']);
+    expect(lib.query({ author: 'Tran' }).map(p => p.id)).toEqual(['vn1']);
+    expect(lib.query({ author: 'Hans Muller' }).map(p => p.id)).toEqual(['eu1']);
+    expect(lib.query({ author: 'Lukasz Kowalski' }).map(p => p.id)).toEqual(['eu1']);
+    expect(lib.query({ author: 'Sorensen' }).map(p => p.id)).toEqual(['eu1']);
+    expect(lib.query({ author: 'Weiss' }).map(p => p.id)).toEqual(['eu1']);
+    expect(lib.query({ authorsAll: ['Minh Tuan Do', 'Duc Thang Tran'] }).map(p => p.id)).toEqual(['vn1']);
+
+    // Duplicate detection recognizes title + diacritic-variant first author AND arXiv DataCite DOI + publisher DOI
+    lib.registerPaper({
+      id: 'eu1-dup',
+      title: 'Typographic Normalization!',
+      authors: ['Hans Muller'],
+      doi: '10.48550/arXiv.2403.01234',
+    });
+    lib.updatePaper('eu1', { doi: '10.1145/999999.111111' });
+    const dups = lib.findDuplicatesFor('eu1');
+    expect(dups).toHaveLength(1);
+    expect(dups[0]?.reasons).toContain('title-author');
+  });
+});
+
+describe('Merge rollback, stale plan protection, and conflict reporting', () => {
+  it('rolls back multi-paper merges cleanly, restores auto-updating views, and works across JSON persistence', () => {
+    const lib = new ResearchLibrary({ now: tickingClock() });
+    lib.registerPaper({
+      id: 'p1',
+      title: 'Multilingual OCR',
+      authors: ['Nguyễn, Văn An'],
+      doi: '10.1000/multi.ocr',
+      year: 2022,
+      topics: ['OCR'],
+      tags: ['ocr'],
+      readStatus: 'unread',
+      noteIds: ['n1'],
+      annotationIds: ['a1'],
+      citationKeys: ['nguyen2022ocr'],
+      references: ['r1'],
+    });
+    lib.registerPaper({
+      id: 'p2',
+      title: 'Multilingual OCR (arXiv)',
+      authors: ['Van An Nguyen'],
+      arxivId: '2205.00001v2',
+      year: 2021,
+      venue: 'arXiv',
+      topics: ['Document AI'],
+      tags: ['preprint'],
+      readStatus: 'reading',
+      noteIds: ['n2'],
+      annotationIds: ['a2'],
+      citationKeys: ['nguyen2021arxiv'],
+      references: ['r2'],
+    });
+    lib.registerPaper({
+      id: 'p3',
+      title: 'Multilingual OCR (Camera Ready)',
+      authors: ['Nguyễn, Văn An'],
+      doi: '10.1000/multi.ocr',
+      venue: 'ICDAR',
+      tags: ['published'],
+      readStatus: 'read',
+      noteIds: ['n3'],
+      annotationIds: ['a3'],
+      citationKeys: ['nguyen2022icdar'],
+    });
+
+    lib.createCollection({ id: 'all-ocr', name: 'OCR Library', query: { text: 'Multilingual OCR' } });
+    const watcherEvents: SmartCollectionSnapshot[] = [];
+    const view = lib.watchCollection('all-ocr', s => watcherEvents.push(s));
+    expect(view.snapshot().total).toBe(3);
+
+    const plan = lib.planDuplicateMerge('p1', ['p2', 'p3']);
+    expect(plan.conflicts.map(c => `${c.field}:${c.duplicateId}`)).toContain('year:p2');
+    expect(plan.conflicts.map(c => `${c.field}:${c.duplicateId}`)).toContain('venue:p3');
+    expect(plan.conflicts.map(c => `${c.field}:${c.duplicateId}`)).toContain('title:p2');
+
+    // Plan detects staleness if a participating paper changes before confirmation
+    lib.updatePaper('p2', { venue: 'arXiv cs.CV' });
+    expectError(() => lib.applyDuplicateMerge(plan, { confirmed: true }), 'stale-merge-plan');
+
+    // Fresh plan succeeds cleanly
+    const freshPlan = lib.planDuplicateMerge('p1', ['p2', 'p3']);
+    const merged = lib.applyDuplicateMerge(freshPlan, {
+      confirmed: true,
+      actor: 'curator',
+      reason: 'Consolidate preprint and proceedings versions',
+    });
+
+    expect(view.snapshot().papers.map(p => p.id)).toEqual(['p1']);
+    expect(lib.getPaper('p1')?.tags).toEqual(['ocr', 'preprint', 'published']);
+    expect(lib.getPaper('p1')?.noteIds).toEqual(['n1', 'n2', 'n3']);
+    expect(lib.getPaper('p1')?.annotationIds).toEqual(['a1', 'a2', 'a3']);
+    expect(lib.getPaper('p1')?.citationKeys).toEqual(['nguyen2022ocr', 'nguyen2021arxiv', 'nguyen2022icdar']);
+    expect(lib.getPaper('p1')?.readStatus).toBe('read');
+    expect(lib.findDuplicateCandidates()).toEqual([]);
+
+    // Round-trip through JSON after merge and execute rollback on the restored library
+    const postMergeJson = lib.exportJson();
+    const restoredLib = ResearchLibrary.fromJson(postMergeJson, { now: tickingClock() });
+    const restoredView = restoredLib.watchCollection('all-ocr');
+
+    const rollback = restoredLib.rollbackMerge(merged.mergeId, {
+      actor: 'curator',
+      reason: 'Separate proceedings vs preprint notes',
+    });
+
+    expect(rollback.restoredSurvivor.id).toBe('p1');
+    expect(rollback.restoredSurvivor.tags).toEqual(['ocr']);
+    expect(rollback.restoredSurvivor.readStatus).toBe('unread');
+    expect(rollback.restoredSurvivor.noteIds).toEqual(['n1']);
+    expect(rollback.restoredDuplicates.map(p => p.id)).toEqual(['p2', 'p3']);
+    expect(restoredLib.getPaper('p2')?.venue).toBe('arXiv cs.CV');
+    expect(restoredLib.getPaper('p3')?.venue).toBe('ICDAR');
+    expect(restoredView.snapshot().papers.map(p => p.id)).toEqual(['p1', 'p2', 'p3']);
+    expect(restoredLib.findDuplicateCandidates().length).toBeGreaterThan(0);
+
+    // Audit history retains both the merge record (marked rolled back) and the rollback audit event
+    const history = restoredLib.getMergeHistory();
+    expect(history).toHaveLength(1);
+    expect(history[0]?.rolledBackAt).toBe(rollback.rolledBackAt);
+    expect(history[0]?.rolledBackBy).toBe('curator');
+    expect(history[0]?.rollbackReason).toBe('Separate proceedings vs preprint notes');
+    expect(restoredLib.getAuditLog().map(e => e.action).slice(-2)).toEqual(['merge-applied', 'merge-rolled-back']);
+
+    // Double rollback or unknown merge ID fails
+    expectError(() => restoredLib.rollbackMerge(merged.mergeId), 'merge-already-rolled-back');
+    expectError(() => restoredLib.rollbackMerge('merge-999'), 'unknown-merge');
+
+    view.unsubscribe();
+  });
+
+  it('prevents out-of-order rollback conflicts and rejects malformed JSON imports atomically', () => {
+    const lib = new ResearchLibrary({ now: tickingClock() });
+    lib.registerPaper({ id: 'p1', title: 'Base Paper', doi: '10.1000/chain' });
+    lib.registerPaper({ id: 'p2', title: 'Copy One', doi: '10.1000/chain', tags: ['from-p2'] });
+    lib.registerPaper({ id: 'p3', title: 'Copy Two', doi: '10.1000/chain', tags: ['from-p3'] });
+
+    const m1 = lib.applyDuplicateMerge(lib.planDuplicateMerge('p1', ['p2']), { confirmed: true });
+    const m2 = lib.applyDuplicateMerge(lib.planDuplicateMerge('p1', ['p3']), { confirmed: true });
+
+    // Rolling back m1 before m2 is refused because m2 depends on p1's post-m1 state
+    expectError(() => lib.rollbackMerge(m1.mergeId), 'rollback-conflict');
+
+    // Rolling back newest-first succeeds cleanly
+    lib.rollbackMerge(m2.mergeId);
+    expect(lib.getPaper('p1')?.tags).toEqual(['from-p2']);
+    expect(lib.getPaper('p3')?.tags).toEqual(['from-p3']);
+
+    // If p2's id is reused before m1 rollback, rollback refuses rather than overwriting the new paper
+    lib.registerPaper({ id: 'p2', title: 'Unrelated New Paper' });
+    expectError(() => lib.rollbackMerge(m1.mergeId), 'rollback-conflict');
+    lib.removePaper('p2');
+
+    lib.rollbackMerge(m1.mergeId);
+    expect(lib.getPaper('p1')?.tags).toEqual([]);
+    expect(lib.getPaper('p2')?.tags).toEqual(['from-p2']);
+
+    // Malformed / unsupported JSON exports never corrupt existing library state
+    expectError(() => lib.importJson('{not-json'), 'malformed-json');
+    expectError(
+      () =>
+        lib.importJson(
+          JSON.stringify({
+            schemaVersion: 99,
+            kind: SMART_COLLECTIONS_EXPORT_KIND,
+            papers: [],
+            collections: [],
+            mergeHistory: [],
+            auditLog: [],
+          }),
+        ),
+      'unsupported-schema-version',
+    );
+    expectError(
+      () =>
+        lib.importJson(
+          JSON.stringify({
+            schemaVersion: SMART_COLLECTIONS_SCHEMA_VERSION,
+            kind: 'wrong.kind',
+            papers: [],
+            collections: [],
+            mergeHistory: [],
+            auditLog: [],
+          }),
+        ),
+      'malformed-export',
+    );
+    expect(lib.listPapers().map(p => p.id)).toEqual(['p1', 'p3', 'p2']);
   });
 });
