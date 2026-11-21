@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CONSENSUS_ENGINE_ORDER,
   compareOcrCandidates,
+  computeScriptMatchScore,
   extractNumericTokens,
   fromPlanEngine,
   normalizedEditSimilarity,
@@ -211,5 +212,240 @@ describe('numeric-token disagreement flagging and cost accounting', () => {
     expect(batch.costByEngine['cloud-vision']).toBeCloseTo(0.0035, 8);
     expect(batch.disagreementRegions).toEqual(['p1-b2', 'p1-b3']);
     expect(batch.numericConflictRegions).toEqual(['p1-b2']);
+  });
+});
+
+describe('Vietnamese diacritics and script edge cases', () => {
+  it('treats NFD and NFC Vietnamese strings as exact consensus matches', () => {
+    const nfc = 'Tiếng Việt Nam';
+    const nfd = nfc.normalize('NFD');
+    expect(nfd).not.toBe(nfc);
+
+    const result = selectRegionConsensus({
+      regionId: 'vi-nfd',
+      expectedLanguage: 'vi-VN',
+      candidates: [
+        { engine: 'windows-ocr', text: nfc, confidence: 0.78 },
+        { engine: 'paddle-ocr', text: nfd, confidence: 0.8 },
+        { engine: 'tesseract', text: 'Tieng Viet Nam', confidence: 0.99 },
+      ],
+    });
+
+    expect(result.winningEngine).toBe('paddle-ocr');
+    expect(result.selectedText).toBe(nfc);
+    expect(result.agreementRatio).toBeCloseTo(2 / 3, 6);
+    expect(result.agreeingEngines).toEqual(['paddle-ocr', 'windows-ocr']);
+  });
+
+  it('prefers diacritic-preserving Vietnamese output over a higher-confidence ASCII strip', () => {
+    const result = selectRegionConsensus({
+      regionId: 'vi-strip',
+      expectedLanguage: 'vie',
+      candidates: [
+        { engine: 'paddle-ocr', text: 'Quyết định số 12', confidence: 0.85 },
+        { engine: 'windows-ocr', text: 'Quyet dinh so 12', confidence: 0.96 },
+      ],
+    });
+
+    expect(result.winningEngine).toBe('paddle-ocr');
+    expect(result.selectedText).toBe('Quyết định số 12');
+    expect(result.candidates[0]?.scriptMatchScore).toBe(1);
+    expect(result.candidates[1]?.scriptMatchScore).toBe(0.5);
+  });
+
+  it('rejects single-diacritic hallucination in a multi-word Vietnamese sentence via 2-of-3 consensus', () => {
+    const expected = 'Cộng hòa xã hội chủ nghĩa';
+    const corrupted = 'Cộng hoa xã hội chủ nghĩa';
+
+    const result = selectRegionConsensus({
+      regionId: 'vi-tone',
+      expectedLanguage: 'vi',
+      candidates: [
+        { engine: 'windows-ocr', text: expected, confidence: 0.76 },
+        { engine: 'cloud-vision', text: expected, confidence: 0.79 },
+        { engine: 'tesseract', text: corrupted, confidence: 0.99 },
+      ],
+    });
+
+    expect(result.winningEngine).toBe('cloud-vision');
+    expect(result.selectedText).toBe(expected);
+    expect(result.agreementRatio).toBeCloseTo(2 / 3, 6);
+  });
+
+  it('does not penalize pure-numeric regions or mixed Han/Kana Japanese text for script match', () => {
+    expect(computeScriptMatchScore('2026-11-21', { expectedLanguage: 'vi' })).toBe(1);
+    expect(computeScriptMatchScore('日本語テキスト', { expectedLanguage: 'ja' })).toBe(1);
+    expect(computeScriptMatchScore('漢字のみ', { expectedLanguage: 'ja' })).toBe(1);
+    expect(computeScriptMatchScore('English only', { expectedLanguage: 'ja' })).toBe(0);
+  });
+});
+
+describe('numeric conflict edge cases', () => {
+  it('flags decimal separator mismatches, dropped digits, and negative sign conflicts', () => {
+    const sepConflict = selectRegionConsensus({
+      regionId: 'num-sep',
+      candidates: [
+        { engine: 'windows-ocr', text: 'Rate: 1.25%', confidence: 0.9 },
+        { engine: 'paddle-ocr', text: 'Rate: 1,25%', confidence: 0.88 },
+      ],
+    });
+    expect(sepConflict.hasNumericDisagreement).toBe(true);
+    expect(sepConflict.numericDisagreement.conflictingTokens).toEqual(['1.25', '1,25']);
+    expect(sepConflict.agreementRatio).toBeCloseTo(0.5, 6);
+
+    const droppedNumber = selectRegionConsensus({
+      regionId: 'num-drop',
+      candidates: [
+        { engine: 'windows-ocr', text: 'Page 2 of 5', confidence: 0.9 },
+        { engine: 'tesseract', text: 'Page 2 of', confidence: 0.85 },
+      ],
+    });
+    expect(droppedNumber.hasNumericDisagreement).toBe(true);
+    expect(droppedNumber.numericDisagreement.conflictingTokens).toEqual(['5']);
+
+    const signConflict = selectRegionConsensus({
+      regionId: 'num-sign',
+      candidates: [
+        { engine: 'windows-ocr', text: 'Delta: -15°C', confidence: 0.9 },
+        { engine: 'paddle-ocr', text: 'Delta: 15°C', confidence: 0.87 },
+      ],
+    });
+    expect(signConflict.hasNumericDisagreement).toBe(true);
+    expect(signConflict.numericDisagreement.conflictingTokens).toEqual(['-15', '15']);
+  });
+
+  it('normalizes Unicode minus signs and currency spacing without false conflicts', () => {
+    const result = selectRegionConsensus({
+      regionId: 'num-norm',
+      candidates: [
+        { engine: 'windows-ocr', text: 'Balance: $ 1,250.00 (adj −15)', confidence: 0.9 },
+        { engine: 'paddle-ocr', text: 'Balance: $1,250.00 (adj -15)', confidence: 0.88 },
+      ],
+    });
+
+    expect(result.hasNumericDisagreement).toBe(false);
+    expect(result.numericDisagreement.conflictingTokens).toEqual([]);
+  });
+
+  it('isolates only the conflicting component inside multi-number dates', () => {
+    const result = selectRegionConsensus({
+      regionId: 'num-date',
+      candidates: [
+        { engine: 'windows-ocr', text: 'Ngày 21/11/2026', confidence: 0.9 },
+        { engine: 'paddle-ocr', text: 'Ngày 24/11/2026', confidence: 0.84 },
+      ],
+    });
+
+    expect(result.hasNumericDisagreement).toBe(true);
+    expect(result.numericDisagreement.conflictingTokens).toEqual(['21', '24']);
+  });
+});
+
+describe('tie-break, batch thresholds, and validation edge cases', () => {
+  it('breaks equal score and confidence ties by lower cost before engine priority', () => {
+    const result = selectRegionConsensus({
+      regionId: 'tie-cost',
+      candidates: [
+        { engine: 'windows-ocr', text: 'Contract Clause A', confidence: 0.9, costUsd: 0.002 },
+        { engine: 'cloud-vision', text: 'Contract Clause A', confidence: 0.9, costUsd: 0 },
+      ],
+    });
+
+    expect(result.winningEngine).toBe('cloud-vision');
+    expect(result.winnerCostUsd).toBe(0);
+  });
+
+  it('breaks total-score ties by higher consensus score over raw confidence', () => {
+    const report = compareOcrCandidates(
+      [
+        { engine: 'windows-ocr', text: 'AAA', confidence: 0.6 },
+        { engine: 'paddle-ocr', text: 'AAA', confidence: 0.6 },
+        { engine: 'tesseract', text: 'ZZZ', confidence: 0.9 },
+      ],
+      { weights: { consensus: 0.5, confidence: 0.5, scriptMatch: 0 } },
+    );
+
+    // For two 2/3 exact matches vs one 1/3 outlier (0 similarity):
+    // 2/3 consensus = 0.4*(2/3)+0.3*(2/3)+0.3*(0.5) = 0.616667 -> 0.5*0.616667 + 0.5*0.6 = 0.608333
+    // 1/3 outlier   = 0.4*(1/3)+0.3*(1/3)+0.3*(0)   = 0.233333 -> 0.5*0.233333 + 0.5*0.983333333333 = 0.608333
+    const exactTie = compareOcrCandidates(
+      [
+        { engine: 'windows-ocr', text: 'AAA', confidence: 0.6 },
+        { engine: 'paddle-ocr', text: 'AAA', confidence: 0.6 },
+        { engine: 'tesseract', text: 'ZZZ', confidence: 0.983333333333 },
+      ],
+      { weights: { consensus: 0.5, confidence: 0.5, scriptMatch: 0 } },
+    );
+
+    expect(exactTie.winner?.engine).toBe('windows-ocr');
+    expect(exactTie.winner?.totalScore).toBeCloseTo(exactTie.ranked[2]!.totalScore, 9);
+    expect(exactTie.winner?.consensusScore).toBeGreaterThan(exactTie.ranked[2]!.consensusScore);
+    expect(report.winner?.engine).toBe('windows-ocr');
+  });
+
+  it('handles empty batches, all-failed regions, and custom minAgreementRatio thresholds', () => {
+    expect(summarizeBatchConsensus([])).toEqual({
+      regionCount: 0,
+      resolvedCount: 0,
+      emptyCount: 0,
+      failedCount: 0,
+      winnerCounts: {
+        'windows-ocr': 0,
+        'paddle-ocr': 0,
+        tesseract: 0,
+        'cloud-vision': 0,
+      },
+      totalCostUsd: 0,
+      costByEngine: {
+        'windows-ocr': 0,
+        'paddle-ocr': 0,
+        tesseract: 0,
+        'cloud-vision': 0,
+      },
+      meanAgreementRatio: 0,
+      disagreementRegions: [],
+      numericConflictRegions: [],
+    });
+
+    const failedRegion = selectRegionConsensus({
+      regionId: 'r-fail',
+      candidates: [
+        { engine: 'windows-ocr', text: '', confidence: 0, status: 'failed', error: 'timeout' },
+        { engine: 'cloud-vision', text: '', confidence: 0, status: 'failed', error: '503', costUsd: 0.001 },
+      ],
+    });
+    expect(failedRegion.outcome).toBe('failed');
+    expect(failedRegion.winningEngine).toBeNull();
+    expect(failedRegion.totalCostUsd).toBeCloseTo(0.001, 8);
+
+    const partialRegion = selectRegionConsensus({
+      regionId: 'r-partial',
+      candidates: [
+        { engine: 'windows-ocr', text: 'Header', confidence: 0.9 },
+        { engine: 'paddle-ocr', text: 'Header', confidence: 0.85 },
+        { engine: 'tesseract', text: 'Headr', confidence: 0.7 },
+      ],
+    });
+
+    const relaxed = summarizeBatchConsensus([failedRegion, partialRegion], { minAgreementRatio: 0.6 });
+    expect(relaxed.failedCount).toBe(1);
+    expect(relaxed.disagreementRegions).toEqual(['r-fail']);
+  });
+
+  it('rejects invalid weights, thresholds, negative costs, and bad batch thresholds', () => {
+    expect(() =>
+      compareOcrCandidates([{ engine: 'windows-ocr', text: 'a', confidence: 0.9 }], {
+        weights: { consensus: 0, confidence: 0, scriptMatch: 0 },
+      }),
+    ).toThrow(RangeError);
+    expect(() =>
+      compareOcrCandidates([{ engine: 'windows-ocr', text: 'a', confidence: 0.9 }], {
+        agreementThreshold: 1.5,
+      }),
+    ).toThrow(RangeError);
+    expect(() =>
+      compareOcrCandidates([{ engine: 'windows-ocr', text: 'a', confidence: 0.9, costUsd: -0.01 }]),
+    ).toThrow(RangeError);
+    expect(() => summarizeBatchConsensus([], { minAgreementRatio: -0.1 })).toThrow(RangeError);
   });
 });
