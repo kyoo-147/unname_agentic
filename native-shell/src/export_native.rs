@@ -93,11 +93,17 @@ pub struct ExportBlock {
     pub kind: BlockKind,
     pub source: String,
     pub translation: Option<String>,
+    pub polygon: Option<[[f32; 2]; 4]>,
 }
 
 impl ExportBlock {
     pub fn text(id: impl Into<String>, source: impl Into<String>, translation: Option<String>) -> Self {
-        Self { id: id.into(), kind: BlockKind::Text, source: source.into(), translation }
+        Self { id: id.into(), kind: BlockKind::Text, source: source.into(), translation, polygon: None }
+    }
+
+    pub fn with_polygon(mut self, polygon: [[f32; 2]; 4]) -> Self {
+        self.polygon = Some(polygon);
+        self
     }
 
     /// The translation when it says something: an empty string is a block that
@@ -118,12 +124,14 @@ pub struct ExportPage {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ExportDocument {
     pub title: String,
+    pub source_id: Option<String>,
+    pub generation: Option<u64>,
     pub pages: Vec<ExportPage>,
 }
 
 impl ExportDocument {
     pub fn new(title: impl Into<String>) -> Self {
-        Self { title: title.into(), pages: Vec::new() }
+        Self { title: title.into(), source_id: None, generation: None, pages: Vec::new() }
     }
 
     /// One page holding the non-empty paragraphs of `text`, for a caller that
@@ -146,6 +154,10 @@ impl ExportDocument {
 
     pub fn push_page(&mut self, blocks: Vec<ExportBlock>) {
         self.pages.push(ExportPage { blocks });
+    }
+    pub fn set_identity(&mut self, source_id: impl Into<String>, generation: u64) {
+        self.source_id = Some(source_id.into());
+        self.generation = Some(generation);
     }
 
     /// Build the document from page-numbered groups: `pages` pairs a 0-based
@@ -189,6 +201,10 @@ impl ExportDocument {
 #[derive(Debug, Deserialize, Serialize)]
 struct JsonExport {
     document: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generation: Option<u64>,
     pages: usize,
     blocks: Vec<JsonBlock>,
 }
@@ -201,6 +217,8 @@ struct JsonBlock {
     kind: BlockKind,
     source: String,
     translation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    polygon: Option<[[f32; 2]; 4]>,
     /// True when `translation` is null: the source is what this block falls back
     /// to, and a consumer that shows one side should say it is untranslated.
     untranslated: bool,
@@ -272,12 +290,14 @@ fn plain_text(document: &ExportDocument) -> String {
 fn json(document: &ExportDocument) -> String {
     let export = JsonExport {
         document: title(document).to_string(),
+        source_id: document.source_id.clone(),
+        generation: document.generation,
         pages: document.pages.len(),
         blocks: document
             .blocks()
             .map(|(page, block)| {
                 let translation = block.translated_text().map(str::to_string);
-                JsonBlock { id: block.id.clone(), page, kind: block.kind, source: block.source.clone(), untranslated: translation.is_none(), translation }
+                JsonBlock { id: block.id.clone(), page, kind: block.kind, source: block.source.clone(), translation: translation.clone(), polygon: block.polygon, untranslated: translation.is_none() }
             })
             .collect(),
     };
@@ -434,11 +454,24 @@ mod tests {
         assert_eq!(parsed.document, "Quarterly report");
         assert_eq!(parsed.pages, 2);
         assert_eq!(parsed.blocks.len(), 3);
-        assert_eq!(parsed.blocks[0], JsonBlock { id: "p1-b1".into(), page: 1, kind: BlockKind::Text, source: "Revenue rose".into(), translation: Some("Doanh thu tăng".into()), untranslated: false });
+        assert_eq!(parsed.blocks[0], JsonBlock { id: "p1-b1".into(), page: 1, kind: BlockKind::Text, source: "Revenue rose".into(), translation: Some("Doanh thu tăng".into()), polygon: None, untranslated: false });
         assert_eq!(parsed.blocks[1].translation, None, "an untranslated block is exported, without a translation");
         assert!(parsed.blocks[1].untranslated, "and it is marked as untranslated");
         assert_eq!(parsed.blocks[2].page, 2, "each block names its own page");
         assert!(text.contains("\"type\": \"text\""), "a consumer reads the block type from the key named type: {text}");
+    }
+
+    #[test]
+    fn json_preserves_source_identity_generation_and_polygon() {
+        let mut document = ExportDocument::new("Report");
+        document.set_identity("sha256:source", 7);
+        document.push_page(vec![ExportBlock::text("p1-r1", "Source", Some("Bản dịch".into())).with_polygon([[0.1, 0.2], [0.4, 0.2], [0.4, 0.6], [0.1, 0.6]])]);
+
+        let text = export_document(&document, ExportFormat::Json);
+        let parsed: JsonExport = serde_json::from_str(&text).expect("the export is JSON");
+        assert_eq!(parsed.source_id.as_deref(), Some("sha256:source"));
+        assert_eq!(parsed.generation, Some(7));
+        assert_eq!(parsed.blocks[0].polygon, Some([[0.1, 0.2], [0.4, 0.2], [0.4, 0.6], [0.1, 0.6]]));
     }
 
     #[test]
