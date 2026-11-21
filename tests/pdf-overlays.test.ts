@@ -5,9 +5,11 @@ import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { describe, expect, it } from 'vitest';
 import { BUNDLED_FONT_NAME, FALLBACK_FACE_NAME } from '../src/export/fonts';
 import {
+  BIDI_LIMITATION,
   DEFAULT_BASELINE_RATIO,
   FONT_LIMITATION,
   PdfExportError,
+  UNICODE_GAP_LIMITATION,
 } from '../src/export/pdf';
 import {
   DEFAULT_ARROW_HEAD_ANGLE,
@@ -123,7 +125,10 @@ function pageContentStream(doc: PDFDocument, pageIndex: number): string {
   return chunks.join('\n');
 }
 
-function pageExtGStates(doc: PDFDocument, pageIndex: number): Array<{ ca?: number; CA?: number }> {
+function pageNamedExtGStates(
+  doc: PDFDocument,
+  pageIndex: number,
+): Array<{ name: string; ca?: number; CA?: number }> {
   const resources = doc.getPage(pageIndex).node.Resources();
   const dict = resources?.lookup(PDFName.of('ExtGState'), PDFDict);
   if (!dict) return [];
@@ -132,10 +137,18 @@ function pageExtGStates(doc: PDFDocument, pageIndex: number): Array<{ ca?: numbe
     const caObj = entry.get(PDFName.of('ca'));
     const strokeCaObj = entry.get(PDFName.of('CA'));
     return {
+      name: key.asString().replace(/^\//, ''),
       ...(caObj instanceof PDFNumber ? { ca: caObj.asNumber() } : {}),
       ...(strokeCaObj instanceof PDFNumber ? { CA: strokeCaObj.asNumber() } : {}),
     };
   });
+}
+
+function pageExtGStates(doc: PDFDocument, pageIndex: number): Array<{ ca?: number; CA?: number }> {
+  return pageNamedExtGStates(doc, pageIndex).map(({ ca, CA }) => ({
+    ...(ca !== undefined ? { ca } : {}),
+    ...(CA !== undefined ? { CA } : {}),
+  }));
 }
 
 function pageImageXObjects(
@@ -612,11 +625,11 @@ describe('H05 PDF overlay composer round-trip (pdf-lib + pdfjs-dist + Noto Sans)
 
     const stream = pageContentStream(reloaded, 0);
     // PNG image placement at PDF (72, 792 - 200 - 64 = 528) with size (96, 64)
-    expect(stream).toContain('72 528 translate');
-    expect(stream).toContain('96 64 scale');
+    expect(stream).toContain('1 0 0 1 72 528 cm');
+    expect(stream).toContain('96 0 0 64 0 0 cm');
     // JPEG image placement at PDF (200, 792 - 200 - 60 = 532) with size (80, 60)
-    expect(stream).toContain('200 532 translate');
-    expect(stream).toContain('80 60 scale');
+    expect(stream).toContain('1 0 0 1 200 532 cm');
+    expect(stream).toContain('80 0 0 60 0 0 cm');
     // Divider line in PDF y-up: y = 792 - 420 = 372
     expect(stream).toContain('72 372 m');
     expect(stream).toContain('540 372 l');
@@ -702,5 +715,452 @@ describe('H05 PDF overlay composer round-trip (pdf-lib + pdfjs-dist + Noto Sans)
 
     const pdfjs = await readWithPdfJs(result.bytes);
     expect(pdfjs.pageTexts[0]).toContain('Tieng Viet - 2026');
+  });
+});
+
+describe('H05 watermark opacity, rotated callout, arrow geometry, and edge cases', () => {
+  it('applies custom watermark opacity, angle, centering, multi-line layout, and under/over layer order', async () => {
+    const result = await composePdfOverlays({
+      pages: [{ number: 1, width: 600, height: 800 }],
+      overlays: [
+        {
+          kind: 'watermark',
+          id: 'wm-under',
+          page: 1,
+          text: 'CONFIDENTIAL\nINTERNAL',
+          rect: { x: 100, y: 100, width: 200, height: 100 },
+          fontSize: 20,
+          opacity: 0.15,
+          angle: 30,
+          layer: 'under',
+        },
+        {
+          kind: 'rect',
+          id: 'fg-rect',
+          page: 1,
+          rect: { x: 150, y: 260, width: 220, height: 90 },
+          fillColor: '#e2e8f0',
+          opacity: 0.55,
+          strokeColor: '#334155',
+          strokeOpacity: 0.85,
+          strokeWidth: 2,
+          rotation: 12,
+        },
+        {
+          kind: 'watermark',
+          id: 'wm-over',
+          page: 1,
+          text: 'DO NOT COPY',
+          center: { x: 420, y: 550 },
+          fontSize: 28,
+          opacity: 0.35,
+          angle: -45,
+          layer: 'over',
+        },
+        {
+          kind: 'watermark',
+          id: 'wm-zero-opacity',
+          page: 1,
+          text: 'HIDDEN',
+          center: { x: 120, y: 680 },
+          fontSize: 16,
+          opacity: 0,
+          angle: 0,
+          layer: 'over',
+        },
+      ],
+      fonts: { bytes: FONT_BYTES },
+    });
+
+    expect(result.limitations).toEqual([]);
+
+    const underPlan = result.plan.pages[0]!.overlays.find(item => item.id === 'wm-under');
+    expect(underPlan?.kind).toBe('watermark');
+    if (underPlan?.kind === 'watermark') {
+      // Box center in reader space is (200, 150) -> PDF (200, 800 - 150 = 650).
+      expect(underPlan.center).toEqual({ x: 200, y: 650 });
+      expect(underPlan.opacity).toBe(0.15);
+      expect(underPlan.pdfRotation).toBe(-30);
+      expect(underPlan.runs).toHaveLength(2);
+    }
+
+    const overPlan = result.plan.pages[0]!.overlays.find(item => item.id === 'wm-over');
+    expect(overPlan?.kind).toBe('watermark');
+    if (overPlan?.kind === 'watermark') {
+      expect(overPlan.center).toEqual({ x: 420, y: 250 });
+      expect(overPlan.opacity).toBe(0.35);
+      expect(overPlan.pdfRotation).toBe(45);
+    }
+
+    const reloaded = await PDFDocument.load(result.bytes);
+    const states = pageNamedExtGStates(reloaded, 0);
+    const gsUnder = states.find(s => s.ca !== undefined && Math.abs(s.ca - 0.15) < 1e-4);
+    const gsRect = states.find(
+      s =>
+        s.ca !== undefined &&
+        Math.abs(s.ca - 0.55) < 1e-4 &&
+        s.CA !== undefined &&
+        Math.abs(s.CA - 0.85) < 1e-4,
+    );
+    const gsOver = states.find(s => s.ca !== undefined && Math.abs(s.ca - 0.35) < 1e-4);
+    const gsZero = states.find(s => s.ca !== undefined && Math.abs(s.ca - 0) < 1e-4);
+
+    expect(gsUnder).toBeDefined();
+    expect(gsRect).toBeDefined();
+    expect(gsOver).toBeDefined();
+    expect(gsZero).toBeDefined();
+
+    const stream = pageContentStream(reloaded, 0);
+    const underPos = stream.indexOf(`/${gsUnder!.name} gs`);
+    const rectPos = stream.indexOf(`/${gsRect!.name} gs`);
+    const overPos = stream.indexOf(`/${gsOver!.name} gs`);
+    expect(underPos).toBeGreaterThanOrEqual(0);
+    expect(rectPos).toBeGreaterThan(underPos);
+    expect(overPos).toBeGreaterThan(rectPos);
+
+    const pdfjs = await readWithPdfJs(result.bytes);
+    expect(pdfjs.pageTexts[0]).toContain('CONFIDENTIAL');
+    expect(pdfjs.pageTexts[0]).toContain('INTERNAL');
+    expect(pdfjs.pageTexts[0]).toContain('DO NOT COPY');
+    expect(pdfjs.pageTexts[0]).toContain('HIDDEN');
+
+    const line1 = pdfjs.pageItems[0]!.find(item => item.str.includes('CONFIDENTIAL'))!;
+    const line2 = pdfjs.pageItems[0]!.find(item => item.str.includes('INTERNAL'))!;
+    const overItem = pdfjs.pageItems[0]!.find(item => item.str.includes('DO NOT COPY'))!;
+    const zeroItem = pdfjs.pageItems[0]!.find(item => item.str.includes('HIDDEN'))!;
+
+    expect(line1.angleDeg).toBeCloseTo(-30, 1);
+    expect(line2.angleDeg).toBeCloseTo(-30, 1);
+    expect(overItem.angleDeg).toBeCloseTo(45, 1);
+    expect(zeroItem.angleDeg).toBeCloseTo(0, 1);
+  });
+
+  it('rotates callouts around box center, anchors knee/arrow leader on rotated edge, and preserves text angle in round-trip', async () => {
+    const rect = { x: 200, y: 100, width: 120, height: 60 };
+    const rotation = 30;
+    const knee = { x: 260, y: 260 };
+    const pointer = { x: 340, y: 310 };
+
+    const result = await composePdfOverlays({
+      pages: [{ number: 1, width: 612, height: 792 }],
+      overlays: [
+        {
+          kind: 'callout',
+          id: 'rotated-callout',
+          page: 1,
+          rect,
+          text: 'Ghi chú xoay',
+          fontSize: 10,
+          padding: 6,
+          rotation,
+          backgroundColor: null,
+          borderColor: '#b45309',
+          borderWidth: 2,
+          knee,
+          pointer,
+          pointerArrow: true,
+        },
+      ],
+      fonts: { bytes: FONT_BYTES },
+    });
+
+    const planned = result.plan.pages[0]!.overlays[0]!;
+    expect(planned.kind).toBe('callout');
+    if (planned.kind === 'callout') {
+      // Unrotated PDF rect: x=200, y=632, width=120, height=60 -> center=(260, 662).
+      expect(planned.center).toEqual({ x: 260, y: 662 });
+      expect(planned.pdfRotation).toBe(-30);
+      expect(planned.backgroundColor).toBeUndefined();
+
+      // Bottom-left rotated corner around (260, 662) by -30 deg.
+      const theta = (-30 * Math.PI) / 180;
+      const expectedOriginX = 260 + (-60) * Math.cos(theta) - (-30) * Math.sin(theta);
+      const expectedOriginY = 662 + (-60) * Math.sin(theta) + (-30) * Math.cos(theta);
+      expect(planned.origin.x).toBeCloseTo(expectedOriginX, 3);
+      expect(planned.origin.y).toBeCloseTo(expectedOriginY, 3);
+
+      // Anchor point must lie directly on the rotated box boundary along center -> knee.
+      const dx = planned.pointer!.start.x - planned.center.x;
+      const dy = planned.pointer!.start.y - planned.center.y;
+      const localX = dx * Math.cos(theta) + dy * Math.sin(theta);
+      const localY = -dx * Math.sin(theta) + dy * Math.cos(theta);
+      const boundaryRatio = Math.max(Math.abs(localX) / 60, Math.abs(localY) / 30);
+      expect(boundaryRatio).toBeCloseTo(1, 3);
+      expect(planned.pointer!.start.x).toBeCloseTo(260, 2);
+      expect(planned.pointer!.knee).toEqual({ x: 260, y: 792 - 260 });
+      expect(planned.pointer!.end).toEqual({ x: 340, y: 792 - 310 });
+      expect(planned.pointer!.arrowHead?.tip).toEqual({ x: 340, y: 792 - 310 });
+    }
+
+    const pdfjs = await readWithPdfJs(result.bytes);
+    expect(pdfjs.pageTexts[0]).toContain('Ghi chú xoay');
+    const item = pdfjs.pageItems[0]!.find(entry => entry.str.includes('Ghi chú xoay'))!;
+    expect(item.angleDeg).toBeCloseTo(-30, 1);
+
+    // Verify first baseline origin matches the rotated local (-60+6, 30-6-10*DEFAULT_BASELINE_RATIO).
+    const theta = (-30 * Math.PI) / 180;
+    const lx = -60 + 6;
+    const ly = 30 - 6 - 10 * DEFAULT_BASELINE_RATIO;
+    const expectedTextX = 260 + lx * Math.cos(theta) - ly * Math.sin(theta);
+    const expectedTextY = 662 + lx * Math.sin(theta) + ly * Math.cos(theta);
+    expect(item.x).toBeCloseTo(expectedTextX, 1);
+    expect(item.y).toBeCloseTo(expectedTextY, 1);
+
+    const reloaded = await PDFDocument.load(result.bytes);
+    const stream = pageContentStream(reloaded, 0);
+    // Leader line moves to boundary anchor (260, ~627.36) and routes through knee (260, 532).
+    expect(stream).toContain('260 532 l');
+    // Filled arrowhead closes and fills triangle at tip (340, 482).
+    expect(stream).toContain('340 482 m');
+  });
+
+  it('computes exact arrow head geometry across directions, styles, short shafts, and guards', () => {
+    // 3-4-5 diagonal arrow from (10, 20) to (70, 100): length=100, ux=0.6, uy=0.8.
+    const filled = computeArrowGeometry(
+      { x: 10, y: 20 },
+      { x: 70, y: 100 },
+      { headLength: 10, headAngle: 30, headStyle: 'filled' },
+    );
+    const back = 10 * Math.cos(Math.PI / 6);
+    const side = 10 * Math.sin(Math.PI / 6);
+    const baseX = 70 - 0.6 * back;
+    const baseY = 100 - 0.8 * back;
+    expect(filled.tip).toEqual({ x: 70, y: 100 });
+    expect(filled.shaftEnd.x).toBeCloseTo(baseX, 3);
+    expect(filled.shaftEnd.y).toBeCloseTo(baseY, 3);
+    expect(filled.leftWing.x).toBeCloseTo(baseX - 0.8 * side, 3);
+    expect(filled.leftWing.y).toBeCloseTo(baseY + 0.6 * side, 3);
+    expect(filled.rightWing.x).toBeCloseTo(baseX + 0.8 * side, 3);
+    expect(filled.rightWing.y).toBeCloseTo(baseY - 0.6 * side, 3);
+
+    const leftLen = Math.hypot(filled.tip.x - filled.leftWing.x, filled.tip.y - filled.leftWing.y);
+    const rightLen = Math.hypot(filled.tip.x - filled.rightWing.x, filled.tip.y - filled.rightWing.y);
+    expect(leftLen).toBeCloseTo(10, 3);
+    expect(rightLen).toBeCloseTo(10, 3);
+
+    // Open style leaves shaft extending to tip; very short shaft clamps filled shaftEnd to start.
+    const open = computeArrowGeometry(
+      { x: 0, y: 0 },
+      { x: 50, y: 0 },
+      { headLength: 12, headAngle: 45, headStyle: 'open' },
+    );
+    expect(open.shaftEnd).toEqual({ x: 50, y: 0 });
+    expect(open.leftWing.x).toBeCloseTo(50 - 12 * Math.SQRT1_2, 3);
+    expect(open.leftWing.y).toBeCloseTo(12 * Math.SQRT1_2, 3);
+    expect(open.rightWing.y).toBeCloseTo(-12 * Math.SQRT1_2, 3);
+
+    const shortFilled = computeArrowGeometry(
+      { x: 10, y: 10 },
+      { x: 15, y: 10 },
+      { headLength: 20, headAngle: 30, headStyle: 'filled' },
+    );
+    expect(shortFilled.shaftEnd).toEqual({ x: 10, y: 10 });
+
+    expect(() => computeArrowGeometry({ x: 0, y: 0 }, { x: 10, y: 0 }, { headAngle: 0 })).toThrow(PdfExportError);
+    expect(() => computeArrowGeometry({ x: 0, y: 0 }, { x: 10, y: 0 }, { headAngle: 90 })).toThrow(PdfExportError);
+    expect(() => computeArrowGeometry({ x: 0, y: 0 }, { x: 10, y: 0 }, { headLength: 0 })).toThrow(PdfExportError);
+    expect(() => computeArrowGeometry({ x: Number.NaN, y: 0 }, { x: 10, y: 0 })).toThrow(PdfExportError);
+  });
+
+  it('draws filled vs open arrows, dashed lines, rotated ellipse/image, and subarray image buffers in PDF stream', async () => {
+    const jpegRaw = minimalJpeg();
+    const paddedBuffer = new Uint8Array(jpegRaw.length + 16);
+    paddedBuffer.fill(0xab);
+    paddedBuffer.set(jpegRaw, 9);
+    const jpegSubarray = paddedBuffer.subarray(9, 9 + jpegRaw.length);
+
+    const result = await composePdfOverlays({
+      pages: [{ number: 1, width: 600, height: 600 }],
+      overlays: [
+        {
+          kind: 'arrow',
+          id: 'filled-arrow',
+          page: 1,
+          start: { x: 50, y: 100 },
+          end: { x: 150, y: 100 },
+          headLength: 10,
+          headAngle: 30,
+          headStyle: 'filled',
+          strokeColor: '#dc2626',
+          strokeWidth: 2,
+        },
+        {
+          kind: 'arrow',
+          id: 'open-dashed-arrow',
+          page: 1,
+          start: { x: 50, y: 200 },
+          end: { x: 200, y: 200 },
+          headLength: 14,
+          headAngle: 35,
+          headStyle: 'open',
+          dashArray: [6, 3],
+          lineCap: 'round',
+          strokeColor: '#0284c7',
+          strokeWidth: 2,
+          opacity: 0.75,
+        },
+        {
+          kind: 'ellipse',
+          id: 'rotated-ellipse',
+          page: 1,
+          rect: { x: 300, y: 80, width: 140, height: 70 },
+          fillColor: '#fde68a',
+          strokeColor: '#b45309',
+          strokeWidth: 2,
+          opacity: 0.6,
+          strokeOpacity: 0.9,
+          rotation: 25,
+        },
+        {
+          kind: 'image',
+          id: 'subarray-jpeg',
+          page: 1,
+          rect: { x: 320, y: 240, width: 80, height: 60 },
+          format: 'jpeg',
+          bytes: jpegSubarray,
+          rotation: -15,
+          opacity: 0.8,
+        },
+      ],
+      fonts: { bytes: FONT_BYTES },
+    });
+
+    const reloaded = await PDFDocument.load(result.bytes);
+    const images = pageImageXObjects(reloaded, 0);
+    expect(images).toEqual([{ width: 1, height: 1, filter: '/DCTDecode' }]);
+
+    const stream = pageContentStream(reloaded, 0);
+    // Filled arrow tip at (150, 600 - 100 = 500) closes and fills triangle.
+    expect(stream).toContain('150 500 m');
+    expect(stream).toMatch(/150 500 m[\s\S]*?h\s+f/);
+    // Open dashed arrow has dash pattern [6 3], round line cap (1 J), and open V-barbs stroked (S).
+    expect(stream).toMatch(/\[\s*6\s+3\s*\]\s+0\s+d/);
+    expect(stream).toContain('1 J');
+    expect(stream).toMatch(/200 400 l[\s\S]*?S/);
+  });
+
+  it('handles autoFit, overflow truncation, RTL limitation, empty skips, multi-page placement, and corrupt image errors', async () => {
+    const plan = planPdfOverlays(
+      [
+        { number: 1, width: 300, height: 400 },
+        { number: 2, width: 300, height: 400 },
+      ],
+      [
+        {
+          kind: 'textbox',
+          id: 'fit-box',
+          page: 1,
+          rect: { x: 20, y: 20, width: 120, height: 32 },
+          text: 'Long paragraph that shrinks to fit inside thirty-two points height',
+          fontSize: 14,
+          autoFit: true,
+          minimumFontSize: 6,
+          align: 'center',
+        },
+        {
+          kind: 'textbox',
+          id: 'overflow-box',
+          page: 1,
+          rect: { x: 20, y: 80, width: 90, height: 16 },
+          text: 'This text overflows without autoFit enabled',
+          fontSize: 12,
+          autoFit: false,
+        },
+        {
+          kind: 'textbox',
+          id: 'rtl-box',
+          page: 2,
+          rect: { x: 20, y: 20, width: 200, height: 40 },
+          text: 'RTL logical sample',
+          direction: 'rtl',
+          fontSize: 12,
+        },
+        {
+          kind: 'textbox',
+          id: 'cjk-skip',
+          page: 2,
+          rect: { x: 20, y: 70, width: 100, height: 30 },
+          text: '中文',
+        },
+        {
+          kind: 'textbox',
+          id: 'empty-box',
+          page: 2,
+          rect: { x: 20, y: 110, width: 100, height: 30 },
+          text: '   \n\t  ',
+        },
+        {
+          kind: 'watermark',
+          id: 'empty-wm',
+          page: 1,
+          text: '   ',
+        },
+      ],
+      { measure: measureHalfEm, unicode: true },
+    );
+
+    expect(plan.overlayCount).toBe(6);
+    expect(plan.appliedCount).toBe(3);
+    expect(plan.skipped).toEqual([
+      { id: 'cjk-skip', page: 2, kind: 'textbox', reason: 'unrepresentable' },
+      { id: 'empty-box', page: 2, kind: 'textbox', reason: 'empty' },
+      { id: 'empty-wm', page: 1, kind: 'watermark', reason: 'empty' },
+    ]);
+    expect(plan.limitations).toContain(BIDI_LIMITATION);
+    expect(plan.limitations).toContain(UNICODE_GAP_LIMITATION);
+
+    const fit = plan.pages[0]!.overlays.find(item => item.id === 'fit-box');
+    expect(fit?.kind).toBe('textbox');
+    if (fit?.kind === 'textbox') {
+      expect(fit.fontSize).toBeLessThan(14);
+      expect(fit.fontSize).toBeGreaterThanOrEqual(6);
+      expect(fit.truncated).toBe(false);
+    }
+
+    const overflow = plan.pages[0]!.overlays.find(item => item.id === 'overflow-box');
+    expect(overflow?.kind).toBe('textbox');
+    if (overflow?.kind === 'textbox') {
+      expect(overflow.truncated).toBe(true);
+    }
+
+    expect(plan.pages[1]!.overlays.map(item => item.id)).toEqual(['rtl-box']);
+
+    // Multi-page compose keeps page 1 and page 2 overlays strictly on their respective pages.
+    const multi = await composePdfOverlays({
+      pages: [
+        { number: 1, width: 400, height: 400 },
+        { number: 2, width: 400, height: 400 },
+      ],
+      overlays: [
+        { kind: 'textbox', page: 1, rect: { x: 20, y: 20, width: 200, height: 48 }, text: 'Page one\nsecond line' },
+        { kind: 'textbox', page: 2, rect: { x: 20, y: 20, width: 200, height: 30 }, text: 'Page two note' },
+      ],
+      fonts: { bytes: FONT_BYTES },
+    });
+    expect(multi.limitations).toEqual([]);
+    const pdfjs = await readWithPdfJs(multi.bytes);
+    expect(pdfjs.numPages).toBe(2);
+    expect(pdfjs.pageTexts[0]).toContain('Page one');
+    expect(pdfjs.pageTexts[0]).toContain('second line');
+    expect(pdfjs.pageTexts[0]).not.toContain('Page two note');
+    expect(pdfjs.pageTexts[1]).toContain('Page two note');
+    expect(pdfjs.pageTexts[1]).not.toContain('Page one note');
+
+    await expect(
+      composePdfOverlays({
+        pages: [{ number: 1, width: 400, height: 400 }],
+        overlays: [
+          {
+            kind: 'image',
+            id: 'bad-png',
+            page: 1,
+            rect: { x: 10, y: 10, width: 50, height: 50 },
+            format: 'png',
+            bytes: new Uint8Array([1, 2, 3, 4]),
+          },
+        ],
+        fonts: { bytes: FONT_BYTES },
+      }),
+    ).rejects.toThrow(PdfExportError);
   });
 });
