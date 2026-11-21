@@ -192,4 +192,3 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) return;
   throw Object.assign(new Error('PDF import was aborted.'), { name: 'AbortError' });
 }
-
