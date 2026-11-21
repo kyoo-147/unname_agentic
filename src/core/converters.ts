@@ -182,16 +182,21 @@ export function convertDocx(bytes: Uint8Array, options: ConvertOptions = {}): Co
 
   const body = findFirstElement(docRoot, 'body') ?? docRoot;
   const extracted: FlowBlockSpec[] = [];
-  for (const child of body.children) {
-    const local = localNameOf(child.tag);
-    if (local === 'p') {
-      const parsed = extractDocxParagraph(child, headingStyles);
-      if (parsed) extracted.push(parsed);
-    } else if (local === 'tbl') {
-      const tableText = extractDocxTable(child);
-      if (tableText.length > 0) extracted.push({ type: 'table', text: tableText });
+  const collectBodyBlocks = (container: XmlElement): void => {
+    for (const child of container.children) {
+      const local = localNameOf(child.tag);
+      if (local === 'p') {
+        const parsed = extractDocxParagraph(child, headingStyles);
+        if (parsed) extracted.push(parsed);
+      } else if (local === 'tbl') {
+        const tableText = extractDocxTable(child);
+        if (tableText.length > 0) extracted.push({ type: 'table', text: tableText });
+      } else if (local === 'sdt' || local === 'sdtContent') {
+        collectBodyBlocks(child);
+      }
     }
-  }
+  };
+  collectBodyBlocks(body);
 
   const layout = paginateFlowBlocks(extracted, PAGE_WIDTH_PORTRAIT, PAGE_HEIGHT_PORTRAIT);
   const metadata: SourceMetadata = {
@@ -233,9 +238,11 @@ export function convertPptx(bytes: Uint8Array, options: ConvertOptions = {}): Co
     let fallbackY = MARGIN_Y;
     const maxW = Math.max(1, slideSize.width - MARGIN_X * 2);
     for (const shape of shapes) {
-      const rect = shape.rect
-        ? clampRectToPage(shape.rect, slideSize.width, slideSize.height)
-        : allocateFallbackRect(shape.text, shape.type, maxW, slideSize.height, fallbackY);
+      const rect = clampRectToPage(
+        shape.rect ?? allocateFallbackRect(shape.text, shape.type, maxW, slideSize.height, fallbackY),
+        slideSize.width,
+        slideSize.height,
+      );
       if (!shape.rect) {
         fallbackY = Math.min(slideSize.height - MARGIN_Y - 12, rect.y + rect.height + BLOCK_GAP);
       }
@@ -506,12 +513,29 @@ function resolveFormat(bytes: Uint8Array, options: ConvertOptions): ConvertibleF
   if ((CONVERTIBLE_FORMATS as readonly string[]).includes(sniffed.format)) {
     return sniffed.format as ConvertibleFormat;
   }
+  if (hasUtf16Bom(bytes)) {
+    if (sniffed.evidence.some(entry => entry.code === 'html-extension')) {
+      return 'html';
+    }
+    const sampleEnd = Math.min(bytes.length, 1024) & ~1;
+    const head = decodeTextBytes(bytes.subarray(0, sampleEnd));
+    if (/<!doctype\s+html|<html[\s>]/iu.test(head)) {
+      return 'html';
+    }
+  }
   if (sniffed.evidence.some(entry => entry.code === 'html-extension') && looksUtf8Text(bytes)) {
     return 'html';
   }
   throw new ConverterError(
     'unsupported-format',
     `Format "${sniffed.format}" cannot be converted directly by E12 format converters.`,
+  );
+}
+
+function hasUtf16Bom(bytes: Uint8Array): boolean {
+  return (
+    bytes.length >= 2 &&
+    ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff))
   );
 }
 
