@@ -65,21 +65,21 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | F03 | **P1** | Preprocessing: deskew/binarize/denoise/upscale pipeline | OCR tăng chất lượng đo được. | ✅ `src/core/preprocess.ts` + 19 test: đo stats, ước lượng skew bằng projection profile, quyết định kèm lý do, ngưỡng export |
 | F04 | **P1** | Phân tích bảng từ ảnh scan (row/col detection) | Bảng scan thành cell có toạ độ. | ✅ `src/core/table-grid.ts` + 18 test: profile theo trục, merge có ink, speck bị loại, confidence = 1 - biến thiên pitch, từ chối có lý do |
 | F05 | **P1** | Searchable PDF tạo text layer từ scan | Copy/search đúng vị trí mà ảnh gốc không mất. | ✅ `src/export/searchable.ts` + 20 test: text render mode 3, đúng baseline, pdfjs trích được chữ |
-| F06 | **P1** | Mixed OCR theo vùng, bỏ qua text gốc đã tốt | Không tạo 2 lớp chữ trùng nhau.  ⬜ |
+| F06 | **P1** | Mixed OCR theo vùng, bỏ qua text gốc đã tốt | Không tạo 2 lớp chữ trùng nhau. | ✅ \src/core/mixed-ocr.ts\ + 19 test: phân loại keep-digital/run-ocr/skip-overlap, khử trùng theo IoU/containment, ghép reading-order không 2 lớp |
 | F07 | **P1** | Agentic OCR query-driven chỉ đọc vùng cần thiết | Một câu hỏi kích hoạt inspect/crop/zoom/extract có trace. | 🟡 `native-shell/src/vision_tools.rs` + 9 test: crop/zoom/rotate OCR một vùng, map toạ độ về trang, ToolTrace + budget; chưa nối vào chat agent |
 | F08 | **P1** | Visual grounding/citation vào bbox đa giác | Click answer focus đúng box nguồn. | 🟡 Core có `citations.ts` (web) và `Chat::citations` (native, 15 test); UI chưa vẽ chip click |
 | F10 | **P1** | Offline/no-network mode e2e (không cloud call) | 0 request ra ngoài, có test. | ✅ `src/core/network-guard.ts` + 14 test: ghi mọi attempt kể cả bị chặn, policy deny/loopback/origin list, wrap transport để test cả lỗi lẫn log |
-| F11 | **P2** | So sánh nhiều OCR engines bằng confidence và consensus | Ghi engine winner theo vùng và chi phí.  ⬜ |
-| F12 | **P2** | Image understanding: biểu đồ, sơ đồ, hình kỹ thuật | Kết quả mô tả được gắn với ảnh nguồn.  ⬜ |
-| F13 | **P2** | Phát hiện mâu thuẫn OCR bằng kiểm tra số/ngày/đơn vị | Flag số hoặc ký tự rủi ro cao để duyệt.  ⬜ |
-| F14 | **P3** | Human-in-the-loop sửa OCR và tái sử dụng correction | Không sửa file gốc trừ khi người dùng xác nhận.  ⬜ |
+| F11 | **P2** | So sánh nhiều OCR engines bằng confidence và consensus | Ghi engine winner theo vùng và chi phí. | ✅ \src/core/ocr-consensus.ts\ + 23 test: so sánh Levenshtein/token/dấu Việt/số, consensus vượt outlier tự tin thái quá, ghi winner và chi phí từng vùng |
+| F12 | **P2** | Image understanding: biểu đồ, sơ đồ, hình kỹ thuật | Kết quả mô tả được gắn với ảnh nguồn. | ✅ \src/core/image-understanding.ts\ + 26 test: phân loại chart/diagram/flowchart/technical, gắn caption+bbox, chặn số bịa và abstain khi ảnh mờ |
+| F13 | **P2** | Phát hiện mâu thuẫn OCR bằng kiểm tra số/ngày/đơn vị | Flag số hoặc ký tự rủi ro cao để duyệt. | ✅ \src/core/ocr-verify.ts\ + 22 test: bắt nhầm 0/O, 1/l/I, 5/S, 8/B, dấu thập phân, ngày trái ngược, đơn vị lỗi và tổng cột lệch |
+| F14 | **P3** | Human-in-the-loop sửa OCR và tái sử dụng correction | Không sửa file gốc trừ khi người dùng xác nhận. | ✅ \src/core/ocr-corrections.ts\ + 8 test: bất biến SHA-256 nguồn, bắt buộc \confirmed: true\, preview/rollback và rút rule tái sử dụng |
 | F09 | **P2** | Cost/time estimate trước khi chạy batch | Ước lượng thời gian và tiền trước khi chạy. | ✅ `src/core/estimate.ts` + 34 test: 4 stage, OCR chỉ khi có trang scan, total = tổng stage, cost null khi chưa biết giá, câu 3 ngôn ngữ |
 
 ### G. Dịch thuật chuyên nghiệp — 16 mục
 
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
-| G01 | **P0** | Xuất PDF đơn ngữ thật, không qua Print | Tải file PDF hợp lệ mở được bằng reader độc lập.  ⬜ |
+| G01 | **P0** | Xuất PDF đơn ngữ thật, không qua Print | Tải file PDF hợp lệ mở được bằng reader độc lập. | ✅ \src/export/monolingual-pdf.ts\ + 17 test: pdf-lib + Noto Sans + reflow + metadata + round-trip mở lại qua pdf-lib và pdfjs-dist đúng tiếng Việt |
 | G02 | **P2** | Book mode (facing pages) cho tài liệu sách | Đọc 2 trang đối diện mượt. | ✅ `src/core/book-mode.ts` + 32 test: cover đóng spread riêng, blank parity có ghi nhận, folio lề ngoài, `visibilityFor` trả đúng pane |
 | G03 | **P1** | Domain-aware translation (legal, medical, finance, technical) | Glossary + style theo domain. | ✅ `src/core/domain.ts` + 30 test: 5 domain + general, trọng số có tài liệu, guidance 3 ngôn ngữ, glossary hints; chưa nối vào `prompt.ts` |
 | G04 | **P1** | Translation memory (TM) theo segment và version | Đoạn lặp được tái sử dụng và truy nguyên bản gốc. | ✅ `src/core/tm.ts` + 17 test: exact 1.0, gần đúng 0.875, import/export byte-identical |
@@ -88,13 +88,13 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | G07 | **P1** | Layout-preserving reflow với fit/overflow detection | Không mất chữ khi dịch dài hơn. | ✅ `src/core/reflow.ts` + 20 test: wrap → shrink 0.5pt → condense → overflow có dấu và `clippedCharacters`, không cắt chữ Latin |
 | G08 | **P2** | Consistency check cho thuật ngữ trong cùng tài liệu | Cùng term phải cùng bản dịch. | ✅ `src/core/consistency.ts` + 15 test: glossary vi phạm = error, 2 cách viết = warn, term xuất hiện 1 lần không báo, applyCanonical chỉ sửa cái được duyệt |
 | G09 | **P2** | Bilingual/parallel export ghép câu theo segment | Bản song ngữ đọc song song được. | ✅ `src/core/parallel-text.ts` + 24 test: align theo block id, ratio báo cắt cụt, Markdown có anchor, TMX round-trip, XML lỗi báo dòng |
-| G10 | **P2** | Lựa chọn văn phong formal/technical/legal/academic | Profile được lưu và đưa vào prompt versioned.  ⬜ |
+| G10 | **P2** | Lựa chọn văn phong formal/technical/legal/academic | Profile được lưu và đưa vào prompt versioned. | ✅ \src/core/style-profile.ts\ + 14 test: 5 văn phong + custom, serialize có version và ghép vào \prompt.ts\/\domain.ts\ |
 | G11 | **P2** | Translation QA: số, thuật ngữ, câu phủ định, đơn vị | Hiển thị lỗi có bằng chứng để reviewer duyệt. | ✅ `src/core/qa.ts` + 22 test: số/đơn vị/phủ định/glossary/placeholder, mỗi issue có trích nguồn hai phía |
 | G12 | **P2** | Dịch bảng giữ cell alignment và công thức số | Bảng bản dịch không đổi cấu trúc/giá trị. | ✅ `src/core/table-translate.ts` + 20 test: ô số/ngày/tiền giữ nguyên, cache, span giữ, diff/merge theo ô |
 | G13 | **P2** | Translation cache thông minh có version | Cache hit/miss, không trả bản dịch cũ. | ✅ `src/core/cache.ts` + 27 test: key = SHA-256(source, langs, provider, model, promptVersion, glossary), TTL rồi LRU, persist/restore có version |
-| G14 | **P2** | Auto route engine theo ngôn ngữ, độ dài, chi phí, privacy | Có rule/override và telemetry cục bộ.  ⬜ |
-| G15 | **P2** | Import/export glossary và TM: CSV/TMX/TBX ở mức phù hợp | Đọc/ghi UTF-8 và báo lỗi schema rõ ràng.  ⬜ |
-| G16 | **P3** | Reviewer mode phân vai translator/editor/approver | Mỗi chỉnh sửa có trạng thái và audit log.  ⬜ |
+| G14 | **P2** | Auto route engine theo ngôn ngữ, độ dài, chi phí, privacy | Có rule/override và telemetry cục bộ. | ✅ \src/core/engine-router.ts\ + 15 test: chọn engine theo ngôn ngữ/chi phí/glossary/override, offline chặn tuyệt đối cloud, telemetry JSON |
+| G15 | **P2** | Import/export glossary và TM: CSV/TMX/TBX ở mức phù hợp | Đọc/ghi UTF-8 và báo lỗi schema rõ ràng. | ✅ \src/core/tm-exchange.ts\ + 14 test: RFC4180 CSV, TMX 1.4b, TBX-Basic UTF-8/BOM round-trip và báo lỗi kèm số dòng |
+| G16 | **P3** | Reviewer mode phân vai translator/editor/approver | Mỗi chỉnh sửa có trạng thái và audit log. | ✅ \src/core/reviewer-mode.ts\ + 10 test: máy trạng thái 3 vai, chặn vượt quyền, diff theo từ và chuỗi SHA-256 trên \AuditLog\ |
 
 ### H. PDF editor, xuất file & công cụ tài liệu — 16 mục
 
