@@ -2,7 +2,7 @@
 //! (see `sidebar.rs`) and the editor on the right, with the
 //! 64px top bar (breadcrumb title + save status) above the page.
 
-use crate::export_native::{ExportBlock, ExportDocument, ExportFormat, export_document, suggested_name, write_export_bytes_path, write_export_path};
+use crate::export_native::{ExportBlock, ExportDocument, ExportFormat, export_document_bytes, suggested_name, write_export_bytes_path};
 use crate::input::{TextField, TextFieldEvent};
 use crate::settings::display_title;
 use crate::store::Entry;
@@ -645,8 +645,14 @@ impl Workspace {
             }) else {
                 return;
             };
-            let content = export_document(&document, format);
-            let write = cx.background_executor().spawn(async move { write_export_path(&path, &content, false) });
+            let bytes = match export_document_bytes(&document, format) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    let _ = this.update(cx, |workspace, cx| workspace.show_toast_kind(ToastKind::Info, &format!("{}: {error:#}", crate::i18n::tr3("无法导出此格式", "This export format is unavailable", "Định dạng xuất này chưa khả dụng")), cx));
+                    return;
+                }
+            };
+            let write = cx.background_executor().spawn(async move { write_export_bytes_path(&path, &bytes, false) });
             let result = write.await;
             let _ = this.update(cx, |workspace, cx| match result {
                 Ok(path) => workspace.show_toast(&crate::i18n::tr3_fill("已导出 {}", "Exported {}", "Đã xuất {}", path.display()), cx),
@@ -702,6 +708,8 @@ impl Workspace {
             }))
             .child(Self::export_menu_row(cx, "export-markdown", ExportFormat::Markdown))
             .child(Self::export_menu_row(cx, "export-text", ExportFormat::Text))
+            .child(Self::export_menu_row(cx, "export-html", ExportFormat::Html))
+            .child(Self::export_menu_row(cx, "export-docx", ExportFormat::Docx))
             .child(Self::export_menu_row(cx, "export-json", ExportFormat::Json))
             .child(Self::export_menu_row(cx, "export-pdf", ExportFormat::Pdf));
         Some(deferred(anchored().anchor(Corner::TopRight).position(origin).snap_to_window_with_margin(px(8.)).child(menu)).with_priority(2).into_any_element())
