@@ -106,7 +106,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | H04 | **P1** | Bookmarks/highlight/note cá nhân | Lưu theo user, mở lại vẫn còn. | ✅ `src/core/annotations.ts` + 14 test: anchor theo block, backlinks, reanchor sau re-parse (kept/moved/orphan), export/import có version |
 | H05 | **P1** | Chèn text, callout, hình, shape, watermark | Export lại PDF và giữ được toạ độ. | ✅ `src/export/pdf-overlays.ts` + 13 test: chèn textbox/callout/PNG/JPEG/rect/ellipse/line/arrow/watermark xoay mờ qua pdf-lib + Noto Sans, round-trip bằng `pdf-lib` và `pdfjs-dist` |
 | H06 | **P1** | Sửa text OCR và translated block inline | Undo/redo, autosave và so khớp nguồn. | ✅ `src/core/inline-editor.ts` + 18 test: sửa inline OCR/dịch, undo/redo, autosave schedule, diff nguồn theo từ/ký tự và chặn xung đột `RevisionConflictError` |
-| H07 | **P1** | Tách, ghép, đổi thứ tự, xoay, xoá/trích trang | Page thumbnails phản ánh edit tức thời.  ⬜ |
+| H07 | **P1** | Tách, ghép, đổi thứ tự, xoay, xoá/trích trang | Page thumbnails phản ánh edit tức thời. | ✅ `src/export/pdf-pages.ts` + 18 test: split/merge/reorder/rotate/delete/extract thật bằng pdf-lib, `PageThumbnailDeck` cập nhật tức thời + round-trip `pdfjs-dist` |
 | H08 | **P1** | Trích bảng ra CSV/XLSX và công thức ra LaTeX | Dữ liệu đúng row/col và chọn đúng bảng.  ⬜ |
 | H09 | **P2** | Preserve metadata/outline/AcroForm khi xuất | Mở lại giữ metadata và form. | 🟡 `src/core/export-check.ts` kiểm cấu trúc file trước khi giao; chưa ghi metadata/outline vào file xuất |
 | H10 | **P2** | Diff hai phiên bản tài liệu (text + visual) | Chỉ ra thay đổi có toạ độ. | 🟡 `src/core/diff.ts` + 13 test: diff text theo block/từ, bỏ nhiễu whitespace/1-2 ký tự; **visual diff chưa** |
