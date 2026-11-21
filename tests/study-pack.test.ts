@@ -424,3 +424,361 @@ describe('buildStudyPack: concept map, Mermaid graph TD, and deterministic seria
     expect(fromJson(toJson(pack))).toEqual(pack);
   });
 });
+
+describe('buildStudyPack: Vietnamese and bilingual EN/VI study packs', () => {
+  it('generates Vietnamese flashcards, 4-kind quiz questions, and concept map with exact citations', () => {
+    const ir = docOf(
+      [
+        block(1, 'Sinh học thực vật', 'heading', 0),
+        block(
+          1,
+          'Quang hợp là quá trình tổng hợp chất hữu cơ từ ánh sáng mặt trời. Diệp lục được định nghĩa là sắc tố xanh hấp thụ quang năng.',
+          'paragraph',
+          20,
+        ),
+        block(
+          1,
+          'Quang hợp tạo ra glucose bằng cách hấp thụ photon nhờ Diệp lục.',
+          'paragraph',
+          40,
+        ),
+        block(2, 'So sánh và Công thức', 'heading', 0),
+        block(
+          2,
+          'Năng lượng photon tuân theo công thức E = h × f trong chân không.',
+          'paragraph',
+          20,
+        ),
+        block(
+          2,
+          'Hô hấp hiếu khí tạo ra 38 ATP, trong khi Lên men chỉ đạt 2 ATP trên mỗi phân tử glucose.',
+          'paragraph',
+          40,
+        ),
+        block(
+          2,
+          'Lưu ý: Oxy đóng vai trò chất nhận electron cuối cùng trong hô hấp hiếu khí.',
+          'paragraph',
+          60,
+        ),
+      ],
+      'vi',
+      'doc-vi-bio',
+    );
+
+    const pack = buildStudyPack(ir);
+
+    expect(pack.language).toBe('vi');
+    expect(pack.notes.definitions.map(d => d.term)).toEqual(['Quang hợp', 'Diệp lục']);
+
+    const defCard = pack.flashcards.find(
+      c => c.kind === 'definition' && c.front === 'Quang hợp là gì?',
+    );
+    expect(defCard).toBeDefined();
+    expect(defCard?.back).toBe('quá trình tổng hợp chất hữu cơ từ ánh sáng mặt trời');
+    expect(defCard?.citation.documentId).toBe('doc-vi-bio');
+    expect(defCard?.citation.page).toBe(1);
+
+    const kinds = new Set(pack.questions.map(q => q.kind));
+    for (const kind of QUESTION_KINDS) {
+      expect(kinds.has(kind)).toBe(true);
+    }
+
+    const mechQ = pack.questions.find(q => q.kind === 'mechanism');
+    expect(mechQ?.prompt).toContain('Theo mục');
+    expect(mechQ?.answerKey.answer).toContain('hấp thụ photon nhờ Diệp lục');
+
+    const cmpQ = pack.questions.find(q => q.kind === 'comparison');
+    expect(cmpQ?.prompt).toContain('được so sánh như thế nào');
+    expect(cmpQ?.answerKey.answer).toContain('Hô hấp hiếu khí');
+    expect(cmpQ?.answerKey.answer).toContain('Lên men');
+
+    const formulaQ = pack.questions.find(q => q.kind === 'formula');
+    expect(formulaQ?.answerKey.latex).toBe('E = h \\times f');
+
+    expect(pack.conceptMap.mermaid).toContain('Quang hợp');
+    expect(pack.conceptMap.mermaid).toContain('Diệp lục');
+    expect(verifyStudyPack(pack, ir).valid).toBe(true);
+
+    // Diacritic-folded grounding checks accept matching Vietnamese answer and reject wrong figure.
+    const viCitation = defCard!.citation;
+    expect(
+      verifyAnswerKey(
+        {
+          answer: 'Quang hợp là quá trình tổng hợp chất hữu cơ từ ánh sáng mặt trời.',
+          citations: [viCitation],
+        },
+        ir,
+      ).supported,
+    ).toBe(true);
+
+    const cmpCitation = cmpQ!.answerKey.citations[0]!;
+    expect(
+      verifyAnswerKey(
+        {
+          answer: 'Hô hấp hiếu khí tạo ra 99 ATP trong mỗi chu trình.',
+          citations: [cmpCitation],
+        },
+        ir,
+      ),
+    ).toMatchObject({ supported: false, reasons: ['unsupported-claim'] });
+  });
+
+  it('handles mixed English and Vietnamese sections inside one bilingual document', () => {
+    const ir = docOf(
+      [
+        block(1, 'English Section', 'heading', 0),
+        block(
+          1,
+          'Gradient descent is an optimization algorithm that minimizes loss. Momentum accelerates convergence by accumulating past gradients.',
+          'paragraph',
+          20,
+        ),
+        block(2, 'Phần tiếng Việt', 'heading', 0),
+        block(
+          2,
+          'Hồi quy tuyến tính có nghĩa là mô hình hóa quan hệ tuyến tính giữa biến độc lập và biến phụ thuộc. Adam hội tụ nhanh hơn SGD khi dữ liệu thưa.',
+          'paragraph',
+          20,
+        ),
+      ],
+      'en',
+      'doc-bilingual',
+    );
+
+    const pack = buildStudyPack(ir);
+
+    const enDef = pack.questions.find(
+      q => q.kind === 'definition' && q.prompt === 'What is Gradient descent?',
+    );
+    const viDef = pack.questions.find(
+      q => q.kind === 'definition' && q.prompt === 'Hồi quy tuyến tính là gì?',
+    );
+    expect(enDef).toBeDefined();
+    expect(viDef).toBeDefined();
+
+    const enMech = pack.questions.find(q => q.kind === 'mechanism');
+    const viCmp = pack.questions.find(q => q.kind === 'comparison');
+    expect(enMech?.prompt).toContain('According to "English Section"');
+    expect(viCmp?.prompt).toContain('Trong mục "Phần tiếng Việt"');
+    expect(verifyStudyPack(pack, ir).valid).toBe(true);
+  });
+});
+
+describe('buildStudyPack: LaTeX cards and formula grounding', () => {
+  it('distinguishes inline and display LaTeX cards and formats Anki MathJax delimiters', () => {
+    const ir = docOf(
+      [
+        block(1, 'Equations', 'heading', 0),
+        block(1, 'The inline ratio $a/b$ normalizes weights.', 'paragraph', 20),
+        block(1, 'The quadratic root is \\(√(a^2 + b^2)\\) in Euclidean space.', 'paragraph', 40),
+        block(2, 'Energy Law', 'heading', 0),
+        block(2, '$$E = mc^2$$', 'formula', 20),
+        block(2, 'Greek phase shift \\[α + β ≤ γ\\] holds for angles.', 'paragraph', 40),
+      ],
+      'en',
+      'doc-latex',
+    );
+
+    const pack = buildStudyPack(ir, { includePointCards: false });
+    const formulaCards = pack.flashcards.filter(c => c.kind === 'formula');
+
+    expect(formulaCards).toHaveLength(4);
+    expect(formulaCards.map(c => c.latex)).toEqual([
+      '\\frac{a}{b}',
+      '\\sqrt{a^{2} + b^{2}}',
+      'E = mc^{2}',
+      '\\alpha + \\beta \\le \\gamma',
+    ]);
+    expect(formulaCards.map(c => c.mathKind)).toEqual([
+      'inline-math',
+      'inline-math',
+      'display-math',
+      'display-math',
+    ]);
+
+    const tsv = toAnkiTsv(pack);
+    const tsvRows = tsv.split(TSV_RECORD_SEPARATOR);
+    expect(tsvRows).toHaveLength(4);
+    expect(tsvRows[0]).toContain('\\(\\frac{a}{b}\\)');
+    expect(tsvRows[1]).toContain('\\(\\sqrt{a^{2} + b^{2}}\\)');
+    expect(tsvRows[2]).toContain('\\[E = mc^{2}\\]');
+    expect(tsvRows[3]).toContain('\\[\\alpha + \\beta \\le \\gamma\\]');
+
+    const csv = toAnkiCsv(pack);
+    expect(csv).toContain('"\\[E = mc^{2}\\]"');
+    expect(csv).toContain('"\\(\\frac{a}{b}\\)"');
+
+    // Formula prompts must never leak the formula answer itself.
+    for (const q of pack.questions.filter(item => item.kind === 'formula')) {
+      expect(q.prompt).not.toContain(q.answerKey.answer);
+      expect(verifyAnswerKey(q.answerKey, ir).supported).toBe(true);
+    }
+
+    // Subtle formula alteration with identical variables/digits must still be rejected.
+    const energyBlock = blockByText(ir, '$$E = mc^2$$');
+    expect(
+      verifyAnswerKey(
+        {
+          answer: 'E = m^{2} c',
+          latex: 'E = m^{2} c',
+          citations: [
+            {
+              documentId: 'doc-latex',
+              page: 2,
+              blockId: energyBlock.id,
+              excerpt: '$$E = mc^2$$',
+            },
+          ],
+        },
+        ir,
+      ),
+    ).toMatchObject({ supported: false, reasons: ['unsupported-claim'] });
+  });
+});
+
+describe('buildStudyPack: Mermaid escaping, nested outline edges, and error guards', () => {
+  it('escapes quotes, brackets, braces, pipes, LaTeX backslashes, backticks, and comments in Mermaid graph TD', () => {
+    const ir = docOf(
+      [
+        block(1, 'Section "One" [A] (B) | %% #1 <tag>; `code`', 'heading', 0),
+        block(
+          1,
+          'Matrix [M] is defined as the array of {x, y} with "quotes" and <T> | pipes; %% comment.',
+          'paragraph',
+          20,
+        ),
+        block(1, 'Compute $$\\frac{a}{b}$$ for normalization.', 'paragraph', 40),
+      ],
+      'en',
+      'doc-escape',
+    );
+
+    const pack = buildStudyPack(ir);
+    const { mermaid } = pack.conceptMap;
+    const lines = mermaid.split('\n');
+
+    expect(lines[0]).toBe('graph TD');
+    expect(mermaid).not.toContain('%%');
+    expect(mermaid).not.toContain('```');
+    expect(mermaid).toContain('#quot;');
+    expect(mermaid).toContain('#91;');
+    expect(mermaid).toContain('#93;');
+    expect(mermaid).toContain('#40;');
+    expect(mermaid).toContain('#41;');
+    expect(mermaid).toContain('#123;');
+    expect(mermaid).toContain('#125;');
+    expect(mermaid).toContain('#60;');
+    expect(mermaid).toContain('#62;');
+    expect(mermaid).toContain('#124;');
+    expect(mermaid).toContain('#59;');
+    expect(mermaid).toContain('#37;');
+    expect(mermaid).toContain('#35;');
+    expect(mermaid).toContain('#92;');
+    expect(mermaid).toContain('#96;');
+
+    for (const line of lines.slice(1)) {
+      const isNodeLine = /^  [A-Za-z][A-Za-z0-9_]*\["[^"\n]*"\]$/u.test(line);
+      const isEdgeLine = /^  [A-Za-z][A-Za-z0-9_]* -->\|[^|\n]+\| [A-Za-z][A-Za-z0-9_]*$/u.test(line);
+      expect(isNodeLine || isEdgeLine).toBe(true);
+    }
+
+    // Fenced mermaid inside Markdown cannot be closed early by backticks inside labels.
+    const md = toMarkdown(pack);
+    const mermaidFences = md.match(/```/gu) ?? [];
+    expect(mermaidFences).toHaveLength(2);
+  });
+
+  it('sanitizes reserved or unsafe node IDs in toMermaid and preserves hierarchy edges', () => {
+    const ir = docOf(
+      [
+        block(1, 'Chapter 1', 'heading', 0),
+        block(1, 'Subsection A', 'heading', 20),
+        block(1, 'Entropy is defined as the measure of disorder in a system.', 'paragraph', 40),
+      ],
+      'en',
+      'doc-hierarchy',
+    );
+
+    const chapBlock = blockByText(ir, 'Chapter 1');
+    const subBlock = blockByText(ir, 'Subsection A');
+    const pack = buildStudyPack(ir, {
+      notesOptions: {
+        headingLevels: { [chapBlock.id]: 1, [subBlock.id]: 2 },
+      },
+    });
+
+    const chapNode = pack.conceptMap.nodes.find(n => n.label === 'Chapter 1');
+    const subNode = pack.conceptMap.nodes.find(n => n.label === 'Subsection A');
+    expect(chapNode).toBeDefined();
+    expect(subNode).toBeDefined();
+    expect(pack.conceptMap.edges).toContainEqual(
+      expect.objectContaining({
+        from: chapNode!.id,
+        to: subNode!.id,
+        relation: 'contains',
+      }),
+    );
+
+    const customMermaid = toMermaid({
+      nodes: [
+        {
+          id: 'end',
+          label: 'Alpha "1"\nLine 2',
+          kind: 'term',
+          page: 1,
+          blockId: subBlock.id,
+          citation: subNode!.citation,
+        },
+        {
+          id: 'bad id!',
+          label: 'Beta | Gamma',
+          kind: 'term',
+          page: 1,
+          blockId: subBlock.id,
+          citation: subNode!.citation,
+        },
+      ],
+      edges: [
+        {
+          from: 'end',
+          to: 'bad id!',
+          relation: 'compares',
+          label: 'a | b',
+          citation: subNode!.citation,
+        },
+      ],
+    });
+
+    const lines = customMermaid.split('\n');
+    expect(lines[0]).toBe('graph TD');
+    expect(lines[1]).toBe('  n1["Alpha #quot;1#quot; Line 2"]');
+    expect(lines[2]).toBe('  n2["Beta #124; Gamma"]');
+    expect(lines[3]).toBe('  n1 -->|a #124; b| n2');
+  });
+
+  it('respects excerpt caps without breaking block substring grounding and rejects malformed JSON', () => {
+    const longSentence =
+      'Optimization converges rapidly across convex objectives while preserving stability and numerical precision under strict memory constraints.';
+    const ir = docOf(
+      [
+        block(1, 'Optimization', 'heading', 0),
+        block(1, longSentence, 'paragraph', 20),
+      ],
+      'en',
+      'doc-caps',
+    );
+
+    const pack = buildStudyPack(ir, { maxExcerptChars: 60, maxFlashcards: 1, maxQuestions: 1 });
+    expect(pack.flashcards.length).toBeLessThanOrEqual(1);
+    expect(pack.questions.length).toBeLessThanOrEqual(1);
+    for (const card of pack.flashcards) {
+      expect(Array.from(card.citation.excerpt).length).toBeLessThanOrEqual(60);
+      expect(verifyCitation(card.citation, ir).valid).toBe(true);
+    }
+
+    expect(() => fromJson('not-json')).toThrow();
+    expect(() => fromJson('[]')).toThrow();
+    expect(() => fromJson(JSON.stringify({ version: 99 }))).toThrow();
+  });
+});
