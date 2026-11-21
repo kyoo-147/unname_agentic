@@ -189,7 +189,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | M01 | **P0** | Privacy modes Offline-only/Ask/Cloud-enabled | Không network trong Offline-only, e2e test. | ✅ `src/core/privacy.ts` + 20 test: offline = **0 fetch** kể cả batch, loopback vẫn chạy, ask cần consent |
 | M04 | **P1** | Encryption at rest cho dữ liệu local | File DB mã hoá bằng key/passphrase. | ✅ `src/core/crypto.ts` + 24 test: PBKDF2 600k + AES-GCM, salt/IV mỗi lần, sai passphrase hay tamper đều WrongPassphrase, 1 KB thành 1505 B |
 | M05 | **P1** | Audit log local: file nào, ai, khi nào, export gì | Truy vết được mọi thao tác. | ✅ `src/core/audit.ts` + 25 test: 8 loại event, chặn detail giống secret, chain SHA-256 phát hiện sửa, report mask giá trị |
-| M06 | **P2** | Audit log consent/cloud route per document/job | Biết file nào dùng engine nào và tại sao.  ⬜ |
+| M06 | **P2** | Audit log consent/cloud route per document/job | Biết file nào dùng engine nào và tại sao.  🟡 `recordConsentDecision` + unit coverage records provider/mode/scope/consent without endpoint or payload; full call-site integration remains open |
 | M08 | **P2** | Local-only mode + audit trail cho cloud call | Biết cái gì đã gửi lên cloud. | ✅ cùng `audit.ts` (kind translate/export) + `privacy.ts` chặn mạng; audit ghi lại quyết định |
 | M07 | **P1** | Preview chính xác nội dung sẽ gửi cloud | Xem payload trước khi consent. | ✅ `src/core/payload-preview.ts` + 21 test: characters/bytes tính từ text thật (không từ preview), endpoint scope theo effective endpoint, redact preview, cost null khi thiếu giá |
 | M02 | **P1** | Data retention + xoá vĩnh viễn có xác nhận | Không giữ dữ liệu ngoài ý muốn. | ✅ `src/core/capabilities.ts` + 39 test: 4 mode × 6 capability, 7 action phân loại, `CapabilityError`; xoá qua `deleteDocument` + purge 30 ngày |
@@ -202,7 +202,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | N02 | **P0** | Nối AbortController thật tới tất cả provider calls | Cancel không sinh result stale hoặc tốn request ngoài ý muốn.  ⬜ |
 | N03 | **P1** | i18n matrix test cho 3 ngôn ngữ | Không missing key, không lệch placeholder. | ✅ `src/core/i18n-audit.ts` + `scripts/i18n-matrix.mjs` + 16 test: so key set, placeholder theo thứ tự, cờ untranslated, xanh trên 3 từ điển thật |
 | N04 | **P1** | Accessibility audit (contrast, role, focus order) | Không lỗi a11y nghiêm trọng. | ✅ `src/core/a11y.ts` + 33 test: contrast AA/UI + gợi ý màu đạt, lỗi cấu trúc, focus order + cảnh báo tabIndex dương |
-| N05 | **P1** | Benchmark OCR: CER/WER theo ngôn ngữ và loại ảnh | Bảng số thật, so sánh engine. | 🟡 `src/core/ocr-metrics.ts` + `scripts/ocr-benchmark.mjs` + doc; **chưa có fixture/benchmark numbers** |
+| N05 | **P1** | Benchmark OCR: CER/WER theo ngôn ngữ và loại ảnh | Bảng số thật, so sánh engine. | 🟡 `src/core/ocr-metrics.ts` + `scripts/ocr-benchmark.mjs` + checked-in synthetic golden fixture; **execution and difficult-image numbers remain open** |
 | N06 | **P1** | Benchmark chất lượng dịch theo loại tài liệu | Bảng điểm thật, so sánh model. | 🟡 `src/core/perf.ts` + `scripts/perf-budget.mjs` + `docs/performance.md`: baseline p95 thật (chunk 2.71 ms, index 8.98 ms, search 0.89 ms, diff 11.74 ms) |
 | N08 | **P2** | Release checklist có gate (tests, licences, i18n, a11y) | Checklist tự chạy, thiếu là fail. | ✅ `src/core/release-gate.ts` + `scripts/release-check.mjs` + `docs/release-checklist.md` + 36 test: unit>0, e2e≥40, gate xanh, notice đủ, changelog, artifact |
 

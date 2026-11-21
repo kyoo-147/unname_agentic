@@ -1,0 +1,7 @@
+SCANNED PAGE
+
+Reading without boundaries
+
+Local OCR should find this text.
+
+Numbers 42 and 3.14159 stay exact.

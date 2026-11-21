@@ -522,13 +522,61 @@ function checkChangelog(version) {
   };
 }
 
-/**
- * Whether the feature inventory has been touched since the last source change.
- *
- * A modification-time proxy, nothing more: it can only say "the inventory is older than the
- * code". The gate warns rather than blocks for exactly that reason, and the row says
- * "mtime" so nobody reads it as a content check.
- */
+function checkQualityEvidence(unit, options, e2e) {
+  const trustRun = run('pnpm', ['vitest', 'run', 'tests/quality-gates.test.ts', 'tests/privacy.test.ts', 'tests/network-guard.test.ts', 'tests/crypto.test.ts', 'tests/audit.test.ts', 'tests/capabilities.test.ts'], TIMEOUTS.test);
+  const translationRun = run('pnpm', ['vitest', 'run', 'tests/translation-core.test.ts', 'tests/translation-batch.test.ts', 'tests/translation-service-batch.test.ts'], TIMEOUTS.test);
+  const exportRun = run('pnpm', ['vitest', 'run', 'tests/export-bilingual.test.ts', 'tests/export-check.test.ts', 'tests/pdf-export.test.ts'], TIMEOUTS.test);
+  const accessibilityRun = options.e2e ? e2e.run : run('pnpm', ['vitest', 'run', 'tests/a11y.test.ts'], TIMEOUTS.test);
+  const ocrRun = run(process.execPath, ['scripts/ocr-benchmark.mjs', '--json'], TIMEOUTS.test);
+  const perfRun = run(process.execPath, ['scripts/perf-budget.mjs', '--json'], TIMEOUTS.test);
+  const i18nRun = run(process.execPath, ['scripts/i18n-matrix.mjs'], TIMEOUTS.test);
+  const parseJson = result => {
+    try { return JSON.parse(result.stdout); } catch { return null; }
+  };
+  const ocr = parseJson(ocrRun);
+  const perf = parseJson(perfRun);
+  const sbomPath = path.join(root, 'public', 'third-party', 'SBOM.json');
+  let sbomPass = false;
+  if (existsSync(sbomPath)) {
+    try {
+      const sbom = JSON.parse(readFileSync(sbomPath, 'utf8'));
+      sbomPass = sbom?.bomFormat === 'CycloneDX'
+        && Array.isArray(sbom.components)
+        && sbom.components.length > 0
+        && !JSON.stringify(sbom).match(/AGPL/iu);
+    } catch { sbomPass = false; }
+  }
+  const core = trustRun.code === 0 && unit.run.code === 0 ? 'pass' : 'fail';
+  return {
+    evidence: {
+      privacy: core,
+      secretBoundary: core,
+      resourceLimits: core,
+      consentAudit: core,
+      retention: core,
+      goldenDataset: ocr?.measured > 0 ? 'pass' : 'fail',
+      ocrBenchmark: ocr?.measured > 0 && ocrRun.code === 0 ? 'pass' : 'fail',
+      translationBenchmark: translationRun.code === 0 ? 'pass' : 'fail',
+      exportBenchmark: exportRun.code === 0 ? 'pass' : 'fail',
+      performanceBenchmark: perf?.violations?.length === 0 && perf?.bundle?.built === true && perfRun.code === 0 ? 'pass' : 'fail',
+      i18n: i18nRun.code === 0 ? 'pass' : 'fail',
+      accessibility: accessibilityRun.code === 0 && (!options.e2e || e2e.recorded > 0) ? 'pass' : 'fail',
+      sbom: sbomPass ? 'pass' : 'fail',
+    },
+    observed: {
+      ocr: ocrRun,
+      performance: perfRun,
+      i18n: i18nRun,
+      i18n: i18nRun,
+      trust: trustRun,
+      translation: translationRun,
+      export: exportRun,
+      accessibility: accessibilityRun,
+      sbom: sbomPass ? 'CycloneDX present, no AGPL text' : 'missing, malformed, or AGPL-containing SBOM',
+    },
+  };
+}
+
 function checkFeaturesDoc() {
   if (!existsSync(featuresDoc)) {
     return { updated: false, observed: 'docs/features.md is missing' };
@@ -711,6 +759,7 @@ async function main() {
   const artifact = checkPackageArtifact();
   const changelog = checkChangelog(version);
   const features = checkFeaturesDoc();
+  const quality = checkQualityEvidence(unit, options, e2e);
   const native = readNativeCount();
 
   const input = {
@@ -724,6 +773,7 @@ async function main() {
       imports: imports.state,
     },
     licenses: { bundledNotices: notices.bundledNotices, missing: notices.missing },
+    quality: quality.evidence,
     packageArtifact: artifact.artifact,
   };
   const report = gate.evaluate(input);
@@ -751,6 +801,12 @@ async function main() {
     { check: 'third-party notices', observed: notices.observed, codes: ['license-notice-missing'] },
     { check: 'release package', observed: artifact.observed, codes: ['package-artifact-missing'] },
     { check: 'feature inventory', observed: features.observed, codes: ['features-doc-stale'] },
+    { check: 'quality evidence', observed: quality.observed.sbom, codes: [
+      'quality-privacy-failed', 'quality-secret-boundary-failed', 'quality-resource-limits-failed',
+      'quality-consent-audit-failed', 'quality-retention-failed', 'quality-golden-dataset-failed',
+      'quality-ocr-benchmark-failed', 'quality-translation-benchmark-failed', 'quality-export-benchmark-failed',
+      'quality-performance-benchmark-failed', 'quality-i18n-failed', 'quality-accessibility-failed', 'quality-sbom-failed',
+    ] },
   ];
 
   const blockerCodes = new Set(report.blockers.map(blocker => blocker.code));
@@ -781,6 +837,7 @@ async function main() {
       })),
       input,
       report,
+      quality: quality.observed,
       exitCode: report.ok ? 0 : 1,
     }, null, 2));
     process.exit(report.ok ? 0 : 1);
