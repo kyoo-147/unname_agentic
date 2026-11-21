@@ -67,6 +67,14 @@ export const DEFAULT_ITERATIONS = 600_000;
 
 /** The floor {@link deriveKey} accepts. It is the v1 constant, so v1 can never be weakened. */
 export const MIN_ITERATIONS = DEFAULT_ITERATIONS;
+/** Upper bound prevents a corrupted setting from turning unlock into an unbounded DoS. */
+export const MAX_ITERATIONS = 2_000_000;
+
+/** Maximum UTF-8 JSON payload accepted by the browser storage envelope. */
+export const MAX_PLAINTEXT_BYTES = 16 * 1024 * 1024;
+
+/** Maximum sealed payload, including the 16-byte AES-GCM authentication tag. */
+export const MAX_CIPHERTEXT_BYTES = MAX_PLAINTEXT_BYTES + 16;
 
 /** Bytes of salt {@link newSalt} produces, and the minimum {@link deriveKey} accepts. */
 export const SALT_BYTES = 16;
@@ -90,6 +98,8 @@ export type CryptoErrorCode =
   | 'invalid-salt'
   | 'invalid-iterations'
   | 'iterations-too-low'
+  | 'iterations-too-high'
+  | 'payload-too-large'
   | 'invalid-key'
   | 'not-serializable'
   | 'encryption-failed'
@@ -219,6 +229,12 @@ export async function encryptJson(
   const encryptionKey = requireKey(key, 'encrypt');
   const recordedSalt = salt === undefined ? newSalt() : encodeBase64(saltBytes(salt));
   const plaintext = UTF8.encode(serialize(value));
+  if (plaintext.byteLength > MAX_PLAINTEXT_BYTES) {
+    throw new CryptoError(
+      'payload-too-large',
+      `The JSON payload is ${plaintext.byteLength} bytes; at most ${MAX_PLAINTEXT_BYTES} are accepted.`,
+    );
+  }
   const iv = randomBytes(IV_BYTES);
 
   let sealed: ArrayBuffer;
@@ -326,6 +342,12 @@ function readIterations(iterations: unknown): number {
       `The iteration count is ${iterations}; envelope v1 requires at least ${MIN_ITERATIONS}.`,
     );
   }
+  if (iterations > MAX_ITERATIONS) {
+    throw new CryptoError(
+      'iterations-too-high',
+      `The iteration count is ${iterations}; at most ${MAX_ITERATIONS} are accepted.`,
+    );
+  }
   return iterations;
 }
 
@@ -412,6 +434,12 @@ function readEnvelope(envelope: unknown): {
     throw new CryptoError('malformed-envelope', 'The encrypted record is not an envelope object.');
   }
   const record = envelope as Partial<Record<keyof EncryptedEnvelope, unknown>>;
+  const allowed = new Set(['v', 'salt', 'iv', 'ciphertext']);
+  for (const key of Object.keys(record)) {
+    if (!allowed.has(key)) {
+      throw new CryptoError('malformed-envelope', `The envelope contains an unknown field "${key}".`);
+    }
+  }
   if (record.v !== ENVELOPE_VERSION) {
     throw new CryptoError('unsupported-version', versionRefusal(record.v));
   }
@@ -440,7 +468,12 @@ function readEnvelope(envelope: unknown): {
       `The envelope ciphertext is ${ciphertext.length} bytes; it cannot hold the ${tagBytes}-byte tag.`,
     );
   }
-
+  if (ciphertext.length > MAX_CIPHERTEXT_BYTES) {
+    throw new CryptoError(
+      'payload-too-large',
+      `The encrypted payload is ${ciphertext.length} bytes; at most ${MAX_CIPHERTEXT_BYTES} are accepted.`,
+    );
+  }
   return { iv, ciphertext };
 }
 

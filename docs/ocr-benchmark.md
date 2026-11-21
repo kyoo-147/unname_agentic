@@ -2,9 +2,10 @@
 
 Date: 2026-11-20 (Asia/Saigon). Backlog: N05 — make OCR quality measurable instead of asserted.
 
-Status: the metrics, the runner and the fixture format are in place. There is **no checked-in
-benchmark fixture yet**, so the results table at the end is empty on purpose. Nothing here is a
-quality claim about the shipped OCR until that table has rows produced by the runner.
+Status: the metrics, runner and fixture format are in place. One checked-in **synthetic English
+fixture** is present under `tests/fixtures/ocr-bench/`; it is intentionally a wiring/golden-data
+fixture, not evidence that difficult scans are solved. The table contains one executed row from
+this worktree. Nothing here is a quality claim about difficult or production OCR.
 
 Files:
 
@@ -90,6 +91,10 @@ tests/fixtures/ocr-bench/            # default --fixtures value
     page-01.png
   scanned-page.actual.txt            # optional: text from a real run of the app
 ```
+
+The checked-in `synthetic-eng` pair uses the existing synthetic page image and PDF, with its
+expected transcript copied from the visible fixture text. It contains no user document or secret.
+It is suitable for a deterministic golden-data smoke check; it is not blur/skew/noise coverage.
 
 - `{name}` is the PDF stem; every companion file repeats it.
 - `{name}.expected.txt` is the truth. Transcribe the whole document in reading order, one page after
@@ -194,9 +199,9 @@ A dash is not a measurement. "engine" rows use tesseract.js on {name}.pages/*.pn
 ```
 
 The transcript is the four lines drawn on `tests/fixtures/scan-page.png`, so CER 0 proves the wiring,
-not the OCR quality: a screenshot with clean synthetic text is the easiest possible input. This run
-is not a benchmark row and is not repeated in the table — the directory is in the temp folder and is
-not checked in.
+not difficult OCR quality: a screenshot with clean synthetic text is the easiest possible input.
+The checked-in `synthetic-eng` row is therefore a golden smoke measurement, not a production-quality
+claim.
 
 The other states were exercised the same way: an empty directory prints the documented empty state
 and exits 0, a pair with no renders and no `actual.txt` prints dashes and exits 3, and an
@@ -205,14 +210,13 @@ the module returns when called directly.
 
 ## Results
 
-One row per fixture per engine version and language list. No rows yet: the repository has OCR
-fixtures for other tests (`tests/fixtures/scanned-page.pdf`, `tests/fixtures/scan-page.png`,
-`tests/fixtures/mirror-field-notes.pdf`) but no `{name}.pdf` + `{name}.expected.txt` benchmark pair,
-so there is nothing to report.
+One row per fixture per engine version and language list. The synthetic pair is checked in and its
+row below was produced by `node scripts/ocr-benchmark.mjs --json` in this worktree. This preserves
+the distinction between fixture availability and measured evidence.
 
 | fixture | pages | chars | CER | WER | source | languages | engine | date |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| _no fixture yet_ | – | – | – | – | – | – | – | – |
+| synthetic-eng | 1 | 107 | 0.0000 | 0.0000 | engine | eng+vie | tesseract.js 7.0.0 | 2026-11-21 |
 
 Recording a run — paste the runner's numbers, never a hand-computed rate:
 

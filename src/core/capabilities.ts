@@ -198,6 +198,74 @@ export interface CapabilityDecision {
   readonly missing: readonly CapabilityName[];
 }
 
+/** Retention defaults used by the local library purge workflow. */
+export const DEFAULT_RETENTION_DAYS = 30;
+export const MAX_RETENTION_DAYS = 3650;
+
+export interface RetentionPolicy {
+  readonly maxAgeDays: number;
+  readonly requireConfirmation: boolean;
+}
+
+export interface RetentionRecord {
+  readonly documentId: string;
+  readonly lastAccessedAt: string;
+}
+
+export interface PurgePlan {
+  readonly cutoff: string;
+  readonly candidates: readonly string[];
+  readonly requiresConfirmation: boolean;
+}
+
+export type RetentionErrorCode = 'invalid-policy' | 'invalid-record' | 'confirmation-required';
+
+export class RetentionError extends Error {
+  readonly code: RetentionErrorCode;
+
+  constructor(code: RetentionErrorCode, message: string) {
+    super(message);
+    this.name = 'RetentionError';
+    this.code = code;
+  }
+}
+
+/** Builds a reviewable purge plan without mutating records or deleting anything. */
+export function planPurge(
+  records: readonly RetentionRecord[],
+  now: string,
+  policy: RetentionPolicy = { maxAgeDays: DEFAULT_RETENTION_DAYS, requireConfirmation: true },
+): PurgePlan {
+  if (!Number.isInteger(policy.maxAgeDays) || policy.maxAgeDays < 0 || policy.maxAgeDays > MAX_RETENTION_DAYS) {
+    throw new RetentionError('invalid-policy', `Retention must be an integer from 0 to ${MAX_RETENTION_DAYS} days.`);
+  }
+  const nowMs = Date.parse(now);
+  if (!Number.isFinite(nowMs)) throw new RetentionError('invalid-policy', 'Purge time must be an ISO timestamp.');
+  const cutoffMs = nowMs - policy.maxAgeDays * 86_400_000;
+  const cutoff = new Date(cutoffMs).toISOString();
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  for (const record of records) {
+    if (typeof record?.documentId !== 'string' || record.documentId.trim() === '') {
+      throw new RetentionError('invalid-record', 'Every retention record needs a document id.');
+    }
+    if (seen.has(record.documentId)) continue;
+    const lastAccessedMs = Date.parse(record.lastAccessedAt);
+    if (!Number.isFinite(lastAccessedMs)) throw new RetentionError('invalid-record', `Invalid last-access time for ${record.documentId}.`);
+    seen.add(record.documentId);
+    if (lastAccessedMs <= cutoffMs) candidates.push(record.documentId);
+  }
+  return { cutoff, candidates: Object.freeze(candidates), requiresConfirmation: policy.requireConfirmation };
+}
+
+/** Returns the only ids a caller may pass to its deletion store after confirmation. */
+export function confirmPurge(plan: PurgePlan, confirmed: boolean): readonly string[] {
+  if (plan.requiresConfirmation && confirmed !== true) {
+    throw new RetentionError('confirmation-required', 'Permanent purge requires explicit confirmation.');
+  }
+  return Object.freeze([...plan.candidates]);
+}
+
 // --- The matrix ------------------------------------------------------------
 
 /**

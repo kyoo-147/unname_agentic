@@ -287,13 +287,14 @@ describe('assertCanSend', () => {
     expect(() => assertCanSend(loopbackPolicy, loopbackSettings)).not.toThrow();
   });
 
-  it('leaves a malformed endpoint to the transport, which never sends without a URL', async () => {
+  it('refuses a malformed endpoint before transport builds a request', async () => {
     const { fetcher, transport } = harness('ask');
     const error = await transport
       .translate({ text: 'Hello', settings: { ...cloudSettings('openai'), endpoint: 'not a url' } })
       .catch((reason: unknown) => reason);
     expect(error).toBeInstanceOf(TranslationError);
-    expect(error).not.toBeInstanceOf(PrivacyError);
+    expect(error).toBeInstanceOf(PrivacyError);
+    expect((error as PrivacyError).code).toBe('invalid-endpoint');
     expect((error as TranslationError).kind).toBe('invalid');
     expect(fetcher).not.toHaveBeenCalled();
   });
