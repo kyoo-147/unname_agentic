@@ -155,6 +155,14 @@ impl PdfReader {
             .when(self.browser_linked, |el| el.child(ui::secondary_button("pdf-browser-detach", tr3("断开 Chrome", "Detach Chrome", "Ngắt liên kết Chrome")).on_click(cx.listener(|reader, _, _, cx| reader.set_browser_linked(false, cx)))))
     }
     fn settings_panel(&self, cx: &mut Context<Self>) -> Div {
+        let health = model::ModelCatalogue::default().health(&self.profile);
+        let health_label = match health.status {
+            model::ModelHealthStatus::Ready => tr3("已配置", "Configured", "Đã cấu hình"),
+            model::ModelHealthStatus::Configured => tr3("本地已配置", "Local configured", "Cục bộ đã cấu hình"),
+            model::ModelHealthStatus::NeedsConsent => tr3("需要云端同意", "Cloud consent required", "Cần đồng ý với đám mây"),
+            model::ModelHealthStatus::MissingConfiguration => tr3("配置不完整", "Configuration incomplete", "Cấu hình chưa đủ"),
+            model::ModelHealthStatus::OfflineOnly => tr3("仅离线模式", "Offline only", "Chỉ ngoại tuyến"),
+        };
         let mut kinds = div().flex().flex_wrap().gap(px(6.));
         for (index, label, kind) in [(0_usize, "OpenAI", ProviderKind::OpenAi), (1, "Google", ProviderKind::Google), (2, "DeepL", ProviderKind::DeepL), (3, tr3("本地", "Local", "Cục bộ"), ProviderKind::Local)] {
             kinds = kinds.child(div().id(("pdf-provider", index)).px(px(12.)).py(px(6.)).rounded(px(6.)).cursor_pointer()
@@ -164,6 +172,8 @@ impl PdfReader {
         }
         div().flex().flex_col().gap(px(10.)).p(px(16.)).border_b_1().border_color(Theme::line_border())
             .child(kinds)
+            .child(div().text_size(px(11.)).text_color(Theme::text_caption()).child(format!("{} · {}", tr3("模型健康", "Model health", "Sức khỏe mô hình"), health_label)))
+            .child(div().text_size(px(11.)).text_color(Theme::text_caption()).child(tr3("仅检查本地配置；不会下载模型或访问网络。", "Checks local configuration only; it does not download models or access the network.", "Chỉ kiểm tra cấu hình cục bộ; không tải mô hình hoặc truy cập mạng.")))
             .child(div().flex().gap(px(12.)).child(div().flex_1().min_w_0().child(input_row(tr3("端点 · 基础 URL（HTTPS 或本机回环 HTTP）", "Endpoint · base URL (HTTPS, or loopback HTTP)", "Điểm cuối · URL gốc (HTTPS hoặc HTTP vòng lặp cục bộ)"), &self.fields.endpoint)))
                 .child(div().w(px(190.)).child(input_row(tr3("模型 · OpenAI 兼容提供方", "Model · OpenAI-compatible providers", "Mô hình · nhà cung cấp tương thích OpenAI"), &self.fields.model))))
             .child(div().flex().gap(px(12.)).child(div().flex_1().min_w_0().child(input_row(tr3("源语言", "Source language", "Ngôn ngữ nguồn"), &self.fields.source)))
@@ -306,6 +316,8 @@ impl Render for PdfReader {
         let source_label = match &self.source { Source::Pdf(_) => tr3_fill("本地 PDF · {} 页 · 原文件保留在你的文档库中", "Local PDF · {} pages · original retained in your library", "PDF cục bộ · {} trang · bản gốc được giữ trong thư viện", self.page_count.max(1)), Source::Capture(source) => format!("{} · {}", if self.capture_live { tr3("实时来源", "Live source", "Nguồn trực tiếp") } else { tr3("来源已冻结", "Source frozen", "Nguồn đã đóng băng") }, source.label()) };
         let quality = self.prepared.as_ref().map(|p| p.frame.quality.clone()).unwrap_or_default();
         let (quality_text, quality_tip) = quality_label(&quality);
+        let (translation_done, translation_total) = self.translation_progress();
+        let progress_text = (translation_total > 0).then(|| format!("{} {}/{}", tr3("翻译进度", "Translation", "Tiến độ dịch"), translation_done.min(translation_total), translation_total));
         div().relative().size_full().min_w_0().min_h_0().flex().flex_col().bg(Theme::bg_body()).text_color(Theme::text()).font_family(theme::UI_FONT).text_size(px(12.)).line_height(px(18.))
             .child(self.toolbar(cx))
             .when(self.show_settings, |el| el.child(div().id("pdf-settings-scroll").max_h(px(460.)).overflow_y_scroll().child(self.settings_panel(cx))))
@@ -321,7 +333,8 @@ impl Render for PdfReader {
                 .child(div().size(px(6.)).flex_none().rounded(px(3.)).bg(if self.error.is_some() { Theme::danger() } else if self.paused { Theme::text_caption() } else { Theme::primary() }))
                 .child(div().id("pdf-quality-status").flex_1().min_w_0().overflow_hidden().text_size(px(11.)).text_color(Theme::text_caption())
                     .child(format!("{}{}{}", self.status, if quality.is_empty() { "" } else { " · " }, quality_text))
-                    .when_some(quality_tip, |el, detail| el.tip_label(detail, ui::TipSide::Above))))
+                    .when_some(quality_tip, |el, detail| el.tip_label(detail, ui::TipSide::Above))
+                    .when_some(progress_text, |el, progress| el.child(div().ml(px(8.)).text_color(Theme::text()).child(progress)))))
             .when_some(self.divider_overlay(cx), |el, overlay| el.child(overlay))
     }
 }

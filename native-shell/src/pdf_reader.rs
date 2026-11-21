@@ -137,6 +137,8 @@ pub struct PdfReader {
     load_needed: bool,
     profile_loading: bool,
     provider_busy: Option<Stamp>,
+    translation_done: usize,
+    translation_total: usize,
     failed: bool,
     paused: bool,
     active: bool,
@@ -205,6 +207,11 @@ impl PdfReader {
         Some((title, text.chars().take(6000).collect()))
     }
 
+    /// Unified translation progress for the native status surface. The value
+    /// is intentionally local and monotonic; cancel/pause never fabricates a
+    /// completed result.
+    pub fn translation_progress(&self) -> (usize, usize) { (self.translation_done, self.translation_total) }
+
     /// The blocks of one 0-based page with both languages, or `None` when the
     /// document has not produced a frame for it. Read-only: the returned page
     /// is a clone of the immutable document model.
@@ -256,6 +263,11 @@ impl PdfReader {
     }
     pub fn from_capture(source: CaptureSource, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self::build(Source::Capture(source), 0, window, cx)
+    }
+    /// The retained source path for native PDF Save As. Captures deliberately
+    /// return `None`: they are live pixels, not a stable PDF byte source.
+    pub fn source_pdf_path(&self) -> Option<PathBuf> {
+        match &self.source { Source::Pdf(path) => Some(path.clone()), Source::Capture(_) => None }
     }
     pub fn open_settings(&mut self, cx: &mut Context<Self>) { self.show_settings = true; cx.notify(); }
     fn rotate_page(&mut self, cx: &mut Context<Self>) {
@@ -342,7 +354,7 @@ impl PdfReader {
         }));
         let mut reader = Self {
             source, epoch: Epoch::default(), page, page_count: 0, rotation: 0, prepared: None, loading: false, load_needed: true,
-            profile_loading: true, provider_busy: None, failed: false, paused: false, active: true, browser_linked: false, pending_external: None, capture_live: true,
+            profile_loading: true, provider_busy: None, translation_done: 0, translation_total: 0, failed: false, paused: false, active: true, browser_linked: false, pending_external: None, capture_live: true,
             capture_due: Instant::now(), draft_kind: profile.kind, draft_consent: profile.cloud_consent, profile, fields, page_entry: None, page_entry_sub: None, selected_request: false, translate_all: false, profile_dirty: false, profile_saving: false, show_settings: false,
             split: true, zoom: 1., split_ratio: 0.5, divider_drag: false, show_paired: false,
             scrolls: [ScrollHandle::new(), ScrollHandle::new()], scrollbars: [Rc::default(), Rc::default()],
@@ -506,7 +518,9 @@ impl PdfReader {
             b.translated.is_none() && !state::preserve_formula(&b.source) && (self.translate_all || (self.selected_request && self.selected == Some(*index)) || visible)
         }).take(16).map(|(i, _)| i).collect();
         if indices.is_empty() { return; }
+        self.translation_total = self.translation_total.max(self.translation_done.saturating_add(indices.len()));
         let blocks: Vec<TextBlock> = indices.iter().map(|i| prepared.frame.blocks[*i].clone()).collect();
+        let block_count = blocks.len();
         let settings = self.profile.clone(); let stamp = self.epoch.stamp(); self.provider_busy = Some(stamp);
         self.status = tr3_fill("正在翻译 {} 个可见区域…", "Translating {} visible regions…", "Đang dịch {} vùng hiển thị…", blocks.len());
         let task = cx.background_executor().spawn(async move { provider::translate_blocks(&settings, &blocks).map_err(|e| format!("{e:#}")) });
@@ -520,6 +534,7 @@ impl PdfReader {
                         if let Some(prepared) = &mut reader.prepared {
                             if values.len() != indices.len() { reader.fail(tr3("提供方返回的块数不正确", "Provider returned an incorrect block count", "Nhà cung cấp trả về sai số khối").into(), cx); return; }
                             for (index, text) in indices.into_iter().zip(values) { prepared.frame.blocks[index].translated = Some(text); }
+                            reader.translation_done = reader.translation_done.saturating_add(block_count);
                         }
                         reader.status = tr3("可见区域已就绪 · 完整对照文本见下方", "Visible regions ready · full paired text below", "Các vùng hiển thị đã sẵn sàng · văn bản song song đầy đủ ở bên dưới").into(); reader.refresh_selection(cx);
                     }

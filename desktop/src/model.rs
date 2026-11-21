@@ -92,6 +92,112 @@ impl ProviderSettings {
     }
 }
 
+/// Runtime class for a catalogue entry. `Local` is the only offline-capable class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModelRuntime { Local, Cloud }
+
+/// Capabilities are descriptive metadata, not permission to invoke a model.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelCapabilities {
+    pub translation: bool,
+    pub chat: bool,
+    pub vision: bool,
+    pub streaming: bool,
+    pub offline: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelDescriptor {
+    pub id: String,
+    pub label: String,
+    pub provider: ProviderKind,
+    pub runtime: ModelRuntime,
+    pub context_tokens: u32,
+    pub capabilities: ModelCapabilities,
+    pub endpoint: String,
+    pub requires_consent: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModelHealthStatus { Ready, Configured, NeedsConsent, MissingConfiguration, OfflineOnly }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelHealth {
+    pub model_id: String,
+    pub status: ModelHealthStatus,
+    pub detail: String,
+    pub network_checked: bool,
+}
+
+/// A static, metadata-only catalogue. It never downloads a model or performs a
+/// network health check. Callers can render this before asking for explicit use.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelCatalogue { pub models: Vec<ModelDescriptor>, pub offline: bool }
+
+impl Default for ModelCatalogue {
+    fn default() -> Self { Self::new(false) }
+}
+
+impl ModelCatalogue {
+    pub fn new(offline: bool) -> Self {
+        let models = vec![
+            ModelDescriptor { id: "gpt-4.1-mini".into(), label: "OpenAI GPT-4.1 mini".into(), provider: ProviderKind::OpenAi, runtime: ModelRuntime::Cloud, context_tokens: 128_000, capabilities: ModelCapabilities { translation: true, chat: true, vision: true, streaming: true, offline: false }, endpoint: "https://api.openai.com/v1".into(), requires_consent: true },
+            ModelDescriptor { id: "google-translate".into(), label: "Google Translate".into(), provider: ProviderKind::Google, runtime: ModelRuntime::Cloud, context_tokens: 30_000, capabilities: ModelCapabilities { translation: true, chat: false, vision: false, streaming: false, offline: false }, endpoint: "https://translation.googleapis.com".into(), requires_consent: true },
+            ModelDescriptor { id: "deepl".into(), label: "DeepL".into(), provider: ProviderKind::DeepL, runtime: ModelRuntime::Cloud, context_tokens: 128_000, capabilities: ModelCapabilities { translation: true, chat: false, vision: false, streaming: false, offline: false }, endpoint: "https://api-free.deepl.com".into(), requires_consent: true },
+            ModelDescriptor { id: "local-openai-compatible".into(), label: "Local OpenAI-compatible model".into(), provider: ProviderKind::Local, runtime: ModelRuntime::Local, context_tokens: 32_000, capabilities: ModelCapabilities { translation: true, chat: true, vision: true, streaming: true, offline: true }, endpoint: "http://127.0.0.1:1234/v1".into(), requires_consent: false },
+        ];
+        Self { models: if offline { models.into_iter().filter(|model| model.capabilities.offline).collect() } else { models }, offline }
+    }
+
+    pub fn find(&self, id: &str) -> Option<&ModelDescriptor> { self.models.iter().find(|model| model.id == id) }
+
+    /// Local configuration health only. `network_checked` is always false by
+    /// design, so the UI cannot mistake catalogue discovery for a live probe.
+    pub fn health(&self, settings: &ProviderSettings) -> ModelHealth {
+        let id = settings.model.trim().to_string();
+        let descriptor = self.find(&id).or_else(|| self.models.iter().find(|model| model.provider == settings.kind));
+        let Some(model) = descriptor else { return ModelHealth { model_id: id, status: ModelHealthStatus::MissingConfiguration, detail: "Model is not in the local catalogue.".into(), network_checked: false }; };
+        if self.offline && !model.capabilities.offline { return ModelHealth { model_id: model.id.clone(), status: ModelHealthStatus::OfflineOnly, detail: "Offline mode hides cloud models; no request was made.".into(), network_checked: false }; }
+        if model.requires_consent && !settings.cloud_consent { return ModelHealth { model_id: model.id.clone(), status: ModelHealthStatus::NeedsConsent, detail: "Cloud consent is required before a request can leave this computer.".into(), network_checked: false }; }
+        if settings.endpoint.trim().is_empty() || settings.model.trim().is_empty() { return ModelHealth { model_id: model.id.clone(), status: ModelHealthStatus::MissingConfiguration, detail: "Provider endpoint and model are required.".into(), network_checked: false }; }
+        let status = if model.runtime == ModelRuntime::Local { ModelHealthStatus::Configured } else { ModelHealthStatus::Ready };
+        ModelHealth { model_id: model.id.clone(), status, detail: "Configuration is present; live health was not probed.".into(), network_checked: false }
+    }
+}
+
+#[cfg(test)]
+mod catalogue_tests {
+    use super::*;
+
+    #[test]
+    fn offline_catalogue_contains_only_offline_models_without_downloading() {
+        let catalogue = ModelCatalogue::new(true);
+        assert!(!catalogue.models.is_empty());
+        assert!(catalogue.models.iter().all(|model| model.capabilities.offline));
+    }
+
+    #[test]
+    fn health_is_metadata_only_and_respects_cloud_consent() {
+        let catalogue = ModelCatalogue::default();
+        let mut settings = ProviderSettings::default();
+        assert_eq!(catalogue.health(&settings).status, ModelHealthStatus::NeedsConsent);
+        settings.cloud_consent = true;
+        let health = catalogue.health(&settings);
+        assert!(!health.network_checked);
+        assert_eq!(health.status, ModelHealthStatus::Ready);
+    }
+
+    #[test]
+    fn local_model_is_available_without_cloud_consent() {
+        let catalogue = ModelCatalogue::default();
+        let mut settings = ProviderSettings::default();
+        settings.kind = ProviderKind::Local;
+        settings.model = "local-openai-compatible".into();
+        settings.endpoint = "http://127.0.0.1:1234/v1".into();
+        assert_eq!(catalogue.health(&settings).status, ModelHealthStatus::Configured);
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LibraryEntry { pub path: PathBuf, pub title: String, pub last_page: u16, #[serde(default)] pub favorite: bool }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

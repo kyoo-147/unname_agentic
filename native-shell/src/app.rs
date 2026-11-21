@@ -2,7 +2,7 @@
 //! (see `sidebar.rs`) and the editor on the right, with the
 //! 64px top bar (breadcrumb title + save status) above the page.
 
-use crate::export_native::{ExportBlock, ExportDocument, ExportFormat, export_document, suggested_name, write_export_path};
+use crate::export_native::{ExportBlock, ExportDocument, ExportFormat, export_document, suggested_name, write_export_bytes_path, write_export_path};
 use crate::input::{TextField, TextFieldEvent};
 use crate::settings::display_title;
 use crate::store::Entry;
@@ -600,6 +600,35 @@ impl Workspace {
     /// the one control that writes outside the library.
     pub fn export_document_as(&mut self, format: ExportFormat, window: &mut Window, cx: &mut Context<Self>) {
         self.export_menu = None;
+        if format == ExportFormat::Pdf {
+            let Some(source) = self.pdf_reader.as_ref().and_then(|reader| reader.read(cx).source_pdf_path()) else {
+                self.show_toast_kind(ToastKind::Info, crate::i18n::tr3("只有本地 PDF 可以另存为 PDF。", "Only a local PDF can be saved as PDF.", "Chỉ PDF cục bộ mới có thể lưu thành PDF."), cx);
+                return;
+            };
+            let title = self.current.as_ref().and_then(|id| self.entries.iter().find(|entry| &entry.id == id)).map(|entry| display_title(&entry.title)).unwrap_or_else(|| "document".into());
+            let suggested = suggested_name(&title, format);
+            let picked = crate::devtools::take_pick().and_then(|paths| paths.into_iter().next());
+            let prompt = picked.is_none().then(|| cx.prompt_for_new_path(&export_directory(), Some(&suggested)));
+            cx.spawn_in(window, async move |this, cx| {
+                let Some(path) = (match prompt {
+                    Some(prompt) => prompt.await.ok().and_then(Result::ok).flatten(),
+                    None => picked,
+                }) else { return; };
+                let bytes = match std::fs::read(&source) {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        let _ = this.update(cx, |workspace, cx| workspace.show_toast_kind(ToastKind::Error, &format!("{}: {error}", crate::i18n::tr3("无法读取 PDF", "Cannot read PDF", "Không đọc được PDF")), cx));
+                        return;
+                    }
+                };
+                let write = cx.background_executor().spawn(async move { write_export_bytes_path(&path, &bytes, false) });
+                match write.await {
+                    Ok(path) => { let _ = this.update(cx, |workspace, cx| workspace.show_toast(&crate::i18n::tr3_fill("已导出 {}", "Exported {}", "Đã xuất {}", path.display()), cx)); }
+                    Err(error) => { let _ = this.update(cx, |workspace, cx| workspace.show_toast_kind(ToastKind::Error, &format!("{}: {error:#}", crate::i18n::tr3("导出失败", "Export failed", "Xuất thất bại")), cx)); }
+                }
+            }).detach();
+            return;
+        }
         let Some(document) = self.export_snapshot(cx) else {
             self.show_toast_kind(ToastKind::Info, crate::i18n::tr3("没有可导出的文字。打开一份 PDF 后再导出。", "There is no text to export yet. Open a PDF first.", "Chưa có văn bản để xuất. Hãy mở một PDF trước."), cx);
             return;
@@ -673,7 +702,8 @@ impl Workspace {
             }))
             .child(Self::export_menu_row(cx, "export-markdown", ExportFormat::Markdown))
             .child(Self::export_menu_row(cx, "export-text", ExportFormat::Text))
-            .child(Self::export_menu_row(cx, "export-json", ExportFormat::Json));
+            .child(Self::export_menu_row(cx, "export-json", ExportFormat::Json))
+            .child(Self::export_menu_row(cx, "export-pdf", ExportFormat::Pdf));
         Some(deferred(anchored().anchor(Corner::TopRight).position(origin).snap_to_window_with_margin(px(8.)).child(menu)).with_priority(2).into_any_element())
     }
 
