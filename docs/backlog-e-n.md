@@ -121,8 +121,8 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
-| I01 | **P0** | Chat answers với citation trang+vùng source | Click citation highlight đúng block, không chỉ page. | 🟡 Parser + resolve đã xong ở cả web (24 test) và native (15 test); phần highlight trong UI là wave sau |
-| I02 | **P1** | Hybrid retrieval BM25 + embeddings trên Document IR | Truy vấn trả top-k kèm score và nguồn. | 🟡 `src/core/retrieval.ts` BM25 (k1 1.5, b 0.75) + heading boost + fold dấu tiếng Việt, 18 test; **chưa có embeddings** |
+| I01 | **P0** | Chat answers với citation trang+vùng source | Click citation highlight đúng block, không chỉ page. | ✅ `src/ui/citation-highlight.ts` + 11 test (cùng `citations.ts` 24 test + native 15 test): chip điều hướng bàn phím/Escape và overlay SVG đa giác/bbox highlight đúng block nguồn |
+| I02 | **P1** | Hybrid retrieval BM25 + embeddings trên Document IR | Truy vấn trả top-k kèm score và nguồn. | ✅ `src/core/hybrid-retrieval.ts` + 24 test (cùng `retrieval.ts` 18 test): embeddings cục bộ n-gram/TF-IDF, cosine + RRF ghép BM25, lọc document/page/kind/section, 0 network |
 | I03 | **P1** | Chunking hiểu bảng và section thay vì chia text máy móc | Chunk theo section/bảng, không cắt giữa công thức. | ✅ `chunkDocument`: section theo outline, bảng + caption riêng, cắt câu có overlap, không cắt trong công thức; 18 test |
 | I04 | **P1** | Hỏi đáp trên nhiều PDF với citation theo tài liệu | Câu trả lời nêu rõ tài liệu/trang. | ✅ `src/core/multi-document.ts` + 20 test: chia budget, fence theo doc, citation không có trong context bị báo unsupported, evidence matrix |
 | I05 | **P1** | Ask selected text/figure/table and explain | Context ưu tiên vùng người dùng chọn. | ✅ `src/core/ask-selection.ts` + 21 test: mở rộng về whole block, secondary có giới hạn, fence chống đóng sớm, `grounded=false` khi không overlap |
@@ -133,7 +133,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | I10 | **P2** | Figure/formula explanation dưới dạng multimodal | Nhận thức từ image crop và trả giải thích. | ✅ `src/core/multimodal.ts` + 26 test: plan theo pixel budget (không upscale), prompt theo loại figure/chart/formula, parse số bịa thì bỏ và đếm, thiếu description thì từ chối |
 | I11 | **P0** | Không đủ bằng chứng thì báo không đủ, không bịa | Abstain trước khi trả lời. | ✅ `src/core/abstain.ts` + 16 test: coverage/floor, câu hỏi số không có chữ số → abstain, câu yes-no không xác nhận → abstain, `guardAnswer` chặn câu trả lời không citation |
 | I09 | **P2** | Table Q&A có cell provenance và phép tính kiểm chứng | Trả kết quả số + cách tính. | ✅ `src/core/table-qa.ts` + 21 test: sum/count/max/min/compare/lookup kèm cell đã dùng, phát hiện total lệch 1 và cột % cộng 102 |
-| I12 | **P1** | Eval harness cho answer quality (citation hit, abstention) | Bảng điểm theo case cố định. | 🟡 `src/core/eval-harness.ts` + `docs/evaluation.md` + 24 test: pass chỉ khi đủ phrase + citation + abstain đúng, rate rỗng = null; bộ case mới 4 case tổng hợp |
+| I12 | **P1** | Eval harness cho answer quality (citation hit, abstention) | Bảng điểm theo case cố định. | ✅ `src/core/reranker.ts` + `tests/eval-corpus.test.ts` + 18 test (cùng `eval-harness.ts` 24 test): cross-feature local reranker + 20-case cố định (multi-doc/bảng/abstain/injection) đạt 1.00 |
 | I13 | **P2** | Multi-turn conversation với context window | Hội thoại nhiều lượt vẫn đúng nguồn. | ✅ `src/core/conversation.ts` + 31 test: giữ 4 lượt cuối bất kể budget, đếm `droppedTurns`, citation gộp theo lượt, prune không để lại 0 lượt user |
 | I14 | **P2** | Notes/flashcards tự sinh từ tài liệu | Tạo ghi chú học tập có nguồn. | ✅ `src/core/notes.ts` + 25 test: section theo outline, point có trần mỗi section, definition EN/VI, formula kèm LaTeX, mọi entry có page+blockId, Anki CSV RFC4180 |
 
@@ -141,15 +141,15 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
-| J01 | **P1** | DOI/arXiv detection, authors, venue, references | Metadata đúng, tạo được BibTeX. | 🟡 `src/core/bibtex.ts` (parse/emit/stable key/dedupe, 26 test); **chưa fetch DOI/arXiv** |
-| J02 | **P2** | BibTeX/RIS import/export + Zotero bridge | Import/export chuẩn, key ổn định. | 🟡 BibTeX đã có; RIS + Zotero chưa |
+| J01 | **P1** | DOI/arXiv detection, authors, venue, references | Metadata đúng, tạo được BibTeX. | ✅ `src/core/paper-metadata.ts` + 10 test (cùng `bibtex.ts` 26 test): tách title/authors/venue/DOI/arXiv/references từ IR, ghép Crossref/Semantic Scholar qua `scholar.ts` có bước duyệt + xuất BibTeX |
+| J02 | **P2** | BibTeX/RIS import/export + Zotero bridge | Import/export chuẩn, key ổn định. | ✅ `src/core/ris-zotero.ts` + 9 test: parser/serializer RIS chuẩn, chuyển CSL-JSON, dedupe key ổn định với BibTeX và cầu Zotero chỉ nhận loopback `127.0.0.1`/`localhost` |
 | J03 | **P2** | Citation graph/tìm paper liên quan | Đồ thị citation tương tác. | ✅ `src/core/citation-graph.ts` + 47 test: resolve theo DOI rồi title+year, stub cho cái không resolve, related/coCitation, DOT + JSON |
 | J04 | **P2** | Semantic Scholar/Crossref enrichment | Có metadata, abstract, citation count. | ✅ `src/core/scholar.ts` + 32 test: DOI/arXiv normalise, build URL, parse 2 nguồn, merge có provenance |
 | J05 | **P2** | Notes/backlinks liên kết tới trang và trích đoạn | Note trỏ đúng vị trí, hiện backlink. | ✅ cùng module `annotations.ts`: quote, backlinks, reanchor |
-| J06 | **P2** | Paper comparison matrix method/data/metrics/limitations | Cell có citation cụ thể, tránh suy diễn.  ⬜ |
-| J08 | **P2** | Clean/reflow reading mode for papers | Giữ công thức, footnote, citations khi reflow.  ⬜ |
-| J09 | **P3** | Study pack: flashcards, questions, concept map | Generated content liên kết tới sources.  ⬜ |
-| J10 | **P3** | Research library smart collections theo topic/author/year | Filter, tag, duplicate merge có xác nhận.  ⬜ |
+| J06 | **P2** | Paper comparison matrix method/data/metrics/limitations | Cell có citation cụ thể, tránh suy diễn. | ✅ `src/core/paper-matrix.ts` + 22 test: ma trận method/dataset/metrics/limitations, mọi ô có quote nguyên văn + provenance hoặc `not_reported`, xuất Markdown/CSV/JSON |
+| J08 | **P2** | Clean/reflow reading mode for papers | Giữ công thức, footnote, citations khi reflow. | ✅ `src/core/paper-reflow.ts` + 18 test: reflow 1 cột từ PDF 2 cột, giữ LaTeX inline/display, footnote neo ngược, caption/citation và ánh xạ 2 chiều `reflowId <-> page/rect` |
+| J09 | **P3** | Study pack: flashcards, questions, concept map | Generated content liên kết tới sources. | ✅ `src/core/study-pack.ts` + 13 test: thẻ ghi nhớ Anki CSV/TSV, câu hỏi kèm đáp án trích dẫn kiểm chứng và sơ đồ khái niệm Mermaid gắn `(page, blockId)` |
+| J10 | **P3** | Research library smart collections theo topic/author/year | Filter, tag, duplicate merge có xác nhận. | ✅ `src/core/smart-collections.ts` + 12 test: lọc topic/author/year/venue/tag, thao tác tag hàng loạt, phát hiện trùng DOI/arXiv/title và confirm-before-merge kèm rollback |
 | J07 | **P2** | So sánh methodology/dataset/metric giữa paper | Bảng so sánh có trích dẫn. | ✅ `src/core/paper-compare.ts` + 23 test: mỗi cell có câu trích + section + score, gap có lý do, consensus/divergence chỉ từ cell |
 
 ### K. Document workflow & structured extraction — 10 mục
