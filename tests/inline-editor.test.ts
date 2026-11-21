@@ -21,7 +21,12 @@ import {
   markSaved,
   modifiedBlockIds,
   pendingSave,
+  recoverFromSnapshot,
   redo,
+  resolveConflict,
+  revertAll,
+  revertBlock,
+  revertBlocks,
   syncDocumentRevision,
   syncSourceRevision,
   undo,
@@ -457,5 +462,446 @@ describe('H06 inline block editor: optimistic revision conflict detection', () =
     expect(getBlock(synced, 'p1-r0')?.dirty).toBe(true);
     expect(getBlock(synced, 'p1-r1')?.ocrText).toBe('Due date 05/03/2026');
     expect(getBlock(synced, 'p1-r1')?.dirty).toBe(false);
+  });
+});
+
+function expectEditorError(action: () => unknown, code: string): InlineEditorError {
+  let caught: unknown;
+  try {
+    action();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(InlineEditorError);
+  expect((caught as InlineEditorError).code).toBe(code);
+  return caught as InlineEditorError;
+}
+
+describe('H06 inline block editor: revision conflict resolution', () => {
+  it('stages conflicts and resolves incrementally with keep-local, accept-incoming, and manual strategies', () => {
+    const s0 = createEditorState({
+      documentId: 'doc-res',
+      sourceRevisionId: 'rev-1',
+      sourceSha256: SHA_A,
+      blocks: [
+        { blockId: 'p1-r0', page: 1, ocrText: 'Base O0', translationText: 'Bản gốc 0' },
+        { blockId: 'p1-r1', page: 1, ocrText: 'Base O1', translationText: 'Bản gốc 1' },
+        { blockId: 'p1-r2', page: 1, ocrText: 'Base O2', translationText: 'Bản gốc 2' },
+      ],
+      at: 100,
+    });
+
+    let s = editBlock(s0, { blockId: 'p1-r0', field: 'ocr', text: 'Local O0', at: 200 });
+    s = editBlock(s, { blockId: 'p1-r1', field: 'ocr', text: 'Local O1', at: 300 });
+    s = editBlock(s, { blockId: 'p1-r1', field: 'translation', text: 'Bản dịch local 1', at: 400 });
+
+    const staged = syncSourceRevision(
+      s,
+      {
+        sourceRevisionId: 'rev-2',
+        sourceSha256: SHA_A,
+        blocks: [
+          { blockId: 'p1-r0', page: 1, ocrText: 'Incoming O0', translationText: 'Bản gốc 0' },
+          { blockId: 'p1-r1', page: 1, ocrText: 'Incoming O1', translationText: 'Bản dịch incoming 1' },
+          { blockId: 'p1-r2', page: 1, ocrText: 'Incoming O2', translationText: 'Bản gốc 2' },
+          { blockId: 'p1-r3', page: 2, ocrText: 'New block 3', translationText: 'Khối mới 3' },
+        ],
+      },
+      { onConflict: 'stage', at: 500 },
+    );
+
+    expect(staged.sourceRevisionId).toBe('rev-1');
+    expect(staged.conflict?.incomingRevisionId).toBe('rev-2');
+    expect(staged.conflict?.conflicts).toHaveLength(3);
+
+    // Unresolved conflict blocks save, re-sync, undo, redo, and editing conflicted fields.
+    expect(expectConflictError(() => markSaved(staged)).reason).toBe('unresolved-conflict');
+    expect(
+      expectConflictError(() =>
+        syncSourceRevision(staged, { sourceRevisionId: 'rev-3', blocks: [] }),
+      ).reason,
+    ).toBe('unresolved-conflict');
+    expect(expectConflictError(() => undo(staged)).reason).toBe('unresolved-conflict');
+    expect(expectConflictError(() => redo(staged)).reason).toBe('unresolved-conflict');
+    expect(
+      expectConflictError(() =>
+        editBlock(staged, { blockId: 'p1-r0', field: 'ocr', text: 'Blocked' }),
+      ).reason,
+    ).toBe('unresolved-conflict');
+
+    // Editing an unrelated non-conflicted field remains allowed while conflict is staged.
+    const editedUnconflicted = editBlock(staged, {
+      blockId: 'p1-r0',
+      field: 'translation',
+      text: 'Bản dịch tự sửa 0',
+      at: 550,
+    });
+    expect(getBlock(editedUnconflicted, 'p1-r0')?.translationText).toBe('Bản dịch tự sửa 0');
+
+    // Step 1: resolve p1-r0 OCR partially -> conflict remains open for p1-r1.
+    const partial = resolveConflict(
+      editedUnconflicted,
+      [{ blockId: 'p1-r0', field: 'ocr', strategy: 'keep-local' }],
+      { at: 600 },
+    );
+    expect(partial.conflict?.conflicts).toHaveLength(2);
+    expect(partial.sourceRevisionId).toBe('rev-1');
+    expect(getBlock(partial, 'p1-r0')?.ocrText).toBe('Local O0');
+
+    // Step 2: resolve remaining p1-r1 conflicts with accept-incoming and manual merge.
+    const resolved = resolveConflict(
+      partial,
+      [
+        { blockId: 'p1-r1', field: 'ocr', strategy: 'accept-incoming' },
+        { blockId: 'p1-r1', field: 'translation', strategy: 'manual', text: 'Bản dịch hợp nhất 1' },
+      ],
+      { at: 700 },
+    );
+
+    expect(resolved.conflict).toBeNull();
+    expect(resolved.sourceRevisionId).toBe('rev-2');
+    expect(getBlock(resolved, 'p1-r0')?.ocrText).toBe('Local O0');
+    expect(getBlock(resolved, 'p1-r0')?.sourceOcrText).toBe('Incoming O0');
+    expect(getBlock(resolved, 'p1-r0')?.ocrDirty).toBe(true);
+    expect(getBlock(resolved, 'p1-r0')?.translationText).toBe('Bản dịch tự sửa 0');
+
+    expect(getBlock(resolved, 'p1-r1')?.ocrText).toBe('Incoming O1');
+    expect(getBlock(resolved, 'p1-r1')?.ocrDirty).toBe(false);
+    expect(getBlock(resolved, 'p1-r1')?.translationText).toBe('Bản dịch hợp nhất 1');
+    expect(getBlock(resolved, 'p1-r1')?.sourceTranslationText).toBe('Bản dịch incoming 1');
+    expect(getBlock(resolved, 'p1-r1')?.translationDirty).toBe(true);
+
+    // Non-conflicted p1-r2 updated and p1-r3 added atomically upon finalization.
+    expect(getBlock(resolved, 'p1-r2')?.ocrText).toBe('Incoming O2');
+    expect(getBlock(resolved, 'p1-r2')?.dirty).toBe(false);
+    expect(getBlock(resolved, 'p1-r3')?.ocrText).toBe('New block 3');
+
+    // Undoing the conflict-resolution entry restores pre-resolution text cleanly.
+    const undoneRes = undo(resolved);
+    expect(getBlock(undoneRes, 'p1-r1')?.ocrText).toBe('Local O1');
+    expect(getBlock(undoneRes, 'p1-r1')?.translationText).toBe('Bản dịch local 1');
+    expect(undoneRes.sourceRevisionId).toBe('rev-2');
+  });
+
+  it('handles upstream block deletions across keep-local, accept-incoming, and unmodified blocks', () => {
+    const s0 = createEditorState({
+      documentId: 'doc-del',
+      sourceRevisionId: 'rev-1',
+      blocks: [
+        { blockId: 'p1-r0', page: 1, ocrText: 'Keep me', translationText: 'Giữ' },
+        { blockId: 'p1-r1', page: 1, ocrText: 'Drop me', translationText: 'Bỏ' },
+        { blockId: 'p1-r2', page: 1, ocrText: 'Untouched gone', translationText: 'Không sửa' },
+      ],
+    });
+
+    let s = editBlock(s0, { blockId: 'p1-r0', field: 'ocr', text: 'Keep me edited' });
+    s = editBlock(s, { blockId: 'p1-r1', field: 'ocr', text: 'Drop me edited' });
+
+    // Upstream rev-2 removes all 3 blocks and introduces p1-r3.
+    const staged = syncSourceRevision(
+      s,
+      {
+        sourceRevisionId: 'rev-2',
+        blocks: [{ blockId: 'p1-r3', page: 1, ocrText: 'Replacement', translationText: 'Thay thế' }],
+      },
+      { onConflict: 'stage' },
+    );
+
+    expect(staged.conflict?.conflicts.map(c => `${c.blockId}:${c.removedInIncoming}`)).toEqual([
+      'p1-r0:true',
+      'p1-r1:true',
+    ]);
+
+    // Resolving across two calls verifies preservedRemovedBlockIds persists mid-resolution and across JSON export.
+    const step1 = resolveConflict(staged, [{ blockId: 'p1-r0', field: 'ocr', strategy: 'keep-local' }]);
+    const reimportedMid = importJson(exportJson(step1));
+    const step2 = resolveConflict(reimportedMid, [{ blockId: 'p1-r1', field: 'ocr', strategy: 'accept-incoming' }]);
+
+    expect(step2.conflict).toBeNull();
+    expect(step2.sourceRevisionId).toBe('rev-2');
+    expect(getBlock(step2, 'p1-r0')?.ocrText).toBe('Keep me edited');
+    expect(getBlock(step2, 'p1-r1')).toBeUndefined();
+    expect(getBlock(step2, 'p1-r2')).toBeUndefined();
+    expect(getBlock(step2, 'p1-r3')?.ocrText).toBe('Replacement');
+  });
+
+  it('rejects source hash mismatches, mutating source without bumping revisionId, and invalid resolveConflict calls', () => {
+    const s0 = createEditorState({
+      documentId: 'doc-err',
+      sourceRevisionId: 'rev-1',
+      sourceSha256: SHA_A,
+      blocks: [{ blockId: 'p1-r0', page: 1, ocrText: 'One', translationText: 'Một' }],
+    });
+
+    const hashErr = expectConflictError(() =>
+      syncSourceRevision(s0, {
+        sourceRevisionId: 'rev-2',
+        sourceSha256: 'b'.repeat(64),
+        blocks: [{ blockId: 'p1-r0', page: 1, ocrText: 'One', translationText: 'Một' }],
+      }),
+    );
+    expect(hashErr.reason).toBe('source-hash-mismatch');
+
+    const sameRevMutated = expectConflictError(() =>
+      syncSourceRevision(s0, {
+        sourceRevisionId: 'rev-1',
+        sourceSha256: SHA_A,
+        blocks: [{ blockId: 'p1-r0', page: 1, ocrText: 'Changed silently', translationText: 'Một' }],
+      }),
+    );
+    expect(sameRevMutated.reason).toBe('stale-source-revision');
+    expect(sameRevMutated.blockIds).toEqual(['p1-r0']);
+
+    expectEditorError(
+      () => resolveConflict(s0, [{ blockId: 'p1-r0', field: 'ocr', strategy: 'keep-local' }]),
+      'no-conflict',
+    );
+
+    const edited = editBlock(s0, { blockId: 'p1-r0', field: 'ocr', text: 'Local' });
+    const staged = syncSourceRevision(
+      edited,
+      {
+        sourceRevisionId: 'rev-2',
+        sourceSha256: SHA_A,
+        blocks: [{ blockId: 'p1-r0', page: 1, ocrText: 'Incoming', translationText: 'Một' }],
+      },
+      { onConflict: 'stage' },
+    );
+
+    expectEditorError(
+      () =>
+        resolveConflict(staged, [
+          { blockId: 'p1-r0', field: 'ocr', strategy: 'keep-local' },
+          { blockId: 'p1-r0', field: 'ocr', strategy: 'accept-incoming' },
+        ]),
+      'duplicate-id',
+    );
+    expectEditorError(
+      () => resolveConflict(staged, [{ blockId: 'p1-r0', field: 'ocr', strategy: 'manual' }]),
+      'invalid-field',
+    );
+    expectEditorError(
+      () => resolveConflict(staged, [{ blockId: 'p1-r0', field: 'translation', strategy: 'keep-local' }]),
+      'no-conflict',
+    );
+  });
+});
+
+describe('H06 inline block editor: batch revert', () => {
+  it('reverts multiple blocks atomically in one undoable step and supports field and target selection', () => {
+    const s0 = createEditorState({
+      documentId: 'doc-rev',
+      sourceRevisionId: 'rev-1',
+      blocks: [
+        { blockId: 'p1-r0', page: 1, ocrText: 'Src0', translationText: 'TrSrc0' },
+        { blockId: 'p1-r1', page: 1, ocrText: 'Src1', translationText: 'TrSrc1' },
+        { blockId: 'p1-r2', page: 1, ocrText: 'Src2', translationText: 'TrSrc2' },
+      ],
+      at: 100,
+    });
+
+    let s = editBlock(s0, { blockId: 'p1-r0', field: 'ocr', text: 'Saved0', at: 200 });
+    s = editBlock(s, { blockId: 'p1-r0', field: 'translation', text: 'TrSaved0', at: 300 });
+    s = editBlock(s, { blockId: 'p1-r1', field: 'ocr', text: 'Saved1', at: 400 });
+    s = markSaved(s, { at: 500 });
+
+    s = editBlock(s, { blockId: 'p1-r0', field: 'ocr', text: 'Draft0', at: 600 });
+    s = editBlock(s, { blockId: 'p1-r1', field: 'translation', text: 'TrDraft1', at: 700 });
+    s = editBlock(s, { blockId: 'p1-r2', field: 'ocr', text: 'Draft2', at: 800 });
+
+    // Revert only OCR to 'saved' on p1-r0 and p1-r1 (p1-r1 OCR was already 'Saved1', so only p1-r0 changes).
+    const revertedSavedOcr = revertBlocks(s, ['p1-r0', 'p1-r1'], { field: 'ocr', to: 'saved', at: 900 });
+    expect(getBlock(revertedSavedOcr, 'p1-r0')?.ocrText).toBe('Saved0');
+    expect(getBlock(revertedSavedOcr, 'p1-r0')?.translationText).toBe('TrSaved0');
+    expect(getBlock(revertedSavedOcr, 'p1-r1')?.translationText).toBe('TrDraft1');
+
+    // Revert p1-r0 and p1-r1 completely back to 'source' in ONE atomic undoable step.
+    const batchReverted = revertBlocks(revertedSavedOcr, ['p1-r0', 'p1-r1'], { to: 'source', at: 1000 });
+    expect(getBlock(batchReverted, 'p1-r0')?.ocrText).toBe('Src0');
+    expect(getBlock(batchReverted, 'p1-r0')?.translationText).toBe('TrSrc0');
+    expect(getBlock(batchReverted, 'p1-r1')?.ocrText).toBe('Src1');
+    expect(getBlock(batchReverted, 'p1-r1')?.translationText).toBe('TrSrc1');
+    expect(getBlock(batchReverted, 'p1-r2')?.ocrText).toBe('Draft2');
+    // Reverted back to source differs from saved snapshot ('Saved0'/'Saved1'), so pendingSave must be true.
+    expect(pendingSave(batchReverted)).toBe(true);
+
+    // One undo restores ALL blocks touched by the batch revert.
+    const undoneBatch = undo(batchReverted, { at: 1100 });
+    expect(getBlock(undoneBatch, 'p1-r0')?.ocrText).toBe('Saved0');
+    expect(getBlock(undoneBatch, 'p1-r0')?.translationText).toBe('TrSaved0');
+    expect(getBlock(undoneBatch, 'p1-r1')?.ocrText).toBe('Saved1');
+    expect(getBlock(undoneBatch, 'p1-r1')?.translationText).toBe('TrDraft1');
+
+    // Redo re-applies the batch revert.
+    const redoneBatch = redo(undoneBatch, { at: 1200 });
+    expect(getBlock(redoneBatch, 'p1-r0')?.ocrText).toBe('Src0');
+    expect(getBlock(redoneBatch, 'p1-r1')?.translationText).toBe('TrSrc1');
+
+    // revertAll reverts remaining modified blocks (p1-r2) and becomes no-op when repeated.
+    const allReverted = revertAll(redoneBatch, { to: 'source', at: 1300 });
+    expect(modifiedBlockIds(allReverted)).toEqual([]);
+    expect(revertAll(allReverted, { to: 'source', at: 1400 })).toBe(allReverted);
+
+    // revertBlock single-block convenience wrapper.
+    const reEdited = editBlock(allReverted, { blockId: 'p1-r2', field: 'translation', text: 'Edited2', at: 1500 });
+    const singleReverted = revertBlock(reEdited, 'p1-r2', { field: 'translation', to: 'source', at: 1600 });
+    expect(getBlock(singleReverted, 'p1-r2')?.translationText).toBe('TrSrc2');
+  });
+
+  it('validates batch revert atomically without partial mutation on unknown block or stale revision', () => {
+    const s0 = createEditorState({
+      documentId: 'doc-rev-err',
+      sourceRevisionId: 'rev-2',
+      blocks: [
+        { blockId: 'p1-r0', page: 1, ocrText: 'A', translationText: 'a' },
+        { blockId: 'p1-r1', page: 1, ocrText: 'B', translationText: 'b' },
+      ],
+    });
+    const s1 = editBlock(s0, { blockId: 'p1-r0', field: 'ocr', text: 'A-edited' });
+
+    expectEditorError(() => revertBlocks(s1, ['p1-r0', 'p9-missing']), 'unknown-block');
+    expect(getBlock(s1, 'p1-r0')?.ocrText).toBe('A-edited');
+
+    expect(
+      expectConflictError(() => revertBlocks(s1, ['p1-r0'], { expectedSourceRevisionId: 'rev-1' })).reason,
+    ).toBe('stale-source-revision');
+  });
+});
+
+describe('H06 inline block editor: snapshot recovery and boundary edge cases', () => {
+  it('round-trips byte-identical canonical JSON and recovers against newer DocumentIR', () => {
+    const irV1 = makeSampleDocument('rev-1', 'Total 1O0 EUR', 'Due date 01/02/2026');
+    const s0 = createEditorStateFromDocument(irV1, { targetLang: 'vi', at: 100 });
+    const s1 = editBlock(s0, { blockId: 'p1-r0', field: 'ocr', text: 'Total 100 EUR', at: 200 });
+    const s2 = editBlock(s1, { blockId: 'p1-r1', field: 'translation', text: 'Hạn mới 01/02/2026', at: 300 });
+    const s3 = undo(s2, { at: 400 });
+
+    const json1 = exportJson(s3);
+    const restored = importJson(json1);
+    const json2 = exportJson(restored);
+    expect(json2).toBe(json1);
+    expect(canUndo(restored)).toBe(true);
+    expect(canRedo(restored)).toBe(true);
+    expect(pendingSave(restored)).toBe(true);
+
+    // Recovering against rev-2 with an upstream change to p1-r0 stages conflict automatically.
+    const irV2Conflict = makeSampleDocument('rev-2', 'Total 200 EUR', 'Due date 01/02/2026');
+    const recoveredConflict = recoverFromSnapshot(json1, {
+      document: irV2Conflict,
+      targetLang: 'vi',
+      at: 500,
+    });
+    expect(recoveredConflict.conflict?.incomingRevisionId).toBe('rev-2');
+    expect(recoveredConflict.conflict?.conflicts).toEqual([
+      {
+        blockId: 'p1-r0',
+        field: 'ocr',
+        baseText: 'Total 1O0 EUR',
+        localText: 'Total 100 EUR',
+        incomingText: 'Total 200 EUR',
+      },
+    ]);
+
+    // Recovering against rev-2 where only p1-r1 OCR changed fast-forwards cleanly and keeps p1-r0 local edit.
+    const irV2Clean = makeSampleDocument('rev-2', 'Total 1O0 EUR', 'Due date 09/09/2026');
+    const recoveredClean = recoverFromSnapshot(json1, {
+      document: irV2Clean,
+      targetLang: 'vi',
+      at: 500,
+    });
+    expect(recoveredClean.conflict).toBeNull();
+    expect(recoveredClean.sourceRevisionId).toBe('rev-2');
+    expect(getBlock(recoveredClean, 'p1-r0')?.ocrText).toBe('Total 100 EUR');
+    expect(getBlock(recoveredClean, 'p1-r1')?.ocrText).toBe('Due date 09/09/2026');
+  });
+
+  it('rejects malformed, unsupported-version, and duplicate-id snapshots and reconciles stale derived flags', () => {
+    expectEditorError(() => importJson('{not valid json'), 'malformed-json');
+    expectEditorError(() => importJson('[]'), 'malformed-export');
+
+    const baseJson = exportJson(
+      editBlock(
+        createEditorState({
+          documentId: 'doc-snap',
+          sourceRevisionId: 'rev-1',
+          blocks: [{ blockId: 'p1-r0', page: 1, ocrText: 'Orig', translationText: 'Gốc' }],
+        }),
+        { blockId: 'p1-r0', field: 'ocr', text: 'Edited' },
+      ),
+    );
+    const parsed = JSON.parse(baseJson) as Record<string, unknown>;
+
+    expectEditorError(
+      () => importJson(JSON.stringify({ ...parsed, schemaVersion: 99 })),
+      'unsupported-schema-version',
+    );
+    expectEditorError(
+      () => importJson(JSON.stringify({ ...parsed, kind: 'wrong.kind' })),
+      'malformed-export',
+    );
+    expectEditorError(
+      () => importJson(JSON.stringify({ ...parsed, sourceSha256: 'not-hex' })),
+      'invalid-field',
+    );
+
+    const blocksArr = parsed.blocks as Record<string, unknown>[];
+    expectEditorError(
+      () => importJson(JSON.stringify({ ...parsed, blocks: [blocksArr[0], blocksArr[0]] })),
+      'duplicate-id',
+    );
+
+    // If autosave.pendingSave was stale false in a crashed snapshot while text != savedText, importJson reconciles it.
+    const staleAutosave = {
+      ...parsed,
+      autosave: { ...(parsed.autosave as Record<string, unknown>), pendingSave: false, scheduledAt: null },
+    };
+    const reconciled = importJson(JSON.stringify(staleAutosave));
+    expect(pendingSave(reconciled)).toBe(true);
+    expect(isDirty(reconciled)).toBe(true);
+    expect(getBlock(reconciled, 'p1-r0')?.dirty).toBe(true);
+  });
+
+  it('enforces maxHistory cap and handles compareWithSource against saved, ocr, and oversized text', () => {
+    const s0 = createEditorState({
+      documentId: 'doc-edge',
+      sourceRevisionId: 'rev-1',
+      maxHistory: 2,
+      blocks: [{ blockId: 'p1-r0', page: 1, ocrText: 'OCR zero', translationText: 'TR zero' }],
+    });
+
+    let s = editBlock(s0, { blockId: 'p1-r0', field: 'ocr', text: 'OCR one' });
+    s = editBlock(s, { blockId: 'p1-r0', field: 'ocr', text: 'OCR two' });
+    s = editBlock(s, { blockId: 'p1-r0', field: 'ocr', text: 'OCR three' });
+    expect(s.undoStack).toHaveLength(2);
+    expect(getBlock(undo(undo(s)), 'p1-r0')?.ocrText).toBe('OCR one');
+
+    const saved = markSaved(s, { at: 100 });
+    const afterSave = editBlock(saved, { blockId: 'p1-r0', field: 'ocr', text: 'OCR four', at: 200 });
+    const vsSaved = compareWithSource(afterSave, 'p1-r0', 'ocr', { against: 'saved' });
+    expect(vsSaved.sourceText).toBe('OCR three');
+    expect(vsSaved.editedText).toBe('OCR four');
+    expect(vsSaved.wordsDeleted).toBe(1);
+    expect(vsSaved.wordsAdded).toBe(1);
+
+    const trEdited = editBlock(afterSave, { blockId: 'p1-r0', field: 'translation', text: 'OCR four' });
+    const vsOcr = compareWithSource(trEdited, 'p1-r0', 'translation', { against: 'ocr' });
+    expect(vsOcr.sourceText).toBe('OCR zero');
+    expect(vsOcr.editedText).toBe('OCR four');
+
+    // Oversized middle (> DIFF_MAX_DP_CELLS) falls back safely without throwing or allocating huge DP tables.
+    const bigLeft = `prefix ${'a'.repeat(1200)} suffix`;
+    const bigRight = `prefix ${'b'.repeat(1200)} suffix`;
+    const bigState = editBlock(
+      createEditorState({
+        documentId: 'doc-big',
+        sourceRevisionId: 'rev-1',
+        blocks: [{ blockId: 'p1-r0', page: 1, ocrText: bigLeft, translationText: '' }],
+      }),
+      { blockId: 'p1-r0', field: 'ocr', text: bigRight },
+    );
+    const bigCmp = compareWithSource(bigState, 'p1-r0', 'ocr');
+    expect(bigCmp.changed).toBe(true);
+    expect(bigCmp.charRuns[0]).toEqual({ kind: 'equal', text: 'prefix ' });
+    expect(bigCmp.charRuns[bigCmp.charRuns.length - 1]).toEqual({ kind: 'equal', text: ' suffix' });
   });
 });
