@@ -432,27 +432,40 @@ const KIND_PRIORITY: readonly VisualRegionKind[] = [
   'photo',
 ];
 
-const CHART_PATTERN =
-  /\b(?:chart|plot|graph|histogram|scatter|bar\s+chart|line\s+chart|pie\s+chart|box\s+plot|heatmap|x-axis|y-axis|axis|axes|legend|biểu\s+đồ|đồ\s+thị)\b/iu;
-const FLOWCHART_PATTERN =
-  /\b(?:flowchart|flow\s+chart|workflow|decision\s+tree|process\s+flow|state\s+machine|lưu\s+đồ|sơ\s+đồ\s+khối)\b/iu;
-const TECHNICAL_PATTERN =
-  /\b(?:schematic|blueprint|cad|cross-section|cross\s+section|orthographic|isometric|elevation|wiring|circuit|pinout|tolerance|diameter|radius|shaft|mechanical|assembly|exploded\s+view|bản\s+vẽ|mặt\s+cắt|sơ\s+đồ\s+mạch|kỹ\s+thuật)\b|scale\s+1:\d+/iu;
+/** Builds a Unicode word-bounded regex so non-ASCII terms (e.g. Vietnamese) match cleanly. */
+function unicodeTermPattern(body: string, flags = 'iu'): RegExp {
+  return new RegExp(`(?<![\\p{L}\\p{N}])(?:${body})(?![\\p{L}\\p{N}])`, flags);
+}
+
+const CHART_PATTERN = unicodeTermPattern(
+  'chart|plot|graph|histogram|scatter|bar\\s+chart|line\\s+chart|pie\\s+chart|box\\s+plot|heatmap|x-axis|y-axis|axis|axes|legend|biểu\\s+đồ|đồ\\s+thị',
+);
+const FLOWCHART_PATTERN = unicodeTermPattern(
+  'flowchart|flow\\s+chart|workflow|decision\\s+tree|process\\s+flow|state\\s+machine|lưu\\s+đồ|sơ\\s+đồ\\s+khối',
+);
+const TECHNICAL_PATTERN = unicodeTermPattern(
+  'schematic|blueprint|cad|cross-section|cross\\s+section|orthographic|isometric|elevation|wiring|circuit|pinout|tolerance|diameter|radius|shaft|mechanical|assembly|exploded\\s+view|bản\\s+vẽ|mặt\\s+cắt|sơ\\s+đồ\\s+mạch|kỹ\\s+thuật|scale\\s+1:\\d+',
+);
 const TECHNICAL_SYMBOL_PATTERN = /[Ø⌀±°]/u;
-const TABLE_IMAGE_PATTERN = /\b(?:table|tabular|spreadsheet|matrix|bảng)\b/iu;
-const DIAGRAM_PATTERN =
-  /\b(?:diagram|architecture|block\s+diagram|topology|sequence|er\s+diagram|uml|system\s+overview|component|pipeline|sơ\s+đồ|kiến\s+trúc)\b/iu;
-const PHOTO_PATTERN =
-  /\b(?:photo|photograph|micrograph|sem|tem|mri|ct\s+scan|x-ray|radiograph|screenshot|specimen|portrait|ảnh|chụp)\b/iu;
+const TABLE_IMAGE_PATTERN = unicodeTermPattern('table|tabular|spreadsheet|matrix|bảng');
+const DIAGRAM_PATTERN = unicodeTermPattern(
+  'diagram|architecture|block\\s+diagram|topology|sequence|er\\s+diagram|uml|system\\s+overview|component|pipeline|sơ\\s+đồ|kiến\\s+trúc',
+);
+const PHOTO_PATTERN = unicodeTermPattern(
+  'photo|photograph|micrograph|sem|tem|mri|ct\\s+scan|x-ray|radiograph|screenshot|specimen|portrait|ảnh|chụp',
+);
 
 const ILLEGIBLE_TOKEN_PATTERN =
   /^(?:\?+|\[?(?:unreadable|illegible|blurry|obscured|unknown|n\/a|na|none|not\s+stated|not\s+readable)\]?)$/iu;
-const WHOLE_FIGURE_ILLEGIBLE_PATTERN =
-  /\b(?:too\s+blurry|too\s+pixelated|completely\s+(?:blurred|blurry|unreadable|illegible)|cannot\s+read\s+(?:the\s+|this\s+)?(?:image|figure|chart|diagram|flowchart|drawing|table)|(?:the\s+)?(?:image|figure|chart|diagram|flowchart|drawing|table|axes(?:\s+and\s+values)?)\s+(?:is|are)\s+(?:too\s+blurry|unreadable|illegible|not\s+legible|not\s+readable)|mờ\s+không\s+đọc\s+được|không\s+thể\s+đọc\s+(?:hình|biểu\s+đồ|sơ\s+đồ))\b/iu;
+const WHOLE_FIGURE_ILLEGIBLE_PATTERN = unicodeTermPattern(
+  'too\\s+blurry|too\\s+pixelated|completely\\s+(?:blurred|blurry|unreadable|illegible)|cannot\\s+read\\s+(?:the\\s+|this\\s+)?(?:image|figure|chart|diagram|flowchart|drawing|table)|(?:the\\s+)?(?:image|figure|chart|diagram|flowchart|drawing|table|axes(?:\\s+and\\s+values)?)\\s+(?:is|are)\\s+(?:too\\s+blurry|unreadable|illegible|not\\s+legible|not\\s+readable)|mờ\\s+không\\s+đọc\\s+được|không\\s+thể\\s+đọc\\s+(?:hình|biểu\\s+đồ|sơ\\s+đồ)',
+);
 
 /** Caption and ordinal tokens in prose that do not represent figure measurements. */
-const PROSE_REFERENCE_PATTERN =
-  /\b(?:Figure|Fig\.?|Table|Algorithm|Chart|Diagram|Equation|Eq\.?|Step|Hình|Bảng|Biểu\s+đồ|Sơ\s+đồ)\s+\d+(?:\.\d+)*\b/giu;
+const PROSE_REFERENCE_PATTERN = unicodeTermPattern(
+  '(?:Figure|Fig\\.?|Table|Algorithm|Chart|Diagram|Equation|Eq\\.?|Step|Hình|Bảng|Biểu\\s+đồ|Sơ\\s+đồ)\\s+\\d+(?:\\.\\d+)*',
+  'giu',
+);
 const ORDINAL_TOKEN_PATTERN = /\b\d+(?:st|nd|rd|th)\b/giu;
 const DIMENSION_TAG_PATTERN = /\b\d+[dD]\b/gu;
 const COMPOUND_MODIFIER_PATTERN =
