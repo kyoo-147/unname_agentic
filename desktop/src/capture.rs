@@ -22,6 +22,7 @@ pub fn grab(source: &CaptureSource) -> Result<RgbaImage> {
     let image = match source {
         CaptureSource::Window { id, .. } => {
             let window = xcap::Window::all()?.into_iter().find(|window| window.id().ok() == Some(*id)).context("Source window closed")?;
+            anyhow::ensure!(window.pid().unwrap_or(0) != std::process::id(), "Refusing to capture the native workspace window itself.");
             anyhow::ensure!(!window.is_minimized()?, "Source is minimized. Restore it to resume capture.");
             window.capture_image()?
         }

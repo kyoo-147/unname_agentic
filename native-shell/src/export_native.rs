@@ -29,6 +29,8 @@ pub const PAGE_BREAK: char = '\u{c}';
 /// The file forms an export can take.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExportFormat {
+    /// The retained source PDF, copied byte-for-byte by the Save As action.
+    Pdf,
     /// Both languages, page by page: the form that loses nothing.
     Markdown,
     /// The translation alone.
@@ -41,6 +43,7 @@ impl ExportFormat {
     /// The extension the save panel suggests for this form.
     pub fn extension(self) -> &'static str {
         match self {
+            Self::Pdf => "pdf",
             Self::Markdown => "md",
             Self::Text => "txt",
             Self::Json => "json",
@@ -57,6 +60,7 @@ impl ExportFormat {
     /// interface language names for itself.
     pub fn label(self) -> &'static str {
         match self {
+            Self::Pdf => "PDF",
             Self::Markdown => "Markdown",
             Self::Text => tr3("纯文本", "Plain text", "Văn bản thuần"),
             Self::Json => "JSON",
@@ -69,6 +73,7 @@ impl ExportFormat {
     /// user has already chosen a path.
     pub fn from_extension(extension: &str) -> Self {
         match extension.trim().trim_start_matches('.').to_ascii_lowercase().as_str() {
+            "pdf" => Self::Pdf,
             "txt" | "text" => Self::Text,
             "json" => Self::Json,
             _ => Self::Markdown,
@@ -226,6 +231,9 @@ struct JsonBlock {
 /// The document in the chosen form.
 pub fn export_document(document: &ExportDocument, format: ExportFormat) -> String {
     match format {
+        // PDF is handled by `write_export_bytes_path`: a text snapshot cannot
+        // preserve the original PDF's objects, fonts or source hash.
+        ExportFormat::Pdf => String::new(),
         ExportFormat::Markdown => markdown(document),
         ExportFormat::Text => plain_text(document),
         ExportFormat::Json => json(document),
@@ -336,6 +344,26 @@ pub fn write_export_path(path: &Path, content: &str, overwrite: bool) -> Result<
     let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).context(tr3("请选择文件名。", "Choose a file name.", "Hãy chọn tên tệp."))?;
     let dir = path.parent().filter(|dir| !dir.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
     write_export(dir, &name, content, overwrite)
+}
+
+/// Write already-serialized bytes where a Save As panel pointed.
+/// PDF Save As preserves the retained source bytes, fonts and source hash.
+pub fn write_export_bytes_path(path: &Path, bytes: &[u8], overwrite: bool) -> Result<PathBuf> {
+    let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).context(tr3("请选择文件名。", "Choose a file name.", "Hãy chọn tên tệp."))?;
+    let dir = path.parent().filter(|dir| !dir.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+    anyhow::ensure!(!name.trim().is_empty() && !name.contains(['/', '\\']) && name != "." && name != "..", "{}", tr3("文件名无效。", "The file name is invalid.", "Tên tệp không hợp lệ."));
+    std::fs::create_dir_all(dir).with_context(|| tr3_fill("无法创建目录 {}", "Cannot create the folder {}", "Không tạo được thư mục {}", dir.display()))?;
+    let target = dir.join(&name);
+    anyhow::ensure!(overwrite || !target.exists(), "{}", tr3_fill("已存在同名文件，未覆盖：{}", "A file with this name already exists and was not replaced: {}", "Đã có tệp cùng tên, không ghi đè: {}", target.display()));
+    let temporary = dir.join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<PathBuf> {
+        std::fs::write(&temporary, bytes).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", temporary.display()))?;
+        if overwrite && target.exists() { std::fs::remove_file(&target).with_context(|| tr3_fill("无法替换 {}", "Cannot replace {}", "Không thay được {}", target.display()))?; }
+        std::fs::rename(&temporary, &target).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", target.display()))?;
+        Ok(target)
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    result
 }
 
 /// The name the save panel starts with: the title as a file name, plus the
@@ -584,6 +612,7 @@ mod tests {
 
     #[test]
     fn the_chosen_extension_decides_the_format() {
+        assert_eq!(ExportFormat::from_path(Path::new("notes.pdf")), ExportFormat::Pdf);
         assert_eq!(ExportFormat::from_path(Path::new("notes.md")), ExportFormat::Markdown);
         assert_eq!(ExportFormat::from_path(Path::new("notes.txt")), ExportFormat::Text);
         assert_eq!(ExportFormat::from_path(Path::new("notes.json")), ExportFormat::Json);
@@ -613,6 +642,7 @@ mod tests {
                 }
                 ExportFormat::Markdown => assert!(written.starts_with("# Empty report")),
                 ExportFormat::Text => assert!(written.starts_with("Empty report")),
+                ExportFormat::Pdf => unreachable!("PDF Save As copies source bytes instead of text export"),
             }
         }
         assert_eq!(files(&dir).len(), 3, "each format is its own file, and no temporary survives: {:?}", files(&dir));
@@ -655,6 +685,19 @@ mod tests {
         let written = write_export_path(&path, "{}", false).expect("write the chosen path");
         assert_eq!(written, path);
         assert!(path.is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pdf_save_as_preserves_source_bytes_and_conflicts_are_refused() {
+        let dir = temp_dir();
+        let path = dir.join("chosen.pdf");
+        let source = b"%PDF-1.7\nsource bytes\n%%EOF";
+        let written = write_export_bytes_path(&path, source, false).expect("write the source PDF");
+        assert_eq!(written, path);
+        assert_eq!(std::fs::read(&path).unwrap(), source);
+        assert!(write_export_bytes_path(&path, b"replacement", false).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), source);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
