@@ -15,6 +15,7 @@
  */
 
 import { t, type TranslationKey } from '../i18n';
+import { check, type CapabilityAction, type CapabilityMode } from './capabilities';
 
 /** Group ids a palette renders in this order; headings are the UI's own concern. */
 export type CommandGroup = 'document' | 'navigate' | 'view' | 'translate' | 'help';
@@ -35,6 +36,10 @@ export interface Command {
   readonly keys?: readonly string[];
   /** `false` marks the command unavailable; omitted means enabled. Disabled commands stay listable and resolvable. */
   readonly enabled?: boolean;
+  /** Optional capability action required before this command may execute. */
+  readonly requires?: CapabilityAction;
+  /** Stable explanation shown when a host disables the command. */
+  readonly disabledReason?: string;
   /** Behaviour attached by the host. A descriptor without `run` is still searchable and bindable. */
   readonly run?: () => void;
 }
@@ -42,6 +47,22 @@ export interface Command {
 export interface CommandSearchOptions {
   /** Maximum results; defaults to {@link DEFAULT_SEARCH_LIMIT}. Values below 1 return nothing. */
   readonly limit?: number;
+}
+
+export interface CommandExecutionContext {
+  readonly capabilityMode?: CapabilityMode;
+}
+
+export interface CommandAvailability {
+  readonly enabled: boolean;
+  readonly reason?: string;
+}
+
+export interface CommandExecution {
+  readonly commandId: string;
+  readonly executed: boolean;
+  readonly reason?: string;
+  readonly audit: 'executed' | 'blocked' | 'missing';
 }
 
 export interface CommandGroupEntry {
@@ -153,6 +174,24 @@ export class CommandRegistry {
     return this.commands.get(id);
   }
 
+  availability(id: string, context: CommandExecutionContext = {}): CommandAvailability {
+    const command = this.find(id);
+    return command ? availabilityFor(command, context) : { enabled: false, reason: 'Unknown command.' };
+  }
+
+  execute(id: string, context: CommandExecutionContext = {}): CommandExecution {
+    const command = this.find(id);
+    if (!command) return { commandId: id, executed: false, reason: 'Unknown command.', audit: 'missing' };
+    const availability = availabilityFor(command, context);
+    if (!availability.enabled) return { commandId: id, executed: false, reason: availability.reason, audit: 'blocked' };
+    try {
+      command.run?.();
+      return { commandId: id, executed: true, audit: 'executed' };
+    } catch (error) {
+      return { commandId: id, executed: false, reason: error instanceof Error ? error.message : String(error), audit: 'blocked' };
+    }
+  }
+
   /**
    * Fuzzy subsequence search over the label and the id, ranked highest first:
    *
@@ -214,11 +253,19 @@ export class CommandRegistry {
   }
 }
 
+export function availabilityFor(command: Command, context: CommandExecutionContext = {}): CommandAvailability {
+  if (command.enabled === false) return { enabled: false, reason: command.disabledReason ?? 'Command is unavailable.' };
+  if (!command.requires) return { enabled: true };
+  if (!context.capabilityMode) return { enabled: false, reason: `Capability mode is required for ${command.id}.` };
+  const decision = check(context.capabilityMode, command.requires);
+  return decision.allowed ? { enabled: true } : { enabled: false, reason: decision.reason };
+}
+
 /** Reader actions that already exist, with the chords the reader really listens for. */
 const READER_COMMANDS: readonly Command[] = [
   { id: 'reader.open', titleKey: 'openPdf', group: 'document', keys: ['Ctrl+O'] },
-  { id: 'reader.exportPdf', titleKey: 'exportPdf', group: 'document' },
-  { id: 'reader.settings', titleKey: 'settingsNav', group: 'document' },
+  { id: 'reader.exportPdf', titleKey: 'exportPdf', group: 'document', requires: 'exportFile' },
+  { id: 'reader.settings', titleKey: 'settingsNav', group: 'document', requires: 'writeSettings' },
   { id: 'reader.previousPage', titleKey: 'previousPage', group: 'navigate', keys: ['K', 'ArrowUp', 'PageUp'] },
   { id: 'reader.nextPage', titleKey: 'nextPage', group: 'navigate', keys: ['J', 'ArrowDown', 'PageDown'] },
   { id: 'reader.firstPage', titleKey: 'firstPage', group: 'navigate', keys: ['Home'] },
@@ -237,4 +284,104 @@ export function readerCommands(): CommandRegistry {
   const registry = new CommandRegistry();
   for (const command of READER_COMMANDS) registry.register(command);
   return registry;
+}
+
+export interface PaletteItem {
+  readonly command: Command;
+  readonly availability: CommandAvailability;
+}
+
+export interface CommandPaletteSnapshot {
+  readonly open: boolean;
+  readonly query: string;
+  readonly selectedIndex: number;
+  readonly items: readonly PaletteItem[];
+  readonly empty: boolean;
+}
+
+export interface PaletteKeyEvent {
+  readonly key: string;
+  readonly ctrlKey?: boolean;
+  readonly metaKey?: boolean;
+  readonly shiftKey?: boolean;
+}
+
+/**
+ * Pure palette state for native or web hosts. It owns keyboard selection and
+ * execution, but never creates DOM or performs an action without capability proof.
+ */
+export class CommandPaletteModel {
+  private isOpen = false;
+  private queryText = '';
+  private selected = 0;
+  private context: CommandExecutionContext;
+
+  constructor(private readonly registry: CommandRegistry, context: CommandExecutionContext = {}) {
+    this.context = context;
+  }
+
+  open(query = ''): CommandPaletteSnapshot {
+    this.isOpen = true;
+    this.queryText = query;
+    this.selected = 0;
+    return this.snapshot();
+  }
+
+  close(): CommandPaletteSnapshot {
+    this.isOpen = false;
+    return this.snapshot();
+  }
+
+  setContext(context: CommandExecutionContext): CommandPaletteSnapshot {
+    this.context = context;
+    this.selected = 0;
+    return this.snapshot();
+  }
+
+  setQuery(query: string): CommandPaletteSnapshot {
+    this.queryText = query;
+    this.selected = 0;
+    return this.snapshot();
+  }
+
+  move(delta: number): CommandPaletteSnapshot {
+    const count = this.items().length;
+    if (count === 0) return this.snapshot();
+    const step = Number.isFinite(delta) ? Math.trunc(delta) : 0;
+    this.selected = (this.selected + step + count) % count;
+    return this.snapshot();
+  }
+
+  executeSelected(): CommandExecution {
+    const item = this.items()[this.selected];
+    if (!item) return { commandId: '', executed: false, reason: 'No command is selected.', audit: 'missing' };
+    const result = this.registry.execute(item.command.id, this.context);
+    if (result.executed) this.isOpen = false;
+    return result;
+  }
+
+  handleKey(event: PaletteKeyEvent): CommandExecution | CommandPaletteSnapshot {
+    const key = event.key;
+    if ((event.ctrlKey === true || event.metaKey === true) && key.toLowerCase() === 'k') return this.open(this.queryText);
+    if (key === 'Escape') return this.close();
+    if (key === 'ArrowDown') return this.move(1);
+    if (key === 'ArrowUp') return this.move(-1);
+    if (key === 'Home') { this.selected = 0; return this.snapshot(); }
+    if (key === 'End') { this.selected = Math.max(0, this.items().length - 1); return this.snapshot(); }
+    if (key === 'Enter') return this.executeSelected();
+    if (key.length === 1 && !event.ctrlKey && !event.metaKey && !event.shiftKey) return this.snapshot();
+    return this.snapshot();
+  }
+
+  snapshot(): CommandPaletteSnapshot {
+    const items = this.items();
+    const selectedIndex = items.length === 0 ? 0 : Math.min(this.selected, items.length - 1);
+    this.selected = selectedIndex;
+    return { open: this.isOpen, query: this.queryText, selectedIndex, items, empty: items.length === 0 };
+  }
+
+  private items(): PaletteItem[] {
+    const commands = this.registry.search(this.queryText);
+    return commands.map(command => ({ command, availability: availabilityFor(command, this.context) }));
+  }
 }

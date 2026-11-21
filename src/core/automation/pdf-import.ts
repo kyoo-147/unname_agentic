@@ -18,7 +18,9 @@ export async function importPdfFile(path: string, options: PdfImportOptions = {}
   const bytes = new Uint8Array(await readFile(path));
   throwIfAborted(options.signal);
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const loading = pdfjs.getDocument({ data: bytes.slice(), useSystemFonts: false });
+  // Keep machine-readable CLI output clean. PDF.js warnings are not document data and
+  // belong in the process diagnostics stream, not stdout's JSON protocol.
+  const loading = pdfjs.getDocument({ data: bytes.slice(), useSystemFonts: false, verbosity: 0 });
   const pdf = await loading.promise;
   const pages: PageModel[] = [];
   const evidence: RuntimePageEvidence[] = [];

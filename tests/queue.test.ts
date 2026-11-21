@@ -417,3 +417,34 @@ describe('batch queue', () => {
     expect(() => new BatchQueue<string>({ run: async () => undefined, concurrency: 1.5 })).toThrow(/positive integer/);
   });
 });
+
+describe('queue progress callbacks', () => {
+  it('exposes per-job progress and change notifications without changing settlement totals', async () => {
+    const changes: number[] = [];
+    const queue = new BatchQueue<string>({
+      run: async current => {
+        queue.setProgress(current.id, 42);
+      },
+      onChanged: view => changes.push(view.progress),
+    });
+    queue.add(job('view'));
+    queue.start();
+    await waitForSettled(queue);
+    expect(queue.view().jobs).toEqual([{ id: 'view', state: 'done', progress: 100, current: false }]);
+    expect(queue.view().progress).toBe(100);
+    expect(changes.length).toBeGreaterThan(0);
+  });
+
+  it('publishes state transitions without weakening settlement semantics', async () => {
+    const snapshots: string[] = [];
+    const queue = new BatchQueue<string>({
+      onProgress: status => snapshots.push(`${status.state}:${status.totals.done}/${status.totals.jobs}`),
+      run: async () => undefined,
+    });
+    queue.add(job('a'));
+    queue.start();
+    await waitForSettled(queue);
+    expect(snapshots).toContain('running:0/1');
+    expect(snapshots.at(-1)).toBe('done:1/1');
+  });
+});

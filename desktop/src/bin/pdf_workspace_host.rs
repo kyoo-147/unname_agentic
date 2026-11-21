@@ -83,6 +83,19 @@ fn is_link(metadata: &fs::Metadata) -> bool {
     #[cfg(windows)] { use std::os::windows::fs::MetadataExt; metadata.file_attributes() & 0x400 != 0 }
     #[cfg(not(windows))] { metadata.file_type().is_symlink() }
 }
+fn replace_file(temporary: &Path, target: &Path) -> Result<(), String> {
+    if let Ok(metadata) = fs::symlink_metadata(target) {
+        if is_link(&metadata) { return Err("Refusing to replace a symbolic-link event file.".into()); }
+    }
+    match fs::rename(temporary, target) {
+        Ok(()) => Ok(()),
+        Err(_) if target.exists() => {
+            fs::remove_file(target).map_err(io_error)?;
+            fs::rename(temporary, target).map_err(io_error)
+        }
+        Err(_) => Err("Could not publish the desktop event.".into()),
+    }
+}
 fn read_command(directory: &Path) -> Result<Option<DesktopCommand>, String> {
     let metadata = fs::symlink_metadata(directory).map_err(|_| "Desktop command directory unavailable.")?;
     if !metadata.is_dir() || is_link(&metadata) { return Err("Invalid desktop command directory.".into()); }
@@ -99,6 +112,12 @@ fn read_command(directory: &Path) -> Result<Option<DesktopCommand>, String> {
 }
 struct Host { inbox: PathBuf, upload: Option<Upload>, following: Option<Following>, last_generation: u64, token_counter: u64 }
 fn is_digest(value: &str) -> bool { value.len() == 64 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) }
+fn decode_chunk(data: &str) -> Result<Vec<u8>, String> {
+    if data.len() % 4 != 0 { return Err("Invalid base64 chunk padding.".into()); }
+    let bytes = STANDARD.decode(data).map_err(|_| "Invalid base64 chunk.".to_string())?;
+    if STANDARD.encode(&bytes) != data { return Err("Invalid base64 chunk padding.".into()); }
+    Ok(bytes)
+}
 fn io_error(_: io::Error) -> String { "Could not write the dedicated desktop inbox.".into() }
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut file = OpenOptions::new().write(true).create_new(true).open(path).map_err(io_error)?;
@@ -118,7 +137,7 @@ impl Host {
     fn event(directory: &Path, sequence: u64, value: &Value) -> Result<(), String> {
         let temporary = directory.join(format!(".latest-{sequence}.tmp"));
         write_new(&temporary, &serde_json::to_vec(value).map_err(|_| "Invalid event.")?)?;
-        fs::rename(&temporary, directory.join("latest.json")).map_err(io_error)
+        replace_file(&temporary, &directory.join("latest.json"))
     }
     fn handle(&mut self, request: Request) -> Result<Value, String> {
         match request {
@@ -129,7 +148,8 @@ impl Host {
                 if total_bytes == 0 || total_bytes > MAX_PDF || !is_digest(&sha256) { return Err("Invalid PDF size or digest.".into()); }
                 if self.upload.is_some() || binding.generation <= self.last_generation { return Err("Upload already active or stale generation.".into()); }
                 fs::create_dir_all(&self.inbox).map_err(io_error)?;
-                if fs::symlink_metadata(&self.inbox).map_err(io_error)?.file_type().is_symlink() { return Err("Inbox cannot be a symbolic link.".into()); }
+                let inbox_metadata = fs::symlink_metadata(&self.inbox).map_err(io_error)?;
+                if is_link(&inbox_metadata) { return Err("Inbox cannot be a symbolic link.".into()); }
                 self.token_counter += 1;
                 let token = format!("{}-{}-{}", SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| "Invalid clock.")?.as_nanos(), std::process::id(), self.token_counter);
                 let staging = self.inbox.join(format!(".pending-{token}"));
@@ -145,7 +165,7 @@ impl Host {
             Request::Chunk { binding, index, data } => {
                 let upload = self.upload.as_mut().ok_or("No upload active.")?;
                 if binding != upload.binding || index != upload.next_index || data.is_empty() || data.len() > MAX_CHUNK.div_ceil(3) * 4 { return Err("Invalid chunk binding, index or size.".into()); }
-                let bytes = STANDARD.decode(data).map_err(|_| "Invalid base64 chunk.")?;
+                let bytes = decode_chunk(&data)?;
                 if bytes.is_empty() || bytes.len() > MAX_CHUNK || upload.received + bytes.len() as u64 > upload.size { return Err("PDF chunk exceeds declared size.".into()); }
                 upload.file.as_mut().ok_or("Upload closed.")?.write_all(&bytes).map_err(io_error)?;
                 upload.digest.update(&bytes);

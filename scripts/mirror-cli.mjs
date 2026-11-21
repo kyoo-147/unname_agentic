@@ -43,6 +43,9 @@ import { fileURLToPath } from 'node:url';
 
 const PROGRAM = 'mirror-cli';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const MAX_BATCH_FILES = 5000;
+const MAX_PDF_BYTES = 256 * 1024 * 1024;
+const MAX_BATCH_BYTES = 512 * 1024 * 1024;
 
 // --- The parse table. Mirrors src/core/cli-args.ts; tests/cli-args.test.ts compares them. ---
 const CLI_COMMANDS = ['extract', 'translate', 'export', 'check'];
@@ -325,8 +328,8 @@ function usage() {
     `  ${PROGRAM} extract --in docs/pdfs --out build/text --format md --dry-run`,
     `  ${PROGRAM} translate --in docs/pdfs --lang vi --provider local --offline`,
     '',
-    'check lists the folder. extract, translate and export print the plan: with --dry-run',
-    'they stop there, without it they stop there and say nothing ran.',
+    'check lists the folder. extract, translate and export execute the durable local pipeline',
+    'unless --dry-run is present; runtime JSON is printed after the attempt.',
   ];
   return `${lines.join('\n')}\n`;
 }
@@ -347,20 +350,30 @@ function runExecutable(argv) {
   return typeof result.status === 'number' ? result.status : EXIT_CODES['planned-only'];
 }
 
-/** The PDFs at the top level of `dir`, sorted by name. Sub-folders are not walked. */
+/** PDFs under `dir`, sorted by relative name, with bounded local enumeration. */
 function listPdfs(dir) {
-  const entries = readdirSync(dir, { withFileTypes: true });
   const pdfs = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !/\.pdf$/iu.test(entry.name)) continue;
-    const full = path.join(dir, entry.name);
-    let bytes = 0;
-    try {
-      bytes = statSync(full).size;
-    } catch {
-      bytes = 0;
+  const pending = [{ absolute: dir, relative: '' }];
+  let totalBytes = 0;
+  while (pending.length > 0) {
+    const current = pending.shift();
+    const entries = readdirSync(current.absolute, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const absolute = path.join(current.absolute, entry.name);
+      const relative = current.relative ? path.join(current.relative, entry.name) : entry.name;
+      if (entry.isDirectory()) {
+        pending.push({ absolute, relative });
+        continue;
+      }
+      if (!entry.isFile() || !/\.pdf$/iu.test(entry.name)) continue;
+      if (pdfs.length >= MAX_BATCH_FILES) throw new Error(`batch exceeds the ${MAX_BATCH_FILES} file local safety cap.`);
+      const bytes = statSync(absolute).size;
+      if (bytes > MAX_PDF_BYTES) throw new Error(`PDF exceeds the ${MAX_PDF_BYTES} byte local safety cap: ${relative}`);
+      totalBytes += bytes;
+      if (totalBytes > MAX_BATCH_BYTES) throw new Error(`batch exceeds the ${MAX_BATCH_BYTES} byte local safety cap.`);
+      pdfs.push({ name: relative.split(path.sep).join('/'), bytes });
     }
-    pdfs.push({ name: entry.name, bytes });
   }
   return pdfs.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
 }

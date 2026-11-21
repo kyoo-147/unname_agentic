@@ -130,7 +130,11 @@ chrome.webRequest.onHeadersReceived.addListener(details => {
 }, { urls: ['http://*/*', 'https://*/*', 'file:///*'], types: ['main_frame', 'sub_frame', 'object'] }, ['responseHeaders']);
 
 chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
-  if (change.url) { companion.revoke(tabId); viewStates.delete(tabId); mimePdfTabs.delete(tabId); void controller.navigate(tabId, change.url).catch(report); }
+  if (change.url) {
+    companion.revoke(tabId); viewStates.delete(tabId); mimePdfTabs.delete(tabId);
+    for (const [captureId, capture] of captures) if (capture.sourceTabId === tabId) captures.delete(captureId);
+    void controller.navigate(tabId, change.url).catch(report);
+  }
   const url = change.url ?? tab.url;
   if (url && pdfPath(url) && (change.url || change.status === 'complete')) void discover(tabId, url, url).catch(report);
 });
@@ -209,6 +213,7 @@ async function capturePage(tab: chrome.tabs.Tab | undefined): Promise<void> {
 }
 async function openCapture(sourceTabId: number, image: string): Promise<{ viewerTabId: number; captureId: string }> {
   if (!pngCapture(image)) throw new Error('Capture must be a PNG data URL under 20 MB.');
+  for (const [captureId, capture] of captures) if (Date.now() - capture.createdAt > CAPTURE_TTL_MS) captures.delete(captureId);
   const source = await chrome.tabs.get(sourceTabId);
   if (source.active === false || !sourceUrl(source.url ?? '')) throw new Error('Capture only supports the current accessible source tab.');
   const tab = await chrome.tabs.create({ url: `${viewerUrl}?capture=1&sourceTab=${sourceTabId}`, openerTabId: sourceTabId });
@@ -288,7 +293,7 @@ async function handle(message: Record<string, unknown>, sender: chrome.runtime.M
     }
     case 'mirror:view-state': {
       const state = message.state as { page?: number; fraction?: number; zoom?: number } | undefined;
-      if (!state || !Number.isInteger(state.page) || state.page! < 1 || typeof state.fraction !== 'number' || !Number.isFinite(state.fraction) || state.fraction < 0 || state.fraction > 1) throw new Error('Invalid view state.');
+      if (!state || !Number.isInteger(state.page) || state.page! < 1 || typeof state.fraction !== 'number' || !Number.isFinite(state.fraction) || state.fraction < 0 || state.fraction > 1 || (state.zoom !== undefined && (typeof state.zoom !== 'number' || !Number.isFinite(state.zoom) || state.zoom < 0.1 || state.zoom > 10))) throw new Error('Invalid view state.');
       let session: MirrorSession;
       let destination: number;
       if (isReader(sender)) { session = await controller.authorize(identity); destination = session.sourceTabId; }

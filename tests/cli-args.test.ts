@@ -346,8 +346,8 @@ describe('usage', () => {
     );
   });
 
-  it('explains the plan-only state instead of promising the work', () => {
-    expect(usage()).toContain('app core');
+  it('explains that non-dry runs execute the durable local pipeline', () => {
+    expect(usage()).toContain('durable local pipeline');
   });
 });
 

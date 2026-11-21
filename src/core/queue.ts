@@ -48,6 +48,24 @@ export interface BatchQueueStatus {
   current: string[];
 }
 
+export type BatchJobState = 'pending' | 'running' | 'done' | 'failed' | 'cancelled';
+
+export interface BatchQueueJobStatus {
+  readonly id: string;
+  readonly state: BatchJobState;
+  readonly progress: number;
+  readonly current: boolean;
+  readonly error?: unknown;
+}
+
+export interface BatchQueueView {
+  readonly status: BatchQueueStatus;
+  readonly progress: number;
+  readonly jobs: readonly BatchQueueJobStatus[];
+}
+
+export type BatchQueueListener = (view: BatchQueueView) => void;
+
 export interface BatchJobFailure {
   id: string;
   error: unknown;
@@ -62,9 +80,13 @@ export interface BatchQueueOptions<T> {
   concurrency?: number;
   /** Called after a job settles and queue state has been updated. */
   onSettled?: () => void;
+  /** Called after any state or progress change, for UI-facing consumers. */
+  onChanged?: BatchQueueListener;
+  /** Receives queue snapshots for shared progress adapters. */
+  onProgress?: (status: BatchQueueStatus) => void;
 }
 
-type JobStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled';
+type JobStatus = BatchJobState;
 
 interface JobRecord<T> {
   job: BatchJob<T>;
@@ -82,12 +104,16 @@ export class BatchQueue<T> {
   private readonly run: BatchRun<T>;
   private readonly concurrency: number;
   private readonly onSettled?: () => void;
+  private readonly onChanged?: BatchQueueListener;
+  private readonly onProgress?: (status: BatchQueueStatus) => void;
   /** Every job ever added, in add order. Retries reuse these records. */
   private readonly records = new Map<string, JobRecord<T>>();
   /** Ids ready to start, in launch order. */
   private readonly waiting: string[] = [];
   /** Ids holding a concurrency slot, in launch order. */
   private readonly active = new Set<string>();
+  private readonly progressById = new Map<string, number>();
+  private readonly listeners = new Set<BatchQueueListener>();
   private paused = false;
   /** True while a batch is allowed to launch jobs. Reset when the batch drains. */
   private started = false;
@@ -96,6 +122,8 @@ export class BatchQueue<T> {
   constructor(options: BatchQueueOptions<T>) {
     this.run = options.run;
     this.onSettled = options.onSettled;
+    this.onChanged = options.onChanged;
+    this.onProgress = options.onProgress;
     const concurrency = options.concurrency ?? 2;
     if (!Number.isInteger(concurrency) || concurrency < 1) {
       throw new Error('Concurrency must be a positive integer.');
@@ -116,8 +144,10 @@ export class BatchQueue<T> {
       throw new Error(`Job "${job.id}" is already in the queue.`);
     }
     this.records.set(job.id, { job, status: 'pending' });
+    this.progressById.set(job.id, 0);
     this.waiting.push(job.id);
     this.pump();
+    this.notify();
   }
 
   /**
@@ -129,19 +159,21 @@ export class BatchQueue<T> {
     this.cancelled = false;
     this.started = true;
     this.pump();
+    this.notify();
   }
 
   /** Stops launching new jobs; runs already in flight are left to finish. */
   pause(): void {
     this.paused = true;
+    this.notify();
   }
 
   /** Continues a paused batch in the original order. */
   resume(): void {
     this.paused = false;
     this.pump();
+    this.notify();
   }
-
   /**
    * Aborts every in-flight signal and marks every unfinished job cancelled.
    * Slots stay held by aborted runs until they actually settle, so a restart
@@ -152,22 +184,62 @@ export class BatchQueue<T> {
     this.started = false;
     for (const id of this.waiting.splice(0)) {
       const record = this.records.get(id);
-      if (record && record.status === 'pending') record.status = 'cancelled';
+      if (record && record.status === 'pending') {
+        record.status = 'cancelled';
+        this.progressById.set(id, 100);
+      }
     }
     for (const id of this.active) {
       const record = this.records.get(id);
       if (!record) continue;
       // Mark first: a run that rejects with an AbortError must not be counted
       // as a failure when the user cancelled the batch.
-      if (record.status === 'running') record.status = 'cancelled';
+      if (record.status === 'running') {
+        record.status = 'cancelled';
+        this.progressById.set(id, 100);
+      }
       record.controller?.abort();
     }
+    this.notify();
   }
 
   /** A fresh snapshot. The returned object is never mutated in place. */
   status(): BatchQueueStatus {
     const totals = this.count();
     return { state: this.stateOf(totals), totals, current: this.currentIds() };
+  }
+
+  /** A UI-safe view with per-job state and progress. */
+  view(): BatchQueueView {
+    return { status: this.status(), progress: this.progress(), jobs: this.jobStatuses() };
+  }
+
+  /** Per-job state in original add order. */
+  jobStatuses(): readonly BatchQueueJobStatus[] {
+    return [...this.records].map(([id, record]) => ({
+      id,
+      state: record.status,
+      progress: this.progressById.get(id) ?? 0,
+      current: record.status === 'running',
+      ...(record.error === undefined ? {} : { error: record.error }),
+    }));
+  }
+
+  /** Update one job's stage-local progress without changing settlement totals. */
+  setProgress(id: string, value: number): void {
+    const record = this.records.get(id);
+    if (!record) throw new Error(`Job "${id}" does not exist.`);
+    if (!Number.isFinite(value)) throw new Error('Progress must be finite.');
+    this.progressById.set(id, Math.max(0, Math.min(100, Math.floor(value))));
+    this.notify();
+  }
+
+  /** Subscribe to state changes. The returned function removes the listener. */
+  subscribe(listener: BatchQueueListener, emitCurrent = true): () => void {
+    if (typeof listener !== 'function') throw new TypeError('Queue listener must be a function.');
+    this.listeners.add(listener);
+    if (emitCurrent) listener(this.view());
+    return () => { this.listeners.delete(listener); };
   }
 
   /**
@@ -192,9 +264,11 @@ export class BatchQueue<T> {
       if (record.status !== 'failed') continue;
       record.status = 'pending';
       delete record.error;
+      this.progressById.set(id, 0);
       this.waiting.push(id);
       retried.push(id);
     }
+    if (retried.length > 0) this.notify();
     return retried;
   }
 
@@ -291,9 +365,11 @@ export class BatchQueue<T> {
       if (record.status === 'running') {
         if (outcome.ok) {
           record.status = 'done';
+          this.progressById.set(id, 100);
         } else {
           record.status = 'failed';
           record.error = outcome.error;
+          this.progressById.set(id, 100);
         }
       }
     }
@@ -301,6 +377,14 @@ export class BatchQueue<T> {
     // `add()` needs an explicit `start()` instead of resuming silently.
     if (this.waiting.length === 0 && this.active.size === 0) this.started = false;
     this.pump();
+    this.notify();
     this.onSettled?.();
+  }
+
+  private notify(): void {
+    const view = this.view();
+    this.onChanged?.(view);
+    this.onProgress?.(view.status);
+    for (const listener of this.listeners) listener(view);
   }
 }

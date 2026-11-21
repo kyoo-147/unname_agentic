@@ -99,7 +99,7 @@ The host rejects overlapping begins, repeated chunks, out-of-order chunks, misma
 
 A persistent `connectNative` port carries the upload and subsequent page events. `sendNativeMessage` is unsuitable because EOF ends following. There is one outstanding native request at a time. Each request has a 30-second extension timeout. Page updates coalesce while a previous page update is pending.
 
-Responses contain `ok: true` on success. Upload responses repeat `binding`. Commit uses `status: "complete"`, page uses `status: "following"`, and end uses `status: "ended"`. Errors contain `ok: false` and a bounded human-readable `error`.
+Responses contain `ok: true` on success. Upload responses repeat `binding`. Commit uses `status: "complete"`, page uses `status: "following"`, and end uses `status: "ended"`. Errors contain `ok: false` and a bounded human-readable `error`. The extension maps failures to typed codes: `unavailable`, `busy`, `timeout`, `protocol`, `rejected`, `stale`, `transfer`, or `invalid-response`; callers should branch on the code, not on localized message text.
 
 ## Inbox reference
 

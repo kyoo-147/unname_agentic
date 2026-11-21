@@ -30,6 +30,16 @@ async function makeRuntime(): Promise<{ runtime: LocalAutomationRuntime; root: s
 describe('durable local automation runtime', () => {
   it('runs import through export and is idempotent for the same source', async () => {
     const { runtime, source, output } = await makeRuntime();
+    const job = await runtime.enqueue({ sourcePath: source, outputDir: output });
+    await writeFile(source, Buffer.from('changed after enqueue'));
+    const status = await runtime.run();
+    expect(status.jobs[0]?.state).toBe('done');
+    expect(job.sourceArtifactPath).toContain(`${job.sourceSha256}.pdf`);
+    expect(runtime.getJob(job.id).sourceSha256).toBe(job.sourceSha256);
+  });
+
+  it('runs import through export and is idempotent for the same source', async () => {
+    const { runtime, source, output } = await makeRuntime();
     const first = await runtime.enqueue({ sourcePath: source, outputDir: output, schema: [{ id: 'invoice', label: 'Invoice', type: 'identifier', required: true }] });
     const second = await runtime.enqueue({ sourcePath: source, outputDir: output, schema: [{ id: 'invoice', label: 'Invoice', type: 'identifier', required: true }] });
     expect(second.id).toBe(first.id);

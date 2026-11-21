@@ -35,6 +35,15 @@ export class ImmutableVersionStore {
 
   async put(input: Omit<ImmutableVersion, 'documentPath' | 'createdAt'> & { document: DocumentIR }): Promise<ImmutableVersion> {
     await this.ensureOpen();
+    await this.ensureOpen();
+    const existingVersion = this.list(input.documentId).find(version => version.id === input.id);
+    if (existingVersion) {
+      const existingDocument = await readFile(join(this.root, existingVersion.documentPath), 'utf8');
+      if (existingVersion.sourceSha256 !== input.sourceSha256 || existingDocument !== `${serialize(input.document)}\n`) {
+        throw new Error(`version ${input.documentId}/${input.id} already exists with different content.`);
+      }
+      return existingVersion;
+    }
     const documentPath = join('documents', `${safe(input.id)}.json`);
     const absolute = join(this.root, documentPath);
     try {

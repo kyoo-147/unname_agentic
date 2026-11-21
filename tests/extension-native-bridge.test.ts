@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { NativeCompanion, NATIVE_CHUNK_BYTES, normalizeNativePage, nativeCommand, type NativePage, type NativePort } from '../extension/native-bridge';
+import { NativeBridgeError, NativeCompanion, NATIVE_CHUNK_BYTES, normalizeNativePage, nativeCommand, type NativePage, type NativePort } from '../extension/native-bridge';
 import type { MirrorSession } from '../extension/controller';
 
 const session: MirrorSession = { sourceTabId: 3, viewerTabId: 90, documentUrl: 'https://example.test/report', pdfUrl: 'https://example.test/report.pdf' };
@@ -42,7 +42,7 @@ describe('opt-in native PDF companion', () => {
       { ...command, sequence: 0 }, { ...command, sequence: Number.MAX_SAFE_INTEGER + 1 },
       { ...command, page: { ...page, fraction: NaN } }, { ...command, page: { ...page, fraction: 1.01 } },
       { ...command, page: { ...page, page: -1 } }, { ...command, page: { ...page, page_count: 1 } },
-    ]) expect(() => nativeCommand(changed, binding)).toThrow(/Invalid/);
+    ]) expect(() => nativeCommand(changed, binding)).toThrowError(new NativeBridgeError('invalid-response', 'Invalid desktop navigation command.'));
   });
   it('probes only availability without reading or transferring document bytes', async () => {
     const h = harness();
@@ -66,6 +66,18 @@ describe('opt-in native PDF companion', () => {
     const acquire = vi.fn(async () => pdf());
     await expect(companion.open(session, acquire, async () => {}, page, 'Synthetic')).rejects.toThrow(/unavailable/);
     expect(acquire).not.toHaveBeenCalled(); expect(companion.following).toBe(false);
+  });
+  it('preserves typed rejection codes from the native host', async () => {
+    const h = harness(); const original = h.port.postMessage;
+    h.port.postMessage = message => {
+      const request = message as Record<string, unknown>;
+      if (request.type === 'begin') {
+        h.messages.push(request);
+        queueMicrotask(() => h.reply({ ok: false, error: 'Upload already active.' }));
+      } else original(message);
+    };
+    await expect(h.companion.open(session, async () => pdf(100), async () => {}, page, 'Synthetic')).rejects.toMatchObject({ code: 'rejected' });
+    expect(h.companion.following).toBe(false);
   });
   it('uses ordered bounded chunks bound to source, nonce, session and whole-PDF digest', async () => {
     const h = harness(); const bytes = pdf(); const authorize = vi.fn(async () => {});

@@ -60,7 +60,7 @@ impl ExportFormat {
     /// interface language names for itself.
     pub fn label(self) -> &'static str {
         match self {
-            Self::Pdf => "PDF",
+            Self::Pdf => tr3("原始 PDF", "Original PDF", "PDF gốc"),
             Self::Markdown => "Markdown",
             Self::Text => tr3("纯文本", "Plain text", "Văn bản thuần"),
             Self::Json => "JSON",

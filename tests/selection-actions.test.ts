@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   CJK_PHRASE_MAX_CHARS,
   CJK_WORD_MAX_CHARS,
@@ -7,6 +7,7 @@ import {
   SELECTION_GROUPS,
   SELECTION_LABEL_KEYS,
   SELECTION_REASON_KEYS,
+  SelectionActionMenu,
   actionsFor,
   countWords,
   describe as describeSelection,
@@ -352,5 +353,31 @@ describe('the catalogue', () => {
 
   it('orders the groups primary, annotate, research, danger', () => {
     expect([...SELECTION_GROUPS]).toEqual(['primary', 'annotate', 'research', 'danger']);
+  });
+});
+
+describe('selection action menu', () => {
+  it('navigates, blocks disabled actions, and returns an audit record', () => {
+    const selected = selection(PHRASE, { blockId: 'p2-r1' });
+    const actions = actionsFor(selected, { hasTranslation: false, providerConfigured: false });
+    const run = vi.fn();
+    const menu = new SelectionActionMenu(selected, actions, run);
+    menu.open();
+    const result = menu.handleKey({ key: 'Enter' });
+    expect(result).toMatchObject({ kind: 'selection-action', actionId: 'translate', outcome: 'blocked' });
+    expect(run).not.toHaveBeenCalled();
+    expect(menu.snapshot().actions).toHaveLength(SELECTION_ACTION_IDS.length);
+  });
+
+  it('executes the selected enabled action and closes', () => {
+    const selected = selection(PHRASE, { blockId: 'p2-r1' });
+    const actions = actionsFor(selected, { hasTranslation: false, providerConfigured: true });
+    const run = vi.fn();
+    const menu = new SelectionActionMenu(selected, actions, run);
+    menu.open();
+    const result = menu.handleKey({ key: 'Enter' });
+    expect(result).toMatchObject({ actionId: 'translate', outcome: 'executed' });
+    expect(run).toHaveBeenCalledWith('translate');
+    expect(menu.snapshot().open).toBe(false);
   });
 });

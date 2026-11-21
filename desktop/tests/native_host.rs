@@ -101,6 +101,19 @@ fn framed_hello_is_available_without_creating_inbox_files() {
     assert!(inbox.entries().is_empty());
 }
 #[test]
+fn replaces_latest_event_when_multiple_page_updates_arrive() {
+    let inbox = Inbox::new(); let pdf = b"%PDF-1.7\nsynthetic test fixture\n%%EOF";
+    let page_one = json!({"type":"page","binding":binding(),"page":{"page":1,"page_count":5,"fraction":0.1,"zoom":1.0}});
+    let page_two = json!({"type":"page","binding":binding(),"page":{"page":3,"page_count":5,"fraction":0.8,"zoom":1.5}});
+    let (reply, success) = run(&inbox, messages(&[begin(pdf), chunk(0, pdf), json!({"type":"commit","binding":binding()}), page_one, page_two]));
+    assert!(success); assert!(reply.iter().all(|value| value["ok"] == true));
+    let directory = inbox.entries().into_iter().find(|path| path.file_name().unwrap().to_string_lossy().starts_with("ready-")).unwrap();
+    let latest: Value = serde_json::from_slice(&fs::read(directory.join("latest.json")).unwrap()).unwrap();
+    assert_eq!(latest["kind"], "session_ended"); assert_eq!(latest["sequence"], 3);
+    assert_eq!(latest["reason"], "disconnected");
+}
+
+#[test]
 fn publishes_pdf_and_session_together_then_normalizes_matching_page_event() {
     let inbox = Inbox::new(); let pdf = b"%PDF-1.7\nsynthetic test fixture\n%%EOF";
     let follow = json!({"type":"page","binding":binding(),"page":{"page":999,"page_count":5,"fraction":2.0,"zoom":50.0}});
@@ -131,6 +144,7 @@ fn rejects_chunk_order_binding_oversize_encoding_and_digest_mismatch() {
         vec![begin(pdf), json!({"type":"chunk","binding":other,"index":0,"data":STANDARD.encode(pdf)})],
         vec![begin(pdf), chunk(0,&vec![0;192*1024+1])],
         vec![begin(pdf), json!({"type":"chunk","binding":binding(),"index":0,"data":"not base64!"})],
+        vec![begin(b"%PDF-1.7\nfixture"), json!({"type":"chunk","binding":binding(),"index":0,"data":STANDARD.encode(b"%PDF-1.7\nfixture").trim_end_matches('=').to_string()})],
         vec![begin(pdf), chunk(0,b"%PDF-1.7\nwrong!!"), json!({"type":"commit","binding":binding()})],
         vec![begin(pdf), json!({"type":"commit","binding":binding()})],
         vec![begin(pdf), chunk(0,pdf), chunk(0,pdf)],
