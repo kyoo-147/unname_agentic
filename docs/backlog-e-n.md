@@ -149,7 +149,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | J06 | **P2** | Paper comparison matrix method/data/metrics/limitations | Cell có citation cụ thể, tránh suy diễn. | ✅ `src/core/paper-matrix.ts` + 22 test: ma trận method/dataset/metrics/limitations, mọi ô có quote nguyên văn + provenance hoặc `not_reported`, xuất Markdown/CSV/JSON |
 | J08 | **P2** | Clean/reflow reading mode for papers | Giữ công thức, footnote, citations khi reflow. | ✅ `src/core/paper-reflow.ts` + 18 test: reflow 1 cột từ PDF 2 cột, giữ LaTeX inline/display, footnote neo ngược, caption/citation và ánh xạ 2 chiều `reflowId <-> page/rect` |
 | J09 | **P3** | Study pack: flashcards, questions, concept map | Generated content liên kết tới sources. | ✅ `src/core/study-pack.ts` + 13 test: thẻ ghi nhớ Anki CSV/TSV, câu hỏi kèm đáp án trích dẫn kiểm chứng và sơ đồ khái niệm Mermaid gắn `(page, blockId)` |
-| J10 | **P3** | Research library smart collections theo topic/author/year | Filter, tag, duplicate merge có xác nhận.  ⬜ |
+| J10 | **P3** | Research library smart collections theo topic/author/year | Filter, tag, duplicate merge có xác nhận. | ✅ `src/core/smart-collections.ts` + 12 test: lọc topic/author/year/venue/tag, thao tác tag hàng loạt, phát hiện trùng DOI/arXiv/title và confirm-before-merge kèm rollback |
 | J07 | **P2** | So sánh methodology/dataset/metric giữa paper | Bảng so sánh có trích dẫn. | ✅ `src/core/paper-compare.ts` + 23 test: mỗi cell có câu trích + section + score, gap có lý do, consensus/divergence chỉ từ cell |
 
 ### K. Document workflow & structured extraction — 10 mục
