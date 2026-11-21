@@ -79,7 +79,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
-| G01 | **P0** | Xuất PDF đơn ngữ thật, không qua Print | Tải file PDF hợp lệ mở được bằng reader độc lập.  ⬜ |
+| G01 | **P0** | Xuất PDF đơn ngữ thật, không qua Print | Tải file PDF hợp lệ mở được bằng reader độc lập. | ✅ \src/export/monolingual-pdf.ts\ + 17 test: pdf-lib + Noto Sans + reflow + metadata + round-trip mở lại qua pdf-lib và pdfjs-dist đúng tiếng Việt |
 | G02 | **P2** | Book mode (facing pages) cho tài liệu sách | Đọc 2 trang đối diện mượt. | ✅ `src/core/book-mode.ts` + 32 test: cover đóng spread riêng, blank parity có ghi nhận, folio lề ngoài, `visibilityFor` trả đúng pane |
 | G03 | **P1** | Domain-aware translation (legal, medical, finance, technical) | Glossary + style theo domain. | ✅ `src/core/domain.ts` + 30 test: 5 domain + general, trọng số có tài liệu, guidance 3 ngôn ngữ, glossary hints; chưa nối vào `prompt.ts` |
 | G04 | **P1** | Translation memory (TM) theo segment và version | Đoạn lặp được tái sử dụng và truy nguyên bản gốc. | ✅ `src/core/tm.ts` + 17 test: exact 1.0, gần đúng 0.875, import/export byte-identical |
