@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildDocument } from '../src/core/ir';
 import type { DocumentIR } from '../src/core/ir';
-import type { GroundedRegion, Quad } from '../src/core/visual-grounding';
+import {
+  computeRotatedSize,
+  mapBBoxToOriginal,
+  type CropTransform,
+  type GroundedRegion,
+  type Quad,
+} from '../src/core/visual-grounding';
 import {
   SVG_NAMESPACE,
   createCitationHighlightController,
@@ -419,5 +425,250 @@ describe('I01 minimal accessible HTML and ARIA output', () => {
     // Exactly 1 DOM box + 1 SVG containing 1 polygon — no decorative clutter
     expect(overlayNode.children.map(node => node.tagName)).toEqual(['div', 'svg']);
     expect(overlayNode.children[1]?.children.map(node => node.tagName)).toEqual(['polygon']);
+  });
+});
+
+/**
+ * Type-level check only (never executed at runtime): verifies browser `Document` and
+ * `HTMLElement` satisfy our structural DOM interfaces under `strict: true`.
+ */
+function _typecheckBrowserDomCompatibility(ir: DocumentIR): HTMLElement | null {
+  const controller = createCitationHighlightController({
+    answer: '[p1:r0]',
+    ir,
+    dom: document,
+  });
+  return renderCitationOverlay(controller.chips[0] ?? null, document);
+}
+void _typecheckBrowserDomCompatibility;
+
+function makeMultiPageDocumentIR(): DocumentIR {
+  return buildDocument({
+    sourceSha256: 'c7'.repeat(32),
+    pages: [
+      { index: 1, width: 600, height: 800, rotation: 0 },
+      { index: 2, width: 792, height: 612, rotation: 90 },
+      { index: 3, width: 595, height: 842, rotation: 180 },
+    ],
+    blocks: [
+      {
+        page: 1,
+        text: 'Overhanging cover note',
+        polygon: [
+          { x: -20, y: 700 },
+          { x: 650, y: 700 },
+          { x: 650, y: 830 },
+          { x: -20, y: 830 },
+        ],
+      },
+      {
+        page: 2,
+        text: 'Skewed rotated scan block',
+        polygon: [
+          { x: 120, y: 100 },
+          { x: 520, y: 140 },
+          { x: 500, y: 240 },
+          { x: 100, y: 200 },
+        ],
+      },
+      {
+        page: 3,
+        text: 'Final page footnote',
+        rect: { x: 75, y: 720, width: 445, height: 42 },
+      },
+    ],
+  });
+}
+
+describe('I01 multi-page jump, polygon SVG points, and Escape clear', () => {
+  it('jumps cleanly across multiple per-page overlay containers and clears stale page highlights', () => {
+    const dom = new FakeDocument();
+    const page1Layer = dom.createElement('div');
+    const page2Layer = dom.createElement('div');
+    const page3Layer = dom.createElement('div');
+    const pageContainers = new Map<number, FakeElement>([
+      [1, page1Layer],
+      [2, page2Layer],
+      [3, page3Layer],
+    ]);
+
+    const navigated: CitationNavigationTarget[] = [];
+    const onClear = vi.fn();
+    const controller = createCitationHighlightController({
+      answer: 'Intro [p1:r0], rotated table [p2:r0], footnote [p3:r0], summary [p1].',
+      ir: makeMultiPageDocumentIR(),
+      dom,
+      pageContainers,
+      onNavigate: target => navigated.push(target),
+      onClear,
+    });
+
+    expect(controller.chips).toHaveLength(4);
+
+    // Jump 1 -> Page 1 (clamped overhang)
+    asFake(controller.chipElements[0]).dispatch('click');
+    expect(page1Layer.children).toHaveLength(1);
+    expect(page2Layer.children).toHaveLength(0);
+    expect(page3Layer.children).toHaveLength(0);
+    const p1Svg = page1Layer.descendants().find(el => el.tagName === 'svg');
+    expect(p1Svg?.getAttribute('viewBox')).toBe('0 0 600 800');
+    const p1Poly = p1Svg?.descendants().find(el => el.tagName === 'polygon');
+    expect(p1Poly?.getAttribute('points')).toBe('0,700 600,700 600,800 0,800');
+
+    // Jump 2 -> Page 2 (90° rotated size 792x612, skewed polygon)
+    asFake(controller.chipElements[1]).dispatch('click');
+    expect(page1Layer.children).toHaveLength(0);
+    expect(page2Layer.children).toHaveLength(1);
+    expect(page3Layer.children).toHaveLength(0);
+    const p2Svg = page2Layer.descendants().find(el => el.tagName === 'svg');
+    expect(p2Svg?.getAttribute('viewBox')).toBe('0 0 792 612');
+    const p2Poly = p2Svg?.descendants().find(el => el.tagName === 'polygon');
+    expect(p2Poly?.getAttribute('points')).toBe('120,100 520,140 500,240 100,200');
+
+    // Jump 3 -> Page 3
+    asFake(controller.chipElements[2]).dispatch('click');
+    expect(page1Layer.children).toHaveLength(0);
+    expect(page2Layer.children).toHaveLength(0);
+    expect(page3Layer.children).toHaveLength(1);
+    const p3Svg = page3Layer.descendants().find(el => el.tagName === 'svg');
+    expect(p3Svg?.getAttribute('viewBox')).toBe('0 0 595 842');
+    const p3Poly = p3Svg?.descendants().find(el => el.tagName === 'polygon');
+    expect(p3Poly?.getAttribute('points')).toBe('75,720 520,720 520,762 75,762');
+
+    // Jump 4 -> Page-only [p1] clears page 3 highlight while still navigating to page 1
+    asFake(controller.chipElements[3]).dispatch('click');
+    expect(page1Layer.children).toHaveLength(0);
+    expect(page2Layer.children).toHaveLength(0);
+    expect(page3Layer.children).toHaveLength(0);
+    expect(navigated.map(item => item.page)).toEqual([1, 2, 3, 1]);
+
+    // Jump back to page 2 and clear via Escape on chipBar
+    asFake(controller.chipElements[1]).dispatch('click');
+    expect(page2Layer.children).toHaveLength(1);
+    const handledEscape = asFake(controller.chipBar).dispatch('keydown', { key: 'Escape' });
+    expect(handledEscape.defaultPrevented).toBe(true);
+    expect(page2Layer.children).toHaveLength(0);
+    expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps 45-degree inverse crop quads from visual-grounding.ts into exact SVG polygon points', () => {
+    const dom = new FakeDocument();
+    const ir = makeDocumentIR();
+    const cropWidth = 200;
+    const cropHeight = 100;
+    const rotatedSize = computeRotatedSize(cropWidth, cropHeight, 45);
+    const transform: CropTransform = {
+      originalSize: { width: 1000, height: 1000 },
+      cropRectPx: { x: 200, y: 200, width: cropWidth, height: cropHeight },
+      rotationDegCCW: 45,
+      rotatedSize,
+      resizedSize: { width: rotatedSize.width, height: rotatedSize.height },
+    };
+
+    const mapped = mapBBoxToOriginal([200, 300, 800, 700], transform);
+    const controller = createCitationHighlightController({
+      answer: 'Crop region [p1:r0].',
+      ir,
+      dom,
+      grounding: {
+        byBlockId: {
+          'p1-r0': { bbox: mapped.bbox, quad: mapped.quad, pageIndex: 1 },
+        },
+      },
+    });
+
+    controller.select(0);
+    const polyEl = asFake(controller.overlay).descendants().find(el => el.tagName === 'polygon');
+    const rawPoints = polyEl?.getAttribute('points') ?? '';
+    const coords = rawPoints.split(' ').map(pair => {
+      const [x, y] = pair.split(',').map(Number);
+      return { x: x ?? Number.NaN, y: y ?? Number.NaN };
+    });
+
+    expect(coords).toHaveLength(4);
+    for (let i = 0; i < 4; i += 1) {
+      expect(coords[i]?.x).toBeCloseTo((mapped.quad[i]!.x / 1000) * 600, 3);
+      expect(coords[i]?.y).toBeCloseTo((mapped.quad[i]!.y / 1000) * 800, 3);
+    }
+    // Non-axis-aligned 45° corners must differ across adjacent vertices
+    expect(coords[0]?.y).not.toBeCloseTo(coords[1]!.y, 1);
+    expect(coords[0]?.x).not.toBeCloseTo(coords[3]!.x, 1);
+  });
+
+  it('handles Escape clear, Space activation, modifier guards, editable targets, and destroy cleanly', () => {
+    const dom = new FakeDocument();
+    const navigated: CitationNavigationTarget[] = [];
+    const onClear = vi.fn();
+    const controller = createCitationHighlightController({
+      answer: 'Check [[cite:{"page":1,"blockId":"p1-r0"}]] and (trang 1) and [p1:r0].',
+      ir: makeDocumentIR(),
+      dom,
+      onNavigate: target => navigated.push(target),
+      onClear,
+    });
+
+    // Duplicate [p1:r0] folded with count=2; JSON label avoids raw JSON bloat
+    expect(controller.chips).toHaveLength(2);
+    expect(asFake(controller.chipElements[0]).textContent).toBe('p.1 · p1-r0');
+    expect(asFake(controller.chipElements[0]).getAttribute('data-count')).toBe('2');
+    expect(asFake(controller.chipElements[1]).getAttribute('data-count')).toBeNull();
+
+    // Escape when nothing is active is a non-intrusive no-op returning false
+    expect(controller.handleKeyDown({ key: 'Escape' })).toBe(false);
+    expect(onClear).not.toHaveBeenCalled();
+
+    // Modifier keys & editable form inputs never trigger chip navigation
+    expect(controller.handleKeyDown({ key: 'ArrowRight', ctrlKey: true })).toBe(false);
+    expect(controller.handleKeyDown({ key: 'Enter', altKey: true })).toBe(false);
+    expect(controller.handleKeyDown({ key: 'Enter', target: { tagName: 'INPUT' } })).toBe(false);
+    expect(controller.handleKeyDown({ key: 'Escape', target: { tagName: 'TEXTAREA' } })).toBe(false);
+    expect(navigated).toHaveLength(0);
+
+    // Space activates focused chip
+    expect(controller.handleKeyDown({ key: ' ' })).toBe(true);
+    expect(navigated).toHaveLength(1);
+    expect(asFake(controller.chipElements[0]).getAttribute('aria-pressed')).toBe('true');
+
+    // Escape through handleKeyDown clears once; subsequent clear() is idempotent
+    expect(controller.handleKeyDown({ key: 'Escape' })).toBe(true);
+    controller.clear();
+    expect(onClear).toHaveBeenCalledTimes(1);
+    expect(controller.snapshot().activeIndex).toBeNull();
+    expect(asFake(controller.chipElements[0]).getAttribute('aria-pressed')).toBe('false');
+
+    // destroy() detaches listeners and empties DOM cleanly
+    controller.destroy();
+    asFake(controller.chipElements[0]).dispatch('click');
+    expect(controller.select(0)).toBe(false);
+    expect(navigated).toHaveLength(1);
+    expect(asFake(controller.chipBar).children).toHaveLength(0);
+    expect(asFake(controller.overlay).children).toHaveLength(0);
+  });
+
+  it('safely falls back when createElementNS is absent or grounding input is malformed', () => {
+    const minimalDom: CitationDocument = {
+      createElement: tagName => new FakeElement(tagName),
+    };
+    const ir = makeDocumentIR();
+    const malformedGrounding: Quad = [
+      { x: Number.NaN, y: 10 },
+      { x: 100, y: 10 },
+      { x: 100, y: 50 },
+      { x: 10, y: 50 },
+    ];
+
+    const controller = createCitationHighlightController({
+      answer: 'Fallback [p1:r0].',
+      ir,
+      dom: minimalDom,
+      grounding: { byBlockId: { 'p1-r0': malformedGrounding } },
+    });
+
+    expect(controller.select(0)).toBe(true);
+    // Malformed grounding falls back to the IR block's valid rect/polygon without NaN
+    const overlay = asFake(controller.overlay);
+    const poly = overlay.descendants().find(el => el.tagName === 'polygon');
+    expect(poly?.getAttribute('points')).toBe('60,100 360,100 360,140 60,140');
+    expect(poly?.namespaceURI).toBeNull();
   });
 });
