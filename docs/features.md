@@ -1,21 +1,35 @@
 # Chức năng và trạng thái xác minh
 
-Cập nhật: **2026-11-21**, trên nền inventory `63d0d5c`, với wave-N checkpoint `5a5dda7`. Các số liệu web bên dưới được cập nhật theo lần chạy local gần nhất; phần native và CI vẫn giữ nhãn giới hạn khi chưa có bằng chứng mới.
+Cập nhật: **2026-11-21**, tích hợp tại HEAD `fab6a93` trên nền `bc48328`. Các mục cũ bên dưới là inventory lịch sử; checkpoint hiện tại chỉ ghi bằng chứng đã chạy lại hoặc được truy nguyên từ commit/worker report, không suy diễn thành kiểm thử native hay E2E hệ điều hành.
 
 Ký hiệu: ✅ có mã **và** có bằng chứng chạy · 🟡 có mã nhưng thiếu test/UX hoặc còn giới hạn đáng kể · ⬜ chưa có.
 
-Số đo tại thời điểm này: **2.429 unit test web**, **51 e2e Playwright**, typecheck/build/import checks sạch local. Native Cargo tests đã chạy với Windows SDK `rc.exe` trong PATH.
+Số đo hiện tại: **3.023 unit test web**, **51 E2E được khai báo**; typecheck, build, committed-imports và kiểm tra artifact web pass local. Native GPUI, Chrome↔Rust thật, package release và CI chưa được chứng minh ở integration branch.
 
-## Wave-N release checkpoint (2026-11-21)
+## Wave 3 integration checkpoint (2026-11-21)
+
+| Nhóm | Bằng chứng hiện có | Trạng thái |
+|---|---|---|
+| OCR visual/selective | commit `aea0a31`; 3 file, 11 test focused pass; benchmark multilingual/dewarp/handwriting vẫn thiếu | 🟡 |
+| RAG semantic boundary/selection | commit `a64fc93`; 8 test focused pass; offline/no-provider là trạng thái rõ ràng, không tạo embedding | ✅ local slice |
+| Workflow K03-K09 | commit `70f3c88`; full unit suite cùng branch pass; K10 deferred | ✅ local slice |
+| Research J01-J10 | commits `058c5ad` ancestor + `32540f9`; worker report ghi 179 test targeted pass | ✅ local slice |
+| Native export/IR | commit `0fc7e11`; worker report ghi 151 pass, 2 ignored; chưa rerun dưới disk gate hiện tại | 🟡 |
+| Bridge reconnect/annotation | commit `fab6a93`; worker report ghi 10 native-host + 42 extension tests pass; chưa có Chrome↔Rust/OS roundtrip | 🟡 |
+| Security/release policy | commit `5ef1511`; full local quality evidence and license check pass | ✅ local slice |
+
+## Release checkpoint (2026-11-21)
 
 | Hạng mục | Bằng chứng hiện có | Trạng thái |
 |---|---|---|
-| Native Markdown/plain-text/JSON export | `native-shell` tests và overwrite-protection coverage | ✅ local |
-| Full-document cancellation | Playwright cancellation coverage | ✅ 51/51 local |
-| Changelog và third-party notices | `CHANGELOG.md`, `public/third-party/` | ✅ |
-| Web typecheck/unit/build/imports | release check: 2.429 tests, exit 0 | ✅ local |
-| Native Cargo tests | 149 passed, 2 ignored; `rc.exe` được nạp từ Windows SDK | ✅ local |
-| GitHub Actions | account bị khóa billing, web job không khởi động | 🟡 external |
+| Web typecheck/unit/build/imports | 3.023 tests, typecheck, build, `verify-release.ps1 -ArtifactsOnly` pass | ✅ local |
+| Playwright | 51 tests declared; full current run not claimed | 🟡 |
+| Native Cargo/GPUI | worker evidence only; current integration rerun blocked by resource/toolchain gate | 🟡 |
+| Native release package | no package artifact recorded | ❌ blocked |
+| Changelog and third-party notices | checked-in notices and release files present | ✅ local |
+| GitHub Actions | billing/runner block remains external | 🟡 external |
+
+---
 
 ---
 
