@@ -1,8 +1,10 @@
+import { mapRect } from '../core/deskew';
 import type { PageModel } from '../core/types';
 import type { OcrBbox, OcrEngine, OcrImage, OcrProgress, OcrWord } from './engine';
 import { DEFAULT_OCR_LANGUAGES, isImageData } from './engine';
 import { blocksToPageModel, mergeWordsToBlocks, type OcrBlock } from './geometry';
-import { normalizeForOcr, type NormalizeReport, type RgbaImage } from './preprocess';
+import { normalizeForOcr, type NormalizeReport, type OcrCoordinateTransform, type RgbaImage } from './preprocess';
+import type { PreprocessStepKind } from '../core/preprocess';
 
 export type OcrScript = 'latin' | 'han' | 'kana' | 'hangul' | 'cyrillic' | 'arabic' | 'thai' | 'devanagari' | 'unknown';
 
@@ -27,6 +29,8 @@ export interface OcrRunInfo {
    * into original screenshot pixels, so the report is informational.
    */
   normalization: NormalizeReport;
+  preprocessingSteps?: readonly PreprocessStepKind[];
+  coordinateTransform?: OcrCoordinateTransform;
 }
 
 export interface OcrPageModel extends PageModel {
@@ -183,6 +187,8 @@ interface PreparedImage {
   /** Pixel size of the image the engine is handed; 0 when it could not be read. */
   width: number;
   height: number;
+  transform?: OcrCoordinateTransform;
+  steps: readonly PreprocessStepKind[];
 }
 
 /**
@@ -199,17 +205,19 @@ export async function prepareImageForOcr(image: OcrImage): Promise<PreparedImage
     pixels = undefined;
   }
   if (!pixels || !isImageData(pixels)) {
-    return { image, report: identityReport(), width: 0, height: 0 };
+    return { image, report: identityReport(), width: 0, height: 0, steps: [] };
   }
   const normalized = normalizeForOcr(rgbaFromPixels(pixels));
   if (!(normalized.image.width > 0) || !(normalized.image.height > 0)) {
-    return { image, report: identityReport(), width: 0, height: 0 };
+    return { image, report: identityReport(), width: 0, height: 0, steps: [] };
   }
   return {
     image: createImageData(normalized.image.data, normalized.image.width, normalized.image.height),
     report: normalized.report,
     width: normalized.image.width,
     height: normalized.image.height,
+    transform: normalized.transform,
+    steps: normalized.steps ?? [],
   };
 }
 
@@ -242,36 +250,30 @@ function meanConfidence(words: OcrWord[]): number {
  * passed: a test double or a provider that resamples on its own numbers its
  * boxes in some other space, and scaling those would be a guess.
  */
-function originalPixelFactor(prepared: PreparedImage, width: number, height: number): number {
-  if (prepared.report.scale <= 1 || prepared.width <= 0 || prepared.height <= 0) return 1;
+function coordinateTransform(prepared: PreparedImage, width: number, height: number): OcrCoordinateTransform | undefined {
+  if (!prepared.transform || prepared.width <= 0 || prepared.height <= 0) return undefined;
   const measured = width > 0 && height > 0;
-  if (!measured) return 1 / prepared.report.scale;
-  return width === prepared.width && height === prepared.height ? 1 / prepared.report.scale : 1;
+  if (measured && (width !== prepared.width || height !== prepared.height)) return undefined;
+  return prepared.transform;
 }
 
-function rescaleBox(bbox: OcrBbox, factor: number): OcrBbox {
-  return {
-    x0: bbox.x0 * factor,
-    y0: bbox.y0 * factor,
-    x1: bbox.x1 * factor,
-    y1: bbox.y1 * factor,
-  };
+function mapBox(bbox: OcrBbox, transform: OcrCoordinateTransform | undefined): OcrBbox {
+  if (!transform) return bbox;
+  const mapped = mapRect({ x: bbox.x0, y: bbox.y0, width: bbox.x1 - bbox.x0, height: bbox.y1 - bbox.y0 }, transform.outputToSource);
+  return { x0: mapped.x, y0: mapped.y, x1: mapped.x + mapped.width, y1: mapped.y + mapped.height };
 }
 
-function rescaleWord(word: OcrWord, factor: number): OcrWord {
-  return { text: word.text, confidence: word.confidence, bbox: rescaleBox(word.bbox, factor) };
+function mapWord(word: OcrWord, transform: OcrCoordinateTransform | undefined): OcrWord {
+  return { text: word.text, confidence: word.confidence, bbox: mapBox(word.bbox, transform) };
 }
 
-function rescaleBlock(block: OcrBlock, factor: number): OcrBlock {
+function mapBlock(block: OcrBlock, transform: OcrCoordinateTransform | undefined): OcrBlock {
+  if (!transform) return block;
+  const scale = Math.sqrt(Math.abs(transform.sourceToOutput.a * transform.sourceToOutput.d - transform.sourceToOutput.b * transform.sourceToOutput.c));
   return {
     ...block,
-    rect: {
-      x: block.rect.x * factor,
-      y: block.rect.y * factor,
-      width: block.rect.width * factor,
-      height: block.rect.height * factor,
-    },
-    fontSize: Math.max(1, block.fontSize * factor),
+    rect: mapRect(block.rect, transform.outputToSource),
+    fontSize: Math.max(1, block.fontSize / Math.max(1, scale)),
   };
 }
 
@@ -281,7 +283,7 @@ export async function runOcr(request: OcrRequest): Promise<OcrPageModel> {
   const languages = request.languages?.length ? request.languages : [...DEFAULT_OCR_LANGUAGES];
   const minConfidence = Number.isFinite(request.minConfidence) ? request.minConfidence! : 35;
   const prepared: PreparedImage = request.preprocess === false
-    ? { image: request.image, report: identityReport(), width: 0, height: 0 }
+    ? { image: request.image, report: identityReport(), width: 0, height: 0, steps: [] }
     : await prepareImageForOcr(request.image);
   signal?.throwIfAborted();
   const result = await request.engine.recognize(prepared.image, {
@@ -293,21 +295,21 @@ export async function runOcr(request: OcrRequest): Promise<OcrPageModel> {
 
   const { words, dropped } = keptWords(result.words, minConfidence);
   const blocks = mergeWordsToBlocks(words, { lineGap: request.lineGap, maxChars: request.maxChars });
-  const factor = originalPixelFactor(prepared, result.width, result.height);
+  const transform = coordinateTransform(prepared, result.width, result.height);
   const maxX = Math.max(0, ...words.map(word => word.bbox.x1));
   const maxY = Math.max(0, ...words.map(word => word.bbox.y1));
   const engineWidth = result.width > 0 ? result.width : prepared.width > 0 ? prepared.width : Math.max(1, maxX);
   const engineHeight = result.height > 0 ? result.height : prepared.height > 0 ? prepared.height : Math.max(1, maxY);
-  const rescale = factor !== 1;
-  const width = rescale ? Math.max(1, Math.round(engineWidth * factor)) : engineWidth;
-  const height = rescale ? Math.max(1, Math.round(engineHeight * factor)) : engineHeight;
+  const mapped = Boolean(transform);
+  const width = mapped ? transform!.sourceWidth : engineWidth;
+  const height = mapped ? transform!.sourceHeight : engineHeight;
   const page = blocksToPageModel(
-    rescale ? blocks.map(block => rescaleBlock(block, factor)) : blocks,
+    mapped ? blocks.map(block => mapBlock(block, transform)) : blocks,
     width,
     height,
     request.page ?? 1,
   );
-  const mappedWords = rescale ? words.map(word => rescaleWord(word, factor)) : words;
+  const mappedWords = mapped ? words.map(word => mapWord(word, transform)) : words;
   const sourceLanguage = detectDominantScript(result.text || words.map(word => word.text).join(' '));
   const warnings: string[] = [];
   if (dropped > 0) warnings.push(`Đã bỏ ${dropped} từ có độ tin cậy thấp hơn ${minConfidence}%.`);
@@ -323,6 +325,8 @@ export async function runOcr(request: OcrRequest): Promise<OcrPageModel> {
       warnings,
       warningCount: warnings.length,
       normalization: prepared.report,
+      preprocessingSteps: prepared.steps,
+      coordinateTransform: prepared.transform,
     },
   };
 }

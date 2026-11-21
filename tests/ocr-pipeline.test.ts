@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FakeEngine, type OcrResult, type OcrWord } from '../src/ocr/engine';
-import { detectDominantScript, grayscaleContrast, runOcr } from '../src/ocr/pipeline';
+import { detectDominantScript, grayscaleContrast, prepareImageForOcr, runOcr } from '../src/ocr/pipeline';
 
 function word(text: string, confidence: number, x: number, y: number, width = 30): OcrWord {
   return { text, confidence, bbox: { x0: x, y0: y, x1: x + width, y1: y + 12 } };
@@ -73,6 +73,41 @@ describe('OCR pipeline', () => {
     const engine = new FakeEngine(result([]));
     await runOcr({ image: blob, engine });
     expect(engine.calls[0]?.image).toBe(blob);
+  });
+
+  it('returns provenance and maps engine boxes back after preprocessing upscale', async () => {
+    const width = 80;
+    const height = 64;
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const ink = y >= 4 && y < 9 && x >= 8 && x < 36;
+        const offset = (y * width + x) * 4;
+        data[offset] = ink ? 0 : 255;
+        data[offset + 1] = data[offset];
+        data[offset + 2] = data[offset];
+        data[offset + 3] = 255;
+      }
+    }
+    const source = { data, width, height } as ImageData;
+    const prepared = await prepareImageForOcr(source);
+    const scale = prepared.report.scale;
+    expect(scale).toBeGreaterThan(1);
+    expect(prepared.transform?.sourceWidth).toBe(width);
+    expect(prepared.transform?.outputWidth).toBe(width * scale);
+
+    const engine = new FakeEngine({
+      text: 'OCR',
+      words: [word('OCR', 96, 8 * scale, 4 * scale, 20 * scale)],
+      lines: [],
+      width: width * scale,
+      height: height * scale,
+    });
+    const page = await runOcr({ image: source, engine });
+    expect(page.width).toBe(width);
+    expect(page.height).toBe(height);
+    expect(page.words[0]?.bbox).toEqual({ x0: 8, y0: 4, x1: 28, y1: 4 + 12 / scale });
+    expect(page.ocr.normalization.scale).toBe(scale);
   });
 
   it('cancels a running recognition through the signal', async () => {

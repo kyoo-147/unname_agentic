@@ -63,7 +63,7 @@ export const DEFAULT_OCR_LANGUAGES = ['eng', 'vie'] as const;
 const DEFAULT_LANGUAGE_LIST = [...DEFAULT_OCR_LANGUAGES];
 
 export class OcrError extends Error {
-  readonly code: 'unsupported-image' | 'empty-result' | 'engine-failed';
+  readonly code: 'unsupported-image' | 'empty-result' | 'engine-failed' | 'unavailable';
 
   constructor(code: OcrError['code'], message: string) {
     super(message);
@@ -215,16 +215,24 @@ export function createTesseractEngine(options: TesseractEngineOptions = {}): Ocr
       };
       signal?.addEventListener('abort', onAbort, { once: true });
       try {
-        worker = await Tesseract.createWorker(languages.join('+'), Tesseract.OEM.LSTM_ONLY, {
-          ...(assets.workerPath ? { workerPath: assets.workerPath } : {}),
-          ...(assets.corePath ? { corePath: assets.corePath } : {}),
-          ...(assets.langPath ? { langPath: assets.langPath } : {}),
-          ...(assets.localWorker ? { workerBlobURL: false } : {}),
-          gzip: assets.gzip,
-          cacheMethod: 'write',
-          logger: report,
-          errorHandler: error => console.warn('Mirror OCR', error),
-        });
+        try {
+          worker = await Tesseract.createWorker(languages.join('+'), Tesseract.OEM.LSTM_ONLY, {
+            ...(assets.workerPath ? { workerPath: assets.workerPath } : {}),
+            ...(assets.corePath ? { corePath: assets.corePath } : {}),
+            ...(assets.langPath ? { langPath: assets.langPath } : {}),
+            ...(assets.localWorker ? { workerBlobURL: false } : {}),
+            gzip: assets.gzip,
+            cacheMethod: 'write',
+            logger: report,
+            errorHandler: error => console.warn('Mirror OCR', error),
+          });
+        } catch (error) {
+          if (aborted || signal?.aborted) throw abortError();
+          throw new OcrError(
+            'unavailable',
+            `Local Tesseract OCR is unavailable for ${languages.join('+')}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
         if (aborted) throw abortError();
         signal?.throwIfAborted();
         const [tesseractImage, size] = await Promise.all([imageForTesseract(image), measureImage(image)]);
