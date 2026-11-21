@@ -146,7 +146,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | J03 | **P2** | Citation graph/tìm paper liên quan | Đồ thị citation tương tác. | ✅ `src/core/citation-graph.ts` + 47 test: resolve theo DOI rồi title+year, stub cho cái không resolve, related/coCitation, DOT + JSON |
 | J04 | **P2** | Semantic Scholar/Crossref enrichment | Có metadata, abstract, citation count. | ✅ `src/core/scholar.ts` + 32 test: DOI/arXiv normalise, build URL, parse 2 nguồn, merge có provenance |
 | J05 | **P2** | Notes/backlinks liên kết tới trang và trích đoạn | Note trỏ đúng vị trí, hiện backlink. | ✅ cùng module `annotations.ts`: quote, backlinks, reanchor |
-| J06 | **P2** | Paper comparison matrix method/data/metrics/limitations | Cell có citation cụ thể, tránh suy diễn.  ⬜ |
+| J06 | **P2** | Paper comparison matrix method/data/metrics/limitations | Cell có citation cụ thể, tránh suy diễn. | ✅ `src/core/paper-matrix.ts` + 22 test: ma trận method/dataset/metrics/limitations, mọi ô có quote nguyên văn + provenance hoặc `not_reported`, xuất Markdown/CSV/JSON |
 | J08 | **P2** | Clean/reflow reading mode for papers | Giữ công thức, footnote, citations khi reflow.  ⬜ |
 | J09 | **P3** | Study pack: flashcards, questions, concept map | Generated content liên kết tới sources.  ⬜ |
 | J10 | **P3** | Research library smart collections theo topic/author/year | Filter, tag, duplicate merge có xác nhận.  ⬜ |
