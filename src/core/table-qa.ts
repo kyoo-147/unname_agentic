@@ -148,6 +148,8 @@ export interface TableAnswer {
   count: number | null;
   /** `left - right`, when `kind` is `compare`; `null` otherwise. */
   compare: number | null;
+  /** Human-readable arithmetic or lookup formula, grounded in the evidence cells. */
+  calculation: string | null;
   /** Why no answer was given; `null` exactly when there is an answer. */
   unknown: TableUnknown | null;
   /** The cells the answer used, in the order it used them. Empty for `unknown`. */
@@ -798,7 +800,7 @@ function detectIntent(question: string): Intent | null {
 // --- Answer assembly -------------------------------------------------------
 
 function unknownAnswer(reason: TableUnknownReason, detail: string, checks: TableCheck[] = []): TableAnswer {
-  return { answer: null, kind: 'unknown', sum: null, count: null, compare: null, unknown: { reason, detail }, evidence: [], checks };
+  return { answer: null, kind: 'unknown', sum: null, count: null, compare: null, calculation: null, unknown: { reason, detail }, evidence: [], checks };
 }
 
 interface AnswerNumbers {
@@ -813,6 +815,7 @@ function valueAnswer(
   evidence: TableEvidenceCell[],
   checks: TableCheck[],
   numbers: AnswerNumbers = {},
+  calculation: string | null = null,
 ): TableAnswer {
   return {
     answer: value,
@@ -820,6 +823,7 @@ function valueAnswer(
     sum: numbers.sum ?? null,
     count: numbers.count ?? null,
     compare: numbers.compare ?? null,
+    calculation,
     unknown: null,
     evidence,
     checks,
@@ -918,7 +922,14 @@ function numericAnswer(grid: Grid, question: string, intent: Exclude<Intent, 'co
         detail: 'The question names a row, so the answer is that row\'s cell rather than a column aggregate.',
       });
     }
-    return valueAnswer('value', amount(value), [evidenceCell(grid, match.row, column.col)], checks);
+    return valueAnswer(
+      'value',
+      amount(value),
+      [evidenceCell(grid, match.row, column.col)],
+      checks,
+      {},
+      `${columnName(grid, column.col)}[${match.text}] = ${text}`,
+    );
   }
 
   if (column === null) {
@@ -1032,14 +1043,28 @@ function columnAggregate(
       ok: true,
       detail: `The ${intent === 'max' ? 'largest' : 'smallest'} of the ${scan.values.length} value(s) is in ${columnName(grid, column.col)}.`,
     });
-    return valueAnswer('value', amount(best.value), [evidenceCell(grid, best.row, column.col)], checks);
+    return valueAnswer(
+      'value',
+      amount(best.value),
+      [evidenceCell(grid, best.row, column.col)],
+      checks,
+      {},
+      `${intent}(${columnName(grid, column.col)}) = ${amount(best.value)}`,
+    );
   }
 
   let total = 0;
   for (const entry of scan.values) total += entry.value;
   const sum = amount(total);
   checks.push({ name: 'sum-added', ok: true, detail: `${scan.values.length} cell(s) added.` });
-  return valueAnswer('sum', sum, scan.values.map(entry => evidenceCell(grid, entry.row, column.col)), checks, { sum });
+  return valueAnswer(
+    'sum',
+    sum,
+    scan.values.map(entry => evidenceCell(grid, entry.row, column.col)),
+    checks,
+    { sum },
+    `${scan.values.map(entry => cellAt(grid, entry.row, column.col)).join(' + ')} = ${sum}`,
+  );
 }
 
 /** How many rows carry one value, or how many data rows the table has. */
@@ -1064,7 +1089,14 @@ function countAnswer(grid: Grid, question: string): TableAnswer {
       ok: true,
       detail: `${cells.length} row(s) carry "${target.text}" in ${columnName(grid, col)}.`,
     });
-    return valueAnswer('count', cells.length, cells, checks, { count: cells.length });
+    return valueAnswer(
+      'count',
+      cells.length,
+      cells,
+      checks,
+      { count: cells.length },
+      `count(${columnName(grid, col)} = ${target.text}) = ${cells.length}`,
+    );
   }
 
   if (!matchesAny(question, ROW_NOUN_PATTERNS)) {
@@ -1083,7 +1115,7 @@ function countAnswer(grid: Grid, question: string): TableAnswer {
     ok: true,
     detail: `The table has ${cells.length} data row(s); the header and labelled total or count rows are excluded.`,
   });
-  return valueAnswer('count', cells.length, cells, checks, { count: cells.length });
+  return valueAnswer('count', cells.length, cells, checks, { count: cells.length }, `count(data rows) = ${cells.length}`);
 }
 
 /**
@@ -1156,9 +1188,14 @@ function compareAnswer(grid: Grid, question: string): TableAnswer {
     detail: `Row "${left.text}" minus row "${right.text}" in ${columnName(grid, col)}.`,
   });
   checks.push({ name: 'cells-numeric', ok: true, detail: 'Both compared cells read as numbers.' });
-  return valueAnswer('compare', difference, [evidenceCell(grid, left.row, col), evidenceCell(grid, right.row, col)], checks, {
-    compare: difference,
-  });
+  return valueAnswer(
+    'compare',
+    difference,
+    [evidenceCell(grid, left.row, col), evidenceCell(grid, right.row, col)],
+    checks,
+    { compare: difference },
+    `${leftText} - ${rightText} = ${difference}`,
+  );
 }
 
 /** The one column whose cells are numbers for both rows, or `null` when there is none or several. */

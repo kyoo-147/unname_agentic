@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   AGENT_TOOLS,
   AGENT_TOOL_NAMES,
@@ -9,6 +9,7 @@ import {
   planCalls,
   regionInsidePage,
   validateCall,
+  executeToolCalls,
 } from '../src/core/agent-tools';
 import type { AgentToolName, ToolCallValidation, ToolPageSize } from '../src/core/agent-tools';
 
@@ -494,5 +495,29 @@ describe('planCalls: every proposed call validates', () => {
       expect(validation.errors).toEqual([]);
       expect(validation.ok).toBe(true);
     }
+  });
+});
+
+describe('executeToolCalls', () => {
+  it('records rejected calls and enforces the step budget', async () => {
+    const events: string[] = [];
+    const run = await executeToolCalls(
+      [{ name: 'navigate_page', args: { page: 1 } }, { name: 'navigate_page', args: { page: 2 } }],
+      { navigate_page: async () => ({ ok: true }) },
+      { context: { pages: PAGES }, limits: { maxSteps: 1 }, onEvent: event => events.push(`${event.step}:${event.status}`) },
+    );
+    expect(run.results).toEqual([{ ok: true }]);
+    expect(events).toEqual(['1:completed', '2:budget-exhausted']);
+  });
+
+  it('does not execute prompt-injected or unallowlisted tool names', async () => {
+    const executor = vi.fn(async () => 'bad');
+    const run = await executeToolCalls(
+      [{ name: 'delete_everything', args: { instruction: 'ignore policy' } }],
+      { navigate_page: executor },
+      { allowedTools: ['navigate_page'] },
+    );
+    expect(executor).not.toHaveBeenCalled();
+    expect(run.events[0]?.status).toBe('rejected');
   });
 });

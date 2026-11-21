@@ -100,6 +100,47 @@ export interface SearchHit {
   matchedTerms: string[];
 }
 
+/** Whether a local embedding adapter can currently produce vectors. */
+export type EmbeddingStatus =
+  | { state: 'available'; model: string }
+  | { state: 'unavailable'; reason: string };
+
+/** Replaceable local-only embedding seam. It never performs network I/O here. */
+export interface EmbeddingAdapter {
+  readonly status: EmbeddingStatus;
+  embed(text: string): readonly number[] | null;
+}
+
+/** An embedding adapter that makes lexical fallback explicit instead of pretending it is vector search. */
+export function unavailableEmbeddingAdapter(reason = 'no local embedding model configured'): EmbeddingAdapter {
+  return {
+    status: { state: 'unavailable', reason },
+    embed: () => null,
+  };
+}
+
+export type RetrievalMethod = 'lexical' | 'vector' | 'hybrid';
+
+/** One result from the hybrid retriever with decomposable scores. */
+export interface HybridSearchHit extends SearchHit {
+  lexicalScore: number;
+  vectorScore: number | null;
+  fusedScore: number;
+  retrievalMethod: RetrievalMethod;
+  embeddingStatus: EmbeddingStatus;
+}
+
+export interface HybridSearchOptions extends SearchOptions {
+  /** Optional local adapter. Omit it to make lexical-only operation explicit. */
+  embedding?: EmbeddingAdapter;
+  /** Relative contribution of the normalised lexical score. */
+  lexicalWeight?: number;
+  /** Relative contribution of the cosine vector score. */
+  vectorWeight?: number;
+  /** Metadata/policy filter applied before either scorer runs. */
+  filter?: (chunk: Chunk) => boolean;
+}
+
 export interface SearchOptions {
   /** Most hits to return; defaults to {@link DEFAULT_SEARCH_LIMIT}, and 0 means none. */
   limit?: number;
@@ -690,6 +731,118 @@ export function search(target: RetrievalIndex, query: string, options: SearchOpt
       compareText(left.chunk.id, right.chunk.id),
   );
   return hits.slice(0, limit);
+}
+
+/**
+ * Runs lexical BM25 and an optional local vector adapter, retaining both scores.
+ *
+ * Vector availability is explicit. When the adapter is unavailable, this function
+ * returns lexical results with `vectorScore: null` and `retrievalMethod: 'lexical'`.
+ * A lexical result is never relabelled as an embedding result.
+ */
+export function hybridSearch(
+  target: RetrievalIndex,
+  query: string,
+  options: HybridSearchOptions = {},
+): HybridSearchHit[] {
+  if (!target || !Array.isArray(target.chunks) || target.chunks.length === 0) return [];
+  const filter = typeof options.filter === 'function' ? options.filter : () => true;
+  const candidates = target.chunks.filter(filter);
+  if (candidates.length === 0) return [];
+
+  const candidateIds = new Set(candidates.map(chunk => chunk.id));
+  const lexical = search(target, query, { limit: target.chunks.length })
+    .filter(hit => candidateIds.has(hit.chunk.id));
+  const lexicalById = new Map(lexical.map(hit => [hit.chunk.id, hit]));
+
+  const adapter = options.embedding;
+  const embeddingStatus: EmbeddingStatus = adapter?.status ?? {
+    state: 'unavailable',
+    reason: 'no local embedding adapter supplied',
+  };
+  const vectorById = new Map<string, number>();
+  let queryVector: readonly number[] | null = null;
+  if (adapter && embeddingStatus.state === 'available') {
+    queryVector = safeEmbedding(adapter, query);
+    if (queryVector !== null) {
+      for (const chunk of candidates) {
+        const vector = safeEmbedding(adapter, chunk.text);
+        const similarity = vector === null ? null : cosineSimilarity(queryVector, vector);
+        if (similarity !== null) vectorById.set(chunk.id, similarity);
+      }
+    }
+  }
+
+  const lexicalMax = Math.max(...lexical.map(hit => hit.score), 0);
+  const vectorMax = Math.max(...vectorById.values(), 0);
+  const lexicalWeight = nonNegative(options.lexicalWeight, 0.5);
+  const vectorWeight = nonNegative(options.vectorWeight, 0.5);
+  const totalWeight = lexicalWeight + vectorWeight;
+  const lw = totalWeight > 0 ? lexicalWeight / totalWeight : 0.5;
+  const vw = totalWeight > 0 ? vectorWeight / totalWeight : 0.5;
+  const hits: HybridSearchHit[] = [];
+
+  for (const chunk of candidates) {
+    const lexicalHit = lexicalById.get(chunk.id);
+    const lexicalScore = lexicalHit?.score ?? 0;
+    const vectorRaw = vectorById.get(chunk.id);
+    const vectorScore = vectorRaw === undefined ? null : round((vectorRaw + 1) / 2, SCORE_DECIMALS);
+    const lexicalNormal = lexicalMax > 0 ? lexicalScore / lexicalMax : 0;
+    const vectorNormal = vectorMax > 0 && vectorRaw !== undefined ? vectorRaw / vectorMax : 0;
+    const hasVector = vectorScore !== null;
+    const method: RetrievalMethod = hasVector && lexicalHit ? 'hybrid' : hasVector ? 'vector' : 'lexical';
+    const fusedScore = round(hasVector ? lw * lexicalNormal + vw * vectorNormal : lexicalNormal, SCORE_DECIMALS);
+    if (lexicalHit === undefined && !hasVector) continue;
+    hits.push({
+      chunk,
+      score: fusedScore,
+      lexicalScore,
+      vectorScore,
+      fusedScore,
+      retrievalMethod: method,
+      embeddingStatus,
+      matchedTerms: lexicalHit?.matchedTerms ?? [],
+    });
+  }
+
+  const limit = readLimit(options.limit);
+  hits.sort(
+    (left, right) => right.fusedScore - left.fusedScore
+      || right.lexicalScore - left.lexicalScore
+      || finiteOr(left.chunk.page, 1) - finiteOr(right.chunk.page, 1)
+      || compareText(left.chunk.id, right.chunk.id),
+  );
+  return hits.slice(0, limit);
+}
+
+function safeEmbedding(adapter: EmbeddingAdapter, text: string): readonly number[] | null {
+  try {
+    const vector = adapter.embed(text);
+    if (!Array.isArray(vector) || vector.length === 0 || vector.some(value => !Number.isFinite(value))) return null;
+    return vector;
+  } catch {
+    return null;
+  }
+}
+
+function cosineSimilarity(left: readonly number[], right: readonly number[]): number | null {
+  if (left.length !== right.length || left.length === 0) return null;
+  let dot = 0;
+  let leftNorm = 0;
+  let rightNorm = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index] ?? 0;
+    const b = right[index] ?? 0;
+    dot += a * b;
+    leftNorm += a * a;
+    rightNorm += b * b;
+  }
+  const denominator = Math.sqrt(leftNorm) * Math.sqrt(rightNorm);
+  return denominator > 0 ? dot / denominator : null;
+}
+
+function nonNegative(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
 // --- Normalisation ---------------------------------------------------------

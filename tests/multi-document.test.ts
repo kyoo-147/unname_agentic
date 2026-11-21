@@ -484,3 +484,21 @@ describe('compareDocuments', () => {
     expect(compareDocuments({ documents: [] })).toEqual({ selector: [...ASPECT_KINDS], columns: [], rows: [] });
   });
 });
+
+describe('exact block citations', () => {
+  it('resolves an exact block and rejects a block absent from context', () => {
+    const context: ContextBlock[] = [{
+      documentId: 'd1',
+      title: 'Doc',
+      page: 2,
+      blockIds: ['p2-r3', 'p2-r4'],
+      excerpt: 'Evidence',
+      rank: 1,
+    }];
+    const supported = parseAnswer('Fact [[doc:d1 page 2 block p2-r3]]', context);
+    expect(supported.citations[0]?.supported).toBe(true);
+    expect(supported.citations[0]?.blockId).toBe('p2-r3');
+    const unsupported = parseAnswer('Fact [[doc:d1 page 2 block p2-r9]]', context);
+    expect(unsupported.unsupported[0]?.reason).toBe('block-not-in-context');
+  });
+});
