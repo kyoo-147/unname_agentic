@@ -1,3 +1,4 @@
+mod document;
 mod export;
 mod geometry;
 mod rotate;
@@ -9,7 +10,9 @@ use crate::{i18n::{tr3, tr3_fill}, input::{TextField, TextFieldEvent}, theme::{s
 use gpui::{prelude::FluentBuilder, *};
 use mirror_pdf_desktop::{capture, model::{self, CaptureSource, PageFrame, ProviderKind, ProviderSettings, TextBlock}, ocr_fallback, pdf, provider};
 use state::{Epoch, Stamp};
-use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc, time::{Duration, Instant}};
+use std::{cell::{Cell, RefCell}, path::PathBuf, rc::Rc, sync::Arc, time::{Duration, Instant}};
+pub use document::DocumentPage as ReaderPage;
+use document::{page_from_blocks, DocumentPages};
 
 pub enum PdfReaderEvent { Location(u16), BrowserLocation { page: u16, fraction: f32, zoom: f32 }, Toast(String) }
 
@@ -177,45 +180,17 @@ pub struct PdfReader {
     status: String,
     error: Option<String>,
     last_digest: String,
+    /// Monotonic identity for the current source document. Page navigation does
+    /// not change it, so a full-document snapshot survives viewport changes.
+    document_generation: u64,
+    /// The immutable page/block model is cached behind interior mutability so
+    /// export can request a complete snapshot from a shared GPUI read borrow.
+    document_model: RefCell<Option<DocumentPages>>,
     tick: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<PdfReaderEvent> for PdfReader {}
-
-/// One rendered block with both language sides: the pair the pane draws, the id
-/// a chat citation names, and the two texts an export writes.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ReaderBlock {
-    /// Page-scoped id, `p<page>-r<rank>` with the same 1-based page and reading
-    /// rank a chat citation uses.
-    pub id: String,
-    /// The text the document prints.
-    pub source: String,
-    /// The translation, absent until the provider has answered for this block.
-    pub translation: Option<String>,
-}
-
-/// One page of the document with the blocks the reader holds for it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ReaderPage {
-    /// 0-based position, as every page number inside the reader.
-    pub page: usize,
-    /// Reading order.
-    pub blocks: Vec<ReaderBlock>,
-}
-
-/// The pane's blocks of `page` (0-based) with both languages, each numbered
-/// `p<page+1>-r<rank>` so an exporter can name a block the chat already names.
-fn reader_page(page: usize, blocks: &[TextBlock]) -> ReaderPage {
-    let page_number = page + 1;
-    let blocks = blocks
-        .iter()
-        .enumerate()
-        .map(|(index, block)| ReaderBlock { id: format!("p{page_number}-r{}", index + 1), source: block.source.clone(), translation: block.translated.clone() })
-        .collect();
-    ReaderPage { page, blocks }
-}
 
 impl PdfReader {
     /// The current page's source text, bounded for a chat prompt.
@@ -231,26 +206,49 @@ impl PdfReader {
     }
 
     /// The blocks of one 0-based page with both languages, or `None` when the
-    /// reader is not holding that page. Read-only: the pane and an export see
-    /// the same sources and translations.
+    /// document has not produced a frame for it. Read-only: the returned page
+    /// is a clone of the immutable document model.
     pub fn page_blocks(&self, page: usize) -> Option<ReaderPage> {
-        self.held_pages().into_iter().find(|held| held.page == page)
+        self.document_pages().into_iter().find(|held| held.page == page)
     }
 
-    /// Every page the reader holds, in page order: the document-level list an
-    /// export walks. The reader prepares one page at a time, so today this is the
-    /// page on screen; its blocks are the structures the pane renders.
+    /// Return every page in the source document, including empty page slots.
+    ///
+    /// The reader renders one page at a time, but export and future OCR/RAG
+    /// consumers need document scope. Missing PDF pages are loaded through the
+    /// same local PDF/OCR adapter and are accepted only when their source
+    /// digest, page count and generation still match this document. A failed
+    /// page remains an honest empty slot rather than inventing text.
     pub fn document_pages(&self) -> Vec<ReaderPage> {
-        let mut pages = self.held_pages();
-        pages.sort_by_key(|page| page.page);
-        pages
-    }
-
-    fn held_pages(&self) -> Vec<ReaderPage> {
-        match &self.prepared {
-            Some(prepared) => vec![reader_page(usize::from(self.page), &prepared.frame.blocks)],
-            None => Vec::new(),
+        let Some(prepared) = &self.prepared else { return Vec::new(); };
+        let source_id = prepared.frame.document_digest.clone();
+        let page_count = usize::from(prepared.frame.page_count);
+        let generation = self.document_generation;
+        let mut model = self.document_model.borrow_mut();
+        let reset = model.as_ref().is_none_or(|document| {
+            document.source_id != source_id || document.generation != generation || document.page_count != page_count
+        });
+        if reset {
+            *model = Some(DocumentPages::new(source_id.clone(), generation, page_count));
         }
+        let Some(document) = model.as_mut() else { return Vec::new(); };
+
+        let missing: Vec<usize> = document.missing_pages().collect();
+        if let Source::Pdf(path) = &self.source {
+            for page in missing {
+                let Ok(frame) = pdf::load_page(path, page as u16, None) else { continue; };
+                if frame.document_digest != source_id || usize::from(frame.page_count) != page_count { continue; }
+                let page = page_from_blocks(&source_id, generation, page, page_count, &frame.blocks);
+                let _ = document.insert(page);
+            }
+        }
+
+        // The current frame carries translations that may have arrived after
+        // the source-only document snapshot was built. Merge only this page's
+        // accepted frame, never a page from an older generation.
+        let current = page_from_blocks(&source_id, generation, usize::from(self.page), page_count, &prepared.frame.blocks);
+        let _ = document.insert(current);
+        document.snapshot()
     }
 
     pub fn new(path: PathBuf, initial_page: u16, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -351,7 +349,7 @@ impl PdfReader {
             viewport: Rc::new(Cell::new(Bounds::new(point(px(0.), px(0.)), size(px(800.), px(650.))))),
             panes: [geometry::Pane::default(); 2], layout_split: true, reflow_frames: 0, linked_scroll: geometry::LinkedScroll::default(), last_input: Rc::new(Cell::new(1)), native_scroll_input: Rc::new(Cell::new(false)),
             external_position: None, selected: None, source_text, target_text, source_full: String::new(), target_full: String::new(),
-            status: tr3("正在打开原始像素…", "Opening original pixels…", "Đang mở ảnh gốc…").into(), error: None, last_digest: String::new(), tick: None, _subscriptions: subscriptions,
+            status: tr3("正在打开原始像素…", "Opening original pixels…", "Đang mở ảnh gốc…").into(), error: None, last_digest: String::new(), document_generation: 1, document_model: RefCell::new(None), tick: None, _subscriptions: subscriptions,
         };
         let task = cx.background_executor().spawn(async {
             let mut settings = model::load_settings();
@@ -428,6 +426,18 @@ impl PdfReader {
                     Ok(Some(prepared)) => {
                         reader.page_count = prepared.frame.page_count;
                         reader.last_digest = prepared.raw_digest.clone();
+                        let source_id = prepared.frame.document_digest.clone();
+                        let page_count = usize::from(prepared.frame.page_count);
+                        let reset_document = reader.document_model.borrow().as_ref().is_some_and(|document| document.source_id != source_id || document.page_count != page_count);
+                        if reset_document {
+                            reader.document_generation = reader.document_generation.wrapping_add(1);
+                            *reader.document_model.borrow_mut() = None;
+                        }
+                        if reader.document_model.borrow().is_none() {
+                            *reader.document_model.borrow_mut() = Some(DocumentPages::new(source_id.clone(), reader.document_generation, page_count));
+                        }
+                        let current = page_from_blocks(&source_id, reader.document_generation, usize::from(reader.page), page_count, &prepared.frame.blocks);
+                        if let Some(document) = reader.document_model.borrow_mut().as_mut() { let _ = document.insert(current); }
                         if matches!(reader.source, Source::Capture(_)) && reader.prepared.as_ref().is_some_and(|old| old.frame.document_digest == prepared.frame.document_digest) { return; }
                         let ocr_error = prepared.frame.quality.contains("OCR unavailable").then(|| prepared.frame.quality.clone());
                         reader.epoch.source(); reader.prepared = Some(prepared); reader.selected = None; reader.translate_all = false; reader.selected_request = false;
@@ -678,7 +688,7 @@ mod page_input_tests {
 
 #[cfg(test)]
 mod reader_block_tests {
-    use super::{ReaderBlock, reader_page};
+    use super::document::page_from_blocks;
     use mirror_pdf_desktop::model::{BlockRect, TextBlock};
 
     fn block(id: u64, source: &str, translated: Option<&str>) -> TextBlock {
@@ -689,15 +699,17 @@ mod reader_block_tests {
     /// block named the way a chat citation names it.
     #[test]
     fn a_page_pairs_each_block_with_its_translation_and_a_page_scoped_id() {
-        let page = reader_page(2, &[block(4, "Revenue", Some("Doanh thu")), block(5, "Costs", None)]);
+        let page = page_from_blocks("document", 4, 2, 3, &[block(4, "Revenue", Some("Doanh thu")), block(5, "Costs", None)]);
         assert_eq!(page.page, 2);
-        assert_eq!(
-            page.blocks,
-            vec![
-                ReaderBlock { id: "p3-r1".into(), source: "Revenue".into(), translation: Some("Doanh thu".into()) },
-                ReaderBlock { id: "p3-r2".into(), source: "Costs".into(), translation: None },
-            ]
-        );
+        assert_eq!(page.page_number, 3);
+        assert_eq!(page.page_count, 3);
+        assert_eq!(page.source_id, "document");
+        assert_eq!(page.generation, 4);
+        assert_eq!(page.blocks[0].id, "p3-r1");
+        assert_eq!(page.blocks[0].source, "Revenue");
+        assert_eq!(page.blocks[0].translation.as_deref(), Some("Doanh thu"));
+        assert_eq!(page.blocks[1].translation, None);
+        assert_eq!(page.blocks[0].polygon, [[0., 0.], [1., 0.], [1., 1.], [0., 1.]]);
     }
 }
 /// 扫描页遮罩: the colour a block sits on, and how much of the region it covers.
