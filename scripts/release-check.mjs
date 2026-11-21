@@ -541,7 +541,7 @@ function checkChangelog(version) {
 }
 
 function checkQualityEvidence(unit, options, e2e) {
-  const trustRun = run('pnpm', ['vitest', 'run', 'tests/quality-gates.test.ts', 'tests/privacy.test.ts', 'tests/network-guard.test.ts', 'tests/crypto.test.ts', 'tests/audit.test.ts', 'tests/capabilities.test.ts'], TIMEOUTS.test);
+  const trustRun = run('pnpm', ['vitest', 'run', 'tests/quality-gates.test.ts', 'tests/network-guard.test.ts', 'tests/crypto.test.ts', 'tests/audit.test.ts', 'tests/capabilities.test.ts', 'tests/security-policy.test.ts', 'tests/resource-limits.test.ts', 'tests/evidence-contract.test.ts'], TIMEOUTS.test);
   const translationRun = run('pnpm', ['vitest', 'run', 'tests/translation-core.test.ts', 'tests/translation-batch.test.ts', 'tests/translation-service-batch.test.ts'], TIMEOUTS.test);
   const exportRun = run('pnpm', ['vitest', 'run', 'tests/export-bilingual.test.ts', 'tests/export-check.test.ts', 'tests/pdf-export.test.ts'], TIMEOUTS.test);
   const accessibilityRun = options.e2e ? e2e.run : run('pnpm', ['vitest', 'run', 'tests/a11y.test.ts'], TIMEOUTS.test);
@@ -553,17 +553,9 @@ function checkQualityEvidence(unit, options, e2e) {
   };
   const ocr = parseJson(ocrRun);
   const perf = parseJson(perfRun);
-  const sbomPath = path.join(root, 'public', 'third-party', 'SBOM.json');
-  let sbomPass = false;
-  if (existsSync(sbomPath)) {
-    try {
-      const sbom = JSON.parse(readFileSync(sbomPath, 'utf8'));
-      sbomPass = sbom?.bomFormat === 'CycloneDX'
-        && Array.isArray(sbom.components)
-        && sbom.components.length > 0
-        && !JSON.stringify(sbom).match(/AGPL/iu);
-    } catch { sbomPass = false; }
-  }
+  const licenseRun = run(process.execPath, ['scripts/dependency-license-check.mjs'], TIMEOUTS.test);
+  const license = parseJson(licenseRun);
+  const sbomPass = license?.ok === true && licenseRun.code === 0;
   const core = trustRun.code === 0 && unit.run.code === 0 ? 'pass' : 'fail';
   return {
     evidence: {
@@ -585,12 +577,12 @@ function checkQualityEvidence(unit, options, e2e) {
       ocr: ocrRun,
       performance: perfRun,
       i18n: i18nRun,
-      i18n: i18nRun,
       trust: trustRun,
       translation: translationRun,
       export: exportRun,
       accessibility: accessibilityRun,
-      sbom: sbomPass ? 'CycloneDX present, no AGPL text' : 'missing, malformed, or AGPL-containing SBOM',
+      licenses: licenseRun,
+      sbom: sbomPass ? 'CycloneDX dependency/license check passed' : 'dependency/license check failed',
     },
   };
 }

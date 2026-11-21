@@ -7,6 +7,7 @@ import {
 import { AuditLog } from '../src/core/audit';
 import {
   PrivacyError,
+  assertCanSendAndRecord,
   privacyPolicy,
   recordConsentDecision,
   assertCanSend,
@@ -61,6 +62,29 @@ describe('consent and route audit', () => {
     expect(() => assertCanSend(privacyPolicy('cloud', 'https://example.test'), {
       provider: 'local', endpoint: 'not a url', allowCloud: true,
     })).toThrowError(PrivacyError);
+  });
+
+  it('enforces and records both denied and allowed provider routes', () => {
+    const log = new AuditLog({ now: () => '2026-11-21T00:00:00.000Z' });
+    expect(() => assertCanSendAndRecord({
+      log,
+      documentId: 'doc-denied',
+      provider: 'openai',
+      mode: 'ask',
+      endpoint: 'https://api.example.test/v1',
+      allowCloud: false,
+    })).toThrowError(PrivacyError);
+    assertCanSendAndRecord({
+      log,
+      documentId: 'doc-allowed',
+      provider: 'local',
+      mode: 'offline',
+      endpoint: 'http://127.0.0.1:11434/v1',
+      allowCloud: false,
+    });
+
+    expect(log.entries().map(event => event.details.allowed)).toEqual([false, true]);
+    expect(log.persist()).not.toContain('api.example.test');
   });
 });
 
