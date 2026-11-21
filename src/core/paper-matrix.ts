@@ -527,6 +527,7 @@ interface PreparedPaper {
   year: number;
   ir: DocumentIR;
   sentences: PreparedSentence[];
+  lowConfidenceSentences: PreparedSentence[];
   hasSearchableBlocks: boolean;
   hasAnyRawText: boolean;
   /** All metric mentions found across all searchable blocks, in reading order. */
@@ -905,42 +906,27 @@ function evaluateCell(paper: PreparedPaper, axis: PreparedAxis): PaperMatrixCell
   const matchedSentences: PreparedSentence[] = [];
 
   for (const sentence of paper.sentences) {
-    if (isExplicitNonReportedStub(sentence.text)) continue;
-
-    const patternMatch = axis.pattern !== null ? execRegex(axis.pattern, sentence.text) : null;
-    if (axis.pattern !== null && axis.matchers.length === 0 && patternMatch === null) {
-      continue;
-    }
-
-    const keywordHits = countKeywordHits(foldText(sentence.text), axis.matchers);
-    const metricHits = axis.id === 'metrics' ? sentence.extractedMetrics.length : 0;
-    const hasMatch = patternMatch !== null || keywordHits > 0 || metricHits > 0;
-    if (!hasMatch) continue;
+    const match = scoreSentenceForAxis(sentence, axis);
+    if (match === null) continue;
 
     matchedSentences.push(sentence);
 
-    const preferred = prefersSection(sentence.section, axis.preferredSections);
-    const score =
-      (patternMatch !== null ? PAPER_KEYWORD_HIT_WEIGHT * 2 : 0)
-      + keywordHits * PAPER_KEYWORD_HIT_WEIGHT
-      + metricHits * PAPER_KEYWORD_HIT_WEIGHT
-      + (preferred ? PAPER_PREFERRED_SECTION_BONUS : 0);
-
-    if (bestSentence === null || score > bestScore) {
+    if (bestSentence === null || match.score > bestScore) {
       bestSentence = sentence;
-      bestScore = score;
-      bestPatternRaw = patternMatch;
+      bestScore = match.score;
+      bestPatternRaw = match.patternRaw;
     }
   }
 
   if (bestSentence === null) {
+    const filteredMatch = paper.lowConfidenceSentences.some(
+      sentence => scoreSentenceForAxis(sentence, axis) !== null,
+    );
     return {
       status: NOT_REPORTED_VALUE,
       documentId: paper.documentId,
       dimensionId: axis.id,
-      reason: paper.hasAnyRawText && paper.sentences.length < countNonHeadingTextBlocks(paper.ir.blocks)
-        ? 'insufficient-evidence'
-        : 'no-match',
+      reason: filteredMatch ? 'insufficient-evidence' : 'no-match',
     };
   }
 
@@ -995,6 +981,33 @@ function evaluateCell(paper: PreparedPaper, axis: PreparedAxis): PaperMatrixCell
     normalizedValue,
     score: bestScore,
   };
+}
+
+function scoreSentenceForAxis(
+  sentence: PreparedSentence,
+  axis: PreparedAxis,
+): { score: number; patternRaw: string | null } | null {
+  if (isExplicitNonReportedStub(sentence.text)) return null;
+
+  const patternMatch = axis.pattern !== null ? execRegex(axis.pattern, sentence.text) : null;
+  if (axis.pattern !== null && axis.matchers.length === 0 && patternMatch === null) {
+    return null;
+  }
+
+  const keywordHits = countKeywordHits(foldText(sentence.text), axis.matchers);
+  const metricHits = axis.id === 'metrics' ? sentence.extractedMetrics.length : 0;
+  if (patternMatch === null && keywordHits === 0 && metricHits === 0) {
+    return null;
+  }
+
+  const preferred = prefersSection(sentence.section, axis.preferredSections);
+  const score =
+    (patternMatch !== null ? PAPER_KEYWORD_HIT_WEIGHT * 2 : 0)
+    + keywordHits * PAPER_KEYWORD_HIT_WEIGHT
+    + metricHits * PAPER_KEYWORD_HIT_WEIGHT
+    + (preferred ? PAPER_PREFERRED_SECTION_BONUS : 0);
+
+  return { score, patternRaw: patternMatch };
 }
 
 function normalizeCellValue(
@@ -1385,6 +1398,7 @@ function preparePapers(
     const blocks = orderedBlocks(normalized.ir);
     let currentSection = '';
     const sentences: PreparedSentence[] = [];
+    const lowConfidenceSentences: PreparedSentence[] = [];
     let hasAnyRawText = false;
 
     for (const block of blocks) {
@@ -1398,7 +1412,7 @@ function preparePapers(
       const confidence = typeof block.confidence === 'number' && Number.isFinite(block.confidence)
         ? block.confidence
         : 1;
-      if (confidence < minConfidence) continue;
+      const target = confidence < minConfidence ? lowConfidenceSentences : sentences;
 
       for (const slice of splitVerbatimSentences(rawText)) {
         const extractedMetrics = isExplicitNonReportedStub(slice)
@@ -1411,7 +1425,7 @@ function preparePapers(
               currentSection,
               catalog,
             );
-        sentences.push({
+        target.push({
           text: slice,
           section: currentSection,
           page: pageOf(block),
@@ -1434,6 +1448,7 @@ function preparePapers(
       year: normalized.year,
       ir: normalized.ir,
       sentences,
+      lowConfidenceSentences,
       hasSearchableBlocks: sentences.length > 0,
       hasAnyRawText,
       allMetrics,
@@ -1908,16 +1923,6 @@ function orderedBlocks(ir: DocumentIR): Block[] {
     const rightId = typeof right?.id === 'string' ? right.id : '';
     return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
   });
-}
-
-function countNonHeadingTextBlocks(blocks: readonly Block[]): number {
-  let count = 0;
-  for (const block of blocks) {
-    if (block.type !== 'heading' && typeof block.raw === 'string' && block.raw.trim().length > 0) {
-      count += 1;
-    }
-  }
-  return count;
 }
 
 function pageOf(block: Block): number {
