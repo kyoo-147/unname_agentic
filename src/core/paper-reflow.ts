@@ -437,7 +437,7 @@ export function reflowPaper(
   const { boundCaptions, consumedCaptionIds } = bindCaptions(mainWorking, pageDims);
 
   // 5. Merge adjacent equation number tags `(1)` into neighboring formula blocks.
-  const { mergedTags, consumedTagIds } = bindEquationTags(mainWorking, consumedCaptionIds);
+  const { mergedTags, consumedTagIds } = bindEquationTags(mainWorking, consumedCaptionIds, pageDims);
 
   // 6. Build main stream slots & classify headings/formulas/tables.
   const mainItems = mainWorking.filter(
@@ -460,6 +460,7 @@ export function reflowPaper(
 
   // 10. Build resolution tables for footnotes, equations, figures/tables, bibliography.
   const equationByNumber = buildEquationIndex(slots);
+  const sectionByNumberPrefix = buildSectionNumberIndex(slots);
   const { bibByNumber, bibNumbers, bibAuthorYears } = buildBibliographyIndex(
     slots,
     referenceBlockIds,
@@ -482,6 +483,7 @@ export function reflowPaper(
       {
         footnotes,
         equationByNumber,
+        sectionByNumberPrefix,
         bibByNumber,
         bibNumbers,
         bibAuthorYears,
@@ -500,6 +502,7 @@ export function reflowPaper(
     materializeFootnote(fn, {
       footnotes,
       equationByNumber,
+      sectionByNumberPrefix,
       bibByNumber,
       bibNumbers,
       bibAuthorYears,
@@ -1170,18 +1173,27 @@ function reorderSurvivingPages(
   return orderedAll;
 }
 
-/**
- * Uses `orderBlocks` directly; if spanning blocks (>80% width) exceed 40% of a page
- * and suppress multi-column detection (common on academic page 1 with Title + Authors + Abstract),
- * detects columns among the non-spanning blocks when those columns overlap vertically.
- */
-function orderPageWithSpanningFallback(
+interface PageColumnPartition {
+  columns: ReadingColumn[];
+  spanning: WorkingOrderBlock[];
+  narrow: WorkingOrderBlock[];
+  directOrdered: WorkingOrderBlock[];
+  usedFallback: boolean;
+}
+
+function detectPageColumns(
   blocks: readonly WorkingOrderBlock[],
   pageBox: PageBox,
-): WorkingOrderBlock[] {
+): PageColumnPartition {
   const initial = orderBlocks(blocks, pageBox);
   if (initial.columns.length >= 2 || blocks.length < 3) {
-    return initial.ordered;
+    return {
+      columns: initial.columns,
+      spanning: [],
+      narrow: [...blocks],
+      directOrdered: initial.ordered,
+      usedFallback: false,
+    };
   }
 
   const area = computeTextArea(blocks, pageBox.width);
@@ -1197,22 +1209,57 @@ function orderPageWithSpanningFallback(
     }
   }
 
-  if (spanning.length === 0 || narrow.length < 2) return initial.ordered;
+  if (spanning.length === 0 || narrow.length < 2) {
+    return {
+      columns: initial.columns,
+      spanning: [],
+      narrow: [...blocks],
+      directOrdered: initial.ordered,
+      usedFallback: false,
+    };
+  }
 
   const narrowLayout = orderBlocks(narrow, pageBox);
   if (narrowLayout.columns.length < 2 || !columnsOverlapVertically(narrowLayout.columns, narrow)) {
-    return initial.ordered;
+    return {
+      columns: initial.columns,
+      spanning: [],
+      narrow: [...blocks],
+      directOrdered: initial.ordered,
+      usedFallback: false,
+    };
   }
 
+  return {
+    columns: narrowLayout.columns,
+    spanning,
+    narrow,
+    directOrdered: initial.ordered,
+    usedFallback: true,
+  };
+}
+
+/**
+ * Uses `orderBlocks` directly; if spanning blocks (>80% width) exceed 40% of a page
+ * and suppress multi-column detection (common on academic page 1 with Title + Authors + Abstract),
+ * detects columns among the non-spanning blocks when those columns overlap vertically.
+ */
+function orderPageWithSpanningFallback(
+  blocks: readonly WorkingOrderBlock[],
+  pageBox: PageBox,
+): WorkingOrderBlock[] {
+  const partition = detectPageColumns(blocks, pageBox);
+  if (!partition.usedFallback) return partition.directOrdered;
+
   // Sort spanning blocks top-to-bottom and slice narrow blocks into bands around them.
-  const sortedSpans = [...spanning].sort(compareBlockTopLeft);
+  const sortedSpans = [...partition.spanning].sort(compareBlockTopLeft);
   const columnOf = new Map<string, number>();
-  narrowLayout.columns.forEach(col => {
+  partition.columns.forEach(col => {
     for (const id of col.blockIds) columnOf.set(id, col.index);
   });
 
   const bands: WorkingOrderBlock[][] = Array.from({ length: sortedSpans.length + 1 }, () => []);
-  for (const item of narrow) {
+  for (const item of partition.narrow) {
     const centerY = item.rect.y + item.rect.height / 2;
     let band = 0;
     for (const span of sortedSpans) {
@@ -1350,6 +1397,7 @@ function bindCaptions(
 function bindEquationTags(
   blocks: readonly WorkingOrderBlock[],
   consumedCaptionIds: ReadonlySet<string>,
+  pageDims: ReadonlyMap<number, PageBox>,
 ): { mergedTags: Map<string, WorkingEquationTag>; consumedTagIds: Set<string> } {
   const mergedTags = new Map<string, WorkingEquationTag>();
   const consumedTagIds = new Set<string>();
@@ -1362,12 +1410,19 @@ function bindEquationTags(
     else byPage.set(b.page, [b]);
   }
 
-  for (const pageBlocks of byPage.values()) {
+  for (const [pageNum, pageBlocks] of byPage.entries()) {
+    const pageBox = pageDims.get(pageNum) ?? { width: DEFAULT_PAGE_WIDTH, height: DEFAULT_PAGE_HEIGHT };
+    const { columnOf, boundaries } = columnMembershipOfPage(pageBlocks, pageBox);
+
     for (const eq of pageBlocks) {
       if (!isStandaloneFormulaBlock(eq.irBlock)) continue;
       const own = extractFormulaBodyAndNumber(eq.text);
       if (own.equationNumber !== undefined) continue;
 
+      const eqCol = columnOf.get(eq.id) ?? null;
+      const eqStraddles = boundaries.some(
+        boundary => eq.rect.x < boundary - EPSILON && eq.rect.x + eq.rect.width > boundary + EPSILON,
+      );
       const eqCenterY = eq.rect.y + eq.rect.height / 2;
       const rowTol = Math.max(eq.rect.height * 0.8, 14);
       let candidate: { block: WorkingOrderBlock; number: string; gap: number } | null = null;
@@ -1378,6 +1433,11 @@ function bindEquationTags(
         const match = EQUATION_TAG_ONLY.exec(collapseSpaces(other.text));
         const num = match?.[1];
         if (!num) continue;
+
+        // If the page is multi-column and the formula sits inside one column without straddling
+        // a gutter, never steal an equation tag sitting inside another column across a gutter.
+        const otherCol = columnOf.get(other.id) ?? null;
+        if (!eqStraddles && eqCol !== null && otherCol !== null && eqCol !== otherCol) continue;
 
         const otherCenterY = other.rect.y + other.rect.height / 2;
         if (Math.abs(otherCenterY - eqCenterY) > rowTol) continue;
@@ -1415,6 +1475,23 @@ function bindEquationTags(
   }
 
   return { mergedTags, consumedTagIds };
+}
+
+function columnMembershipOfPage(
+  pageBlocks: readonly WorkingOrderBlock[],
+  pageBox: PageBox,
+): { columnOf: Map<string, number | null>; boundaries: number[] } {
+  const columnOf = new Map<string, number | null>();
+  const partition = detectPageColumns(pageBlocks, pageBox);
+  if (partition.columns.length < 2) return { columnOf, boundaries: [] };
+
+  for (const col of partition.columns) {
+    for (const id of col.blockIds) columnOf.set(id, col.index);
+  }
+  return {
+    columnOf,
+    boundaries: partition.columns.slice(0, -1).map(col => col.right),
+  };
 }
 
 // --- Stage helpers: Heading levels, slots, outline, footnotes --------------
@@ -1786,29 +1863,44 @@ function buildBibliographyIndex(
   return { bibByNumber, bibNumbers, bibAuthorYears };
 }
 
+function buildSectionNumberIndex(slots: readonly ReflowSlot[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const slot of slots) {
+    if (slot.kind !== 'heading' || slot.isTitle) continue;
+    const text = collapseSpaces(slot.irBlock.raw);
+    const numMatch = NUMBERED_HEADING_PREFIX.exec(text);
+    if (numMatch?.[1] && !map.has(numMatch[1])) {
+      map.set(numMatch[1], slot.reflowId);
+      continue;
+    }
+    const appMatch = APPENDIX_HEADING_PREFIX.exec(text);
+    if (appMatch?.[1]) {
+      const key = appMatch[2] ? `${appMatch[1]}.${appMatch[2]}` : appMatch[1];
+      if (!map.has(key)) map.set(key, slot.reflowId);
+    }
+  }
+  return map;
+}
+
 function buildCaptionCrossRefIndex(
   slots: readonly ReflowSlot[],
   footnotes: readonly WorkingFootnote[],
 ): Map<string, readonly Link[]> {
   const linkInputs: LinkInputBlock[] = [];
   for (const slot of slots) {
+    const raw =
+      (slot.kind === 'figure' || slot.kind === 'table') && slot.caption
+        ? `${slot.caption.text}\n${slot.irBlock.raw}`
+        : slot.irBlock.raw;
     linkInputs.push({
       id: slot.irBlock.id,
       type: slot.kind === 'table' || slot.kind === 'figure' || slot.kind === 'heading' || slot.kind === 'formula'
         ? slot.kind
         : 'paragraph',
       page: slot.irBlock.page,
-      raw: slot.irBlock.raw,
+      raw,
       ...(slot.headingLevel !== undefined ? { headingLevel: slot.headingLevel } : {}),
     });
-    if (slot.caption) {
-      linkInputs.push({
-        id: slot.caption.irBlock.id,
-        type: 'caption',
-        page: slot.caption.irBlock.page,
-        raw: slot.caption.irBlock.raw,
-      });
-    }
   }
   for (const fn of footnotes) {
     linkInputs.push({
@@ -1832,6 +1924,7 @@ function buildCaptionCrossRefIndex(
 interface ResolutionContext {
   footnotes: readonly WorkingFootnote[];
   equationByNumber: ReadonlyMap<string, string>;
+  sectionByNumberPrefix: ReadonlyMap<string, string>;
   bibByNumber: ReadonlyMap<string, string>;
   bibNumbers: ReadonlySet<string>;
   bibAuthorYears: readonly BibliographyAuthorYear[];
@@ -2078,12 +2171,49 @@ function segmentMathRuns(text: string): Segment[] {
   const initial = segmentText(text);
   const out: Segment[] = [];
   for (const seg of initial) {
-    if (seg.kind !== 'text' || !seg.value.includes('$\\')) {
+    if (seg.kind !== 'text') {
       out.push(seg);
       continue;
     }
-    out.push(...splitBackslashInlineMath(seg.value));
+    const expanded = seg.value.includes('$\\') ? splitBackslashInlineMath(seg.value) : [seg];
+    for (const sub of expanded) {
+      if (sub.kind !== 'text') {
+        out.push(sub);
+        continue;
+      }
+      out.push(...recoverClauseEndBareMath(sub.value));
+    }
   }
+  return out;
+}
+
+const MATH_OP_HINT = /[=+×÷±∓−∑∏∫∬√∞∂∇→←↔⇒⇔∈∉⊂⊃∪∩∀∃¬∧∨≤≥≠≈≡∼<>^_·⋅∗]/u;
+
+/**
+ * `formulas.ts` tokenizes on `\S+`, so a bare formula at the end of a sentence or
+ * clause (`when α ≤ β.`) has `.` glued onto `β` and stays plain text. Splitting off
+ * trailing clause punctuation recovers that trailing bare formula cleanly.
+ */
+function recoverClauseEndBareMath(text: string): Segment[] {
+  if (!MATH_OP_HINT.test(text)) return [{ kind: 'text', value: text }];
+  const out: Segment[] = [];
+  let cursor = 0;
+
+  for (const match of text.matchAll(/([.,;:!?…]+)(?=\s|$)/gu)) {
+    const punct = match[1] ?? '';
+    const punctStart = match.index ?? 0;
+    const chunk = text.slice(cursor, punctStart);
+    if (!MATH_OP_HINT.test(chunk)) continue;
+    const reseg = segmentText(chunk);
+    const last = reseg[reseg.length - 1];
+    if (last && last.kind !== 'text') {
+      out.push(...reseg, { kind: 'text', value: punct });
+      cursor = punctStart + punct.length;
+    }
+  }
+
+  if (cursor === 0) return [{ kind: 'text', value: text }];
+  if (cursor < text.length) out.push(...segmentText(text.slice(cursor)));
   return out;
 }
 
@@ -2278,9 +2408,31 @@ function scanCrossRefSpans(
   blockId: string,
   ctx: ResolutionContext,
 ): RawInlineSpan[] {
-  const links = ctx.captionTargetLinks.get(blockId) ?? [];
-  if (links.length === 0) return [];
   const candidates: RawInlineSpan[] = [];
+  const matchedSectionStarts = new Set<number>();
+
+  // 1. Explicit numbered section cross-references (`Section 2.1`, `Sec. 1`, `§ 2.1`)
+  for (const match of prose.matchAll(/(?:\b(?:sections?|sec\.?|chapters?|ch\.?|mục|chương|phần)\s*|\u00A7\s*)(\d{1,3}(?:\.\d{1,3})*|[A-Z](?:\.\d{1,3})+)/giu)) {
+    const start = match.index ?? 0;
+    const path = match[1] ?? '';
+    const targetReflowId = ctx.sectionByNumberPrefix.get(path);
+    if (!targetReflowId) continue;
+    matchedSectionStarts.add(start);
+    candidates.push({
+      start,
+      end: start + match[0].length,
+      priority: 2,
+      segment: {
+        kind: 'cross-ref',
+        value: match[0],
+        label: match[0],
+        targetReflowId,
+      },
+    });
+  }
+
+  // 2. Figure, Table, and unnumbered section links resolved by `links.ts`
+  const links = ctx.captionTargetLinks.get(blockId) ?? [];
   for (const link of links) {
     if (link.kind !== 'figure' && link.kind !== 'table' && link.kind !== 'section') continue;
     if (!link.targetBlockId) continue;
@@ -2290,6 +2442,10 @@ function scanCrossRefSpans(
     while (searchFrom < prose.length) {
       const idx = prose.indexOf(link.label, searchFrom);
       if (idx === -1) break;
+      if (link.kind === 'section' && matchedSectionStarts.has(idx)) {
+        searchFrom = idx + link.label.length;
+        continue;
+      }
       candidates.push({
         start: idx,
         end: idx + link.label.length,
