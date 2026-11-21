@@ -62,3 +62,17 @@ Duplicate candidates are proposals only.
 The surviving paper keeps source receipts, raw imports, and merge history.
 
 A false confirmation does not mutate the library.
+
+## Wave 3 safeguards
+
+`proposePaperEnrichment` returns a versioned before/after proposal and never mutates the paper.
+
+`applyEnrichmentProposal` requires explicit confirmation and rejects a stale base fingerprint.
+
+`buildKnowledgeCards` creates formula cards from formula blocks and term cards only for caller-supplied terms.
+
+Missing terms produce `UNKNOWN`, not a generated explanation.
+
+Highlight backlinks can be queried by paper, page, block, citation, and polygon presence.
+
+`reflowPaper` returns a safety receipt listing preserved formula blocks, footnotes, citation tokens, and any warnings.

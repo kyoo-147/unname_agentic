@@ -5,6 +5,8 @@ export * from './evidence';
 export * from './notes';
 export * from './reflow';
 export * from './study';
+export * from './study';
+export * from './knowledge';
 export * from './library';
 export * from './exchange';
 export * from '../bibtex';

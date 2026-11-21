@@ -203,3 +203,60 @@ async function sha256(value: string): Promise<string | undefined> {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
+export interface EnrichmentProposal {
+  proposalVersion: 1;
+  paperId: string;
+  baseFingerprint: string;
+  query: string;
+  before: ResearchPaper;
+  after: ResearchPaper;
+  changedFields: string[];
+  result: EnrichmentResult;
+  requiresConfirmation: true;
+}
+
+export interface ApplyProposalResult {
+  applied: boolean;
+  paper: ResearchPaper;
+  reason?: string;
+}
+
+/** Fetches metadata into a reviewable proposal without mutating the paper. */
+export async function proposePaperEnrichment(paper: ResearchPaper, options: EnrichmentOptions = {}): Promise<EnrichmentProposal> {
+  const before = cloneResearchPaper(paper);
+  const result = await enrichMetadata(before.doi ?? before.arxiv ?? '', options);
+  const after = cloneResearchPaper(before);
+  if (result.record !== undefined) applyRecord(after, result.record, result.receipts);
+  return {
+    proposalVersion: 1,
+    paperId: before.paperId,
+    baseFingerprint: fingerprint(before),
+    query: before.doi ?? before.arxiv ?? '',
+    before,
+    after,
+    changedFields: changedPaperFields(before, after),
+    result,
+    requiresConfirmation: true,
+  };
+}
+
+/** Applies only a confirmed proposal created from the same paper revision. */
+export function applyEnrichmentProposal(paper: ResearchPaper, proposal: EnrichmentProposal, confirm: boolean): ApplyProposalResult {
+  if (!confirm) return { applied: false, paper: cloneResearchPaper(paper), reason: 'Metadata proposal was not confirmed.' };
+  if (proposal.proposalVersion !== 1 || proposal.requiresConfirmation !== true) return { applied: false, paper: cloneResearchPaper(paper), reason: 'Metadata proposal version is unsupported.' };
+  if (proposal.paperId !== paper.paperId || proposal.baseFingerprint !== fingerprint(paper)) return { applied: false, paper: cloneResearchPaper(paper), reason: 'Metadata proposal is stale and no longer matches the paper revision.' };
+  return { applied: true, paper: cloneResearchPaper(proposal.after) };
+}
+
+function fingerprint(paper: ResearchPaper): string {
+  const value = cloneResearchPaper(paper);
+  value.sourceHistory = [];
+  value.metadataReceipts = [];
+  return JSON.stringify(value);
+}
+
+function changedPaperFields(before: ResearchPaper, after: ResearchPaper): string[] {
+  const fields = ['title', 'authors', 'doi', 'arxiv', 'venue', 'year', 'abstract', 'references', 'topics', 'tags', 'citationKey'] as const;
+  return fields.filter(field => JSON.stringify(before[field]) !== JSON.stringify(after[field]));
+}
