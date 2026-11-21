@@ -10,6 +10,7 @@ import {
   type ReleaseGateInput,
   type ReleaseGates,
   type ReleaseLicenses,
+  type ReleaseQualityEvidence,
   type ReleaseTests,
 } from '../src/core/release-gate';
 
@@ -30,6 +31,21 @@ const CLEAN: ReleaseGateInput = {
     bundledNotices: ['public/third-party/NOTICE.txt', 'public/third-party/LICENSE-pdfjs.txt'],
     missing: [],
   },
+  quality: {
+    privacy: 'pass',
+    secretBoundary: 'pass',
+    resourceLimits: 'pass',
+    consentAudit: 'pass',
+    retention: 'pass',
+    goldenDataset: 'pass',
+    ocrBenchmark: 'pass',
+    translationBenchmark: 'pass',
+    exportBenchmark: 'pass',
+    performanceBenchmark: 'pass',
+    i18n: 'pass',
+    accessibility: 'pass',
+    sbom: 'pass',
+  },
   packageArtifact: 'dist/pdf-workspace-windows-x64-release-20261120-180552.zip',
 };
 
@@ -41,6 +57,7 @@ interface InputOverrides {
   tests?: Partial<ReleaseTests>;
   gates?: Partial<ReleaseGates>;
   licenses?: Partial<ReleaseLicenses>;
+  quality?: Partial<ReleaseQualityEvidence>;
   packageArtifact?: string | null;
 }
 
@@ -53,6 +70,7 @@ function gate(overrides: InputOverrides = {}): ReleaseGateInput {
     tests: { ...CLEAN.tests, ...overrides.tests },
     gates: { ...CLEAN.gates, ...overrides.gates },
     licenses: { ...CLEAN.licenses, ...overrides.licenses },
+    quality: { ...CLEAN.quality, ...overrides.quality },
     packageArtifact:
       overrides.packageArtifact === undefined ? CLEAN.packageArtifact : overrides.packageArtifact,
   };
@@ -151,7 +169,21 @@ const BROKEN_CASES: readonly BrokenCase[] = [
     what: 'no package artifact',
     broken: () => gate({ packageArtifact: null }),
   },
+  { code: 'quality-privacy-failed', what: 'missing privacy evidence', broken: () => gate({ quality: { privacy: 'fail' } }) },
+  { code: 'quality-secret-boundary-failed', what: 'missing secret-boundary evidence', broken: () => gate({ quality: { secretBoundary: 'fail' } }) },
+  { code: 'quality-resource-limits-failed', what: 'missing resource-limit evidence', broken: () => gate({ quality: { resourceLimits: 'fail' } }) },
+  { code: 'quality-consent-audit-failed', what: 'missing consent-audit evidence', broken: () => gate({ quality: { consentAudit: 'fail' } }) },
+  { code: 'quality-retention-failed', what: 'missing retention evidence', broken: () => gate({ quality: { retention: 'fail' } }) },
+  { code: 'quality-golden-dataset-failed', what: 'missing golden-dataset evidence', broken: () => gate({ quality: { goldenDataset: 'fail' } }) },
+  { code: 'quality-ocr-benchmark-failed', what: 'missing OCR evidence', broken: () => gate({ quality: { ocrBenchmark: 'fail' } }) },
+  { code: 'quality-translation-benchmark-failed', what: 'missing translation evidence', broken: () => gate({ quality: { translationBenchmark: 'fail' } }) },
+  { code: 'quality-export-benchmark-failed', what: 'missing export evidence', broken: () => gate({ quality: { exportBenchmark: 'fail' } }) },
+  { code: 'quality-performance-benchmark-failed', what: 'missing performance evidence', broken: () => gate({ quality: { performanceBenchmark: 'fail' } }) },
+  { code: 'quality-i18n-failed', what: 'missing i18n evidence', broken: () => gate({ quality: { i18n: 'fail' } }) },
+  { code: 'quality-accessibility-failed', what: 'missing accessibility evidence', broken: () => gate({ quality: { accessibility: 'fail' } }) },
+  { code: 'quality-sbom-failed', what: 'missing SBOM evidence', broken: () => gate({ quality: { sbom: 'fail' } }) },
 ];
+
 
 describe('blockers', () => {
   for (const testCase of BROKEN_CASES) {

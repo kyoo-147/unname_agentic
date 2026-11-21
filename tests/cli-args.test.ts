@@ -427,13 +427,12 @@ describe('scripts/mirror-cli.mjs', () => {
     expect(readdirSync(folder).sort()).toEqual(before);
   });
 
-  it('prints the same plan without --dry-run, says nothing ran, and exits 7', () => {
-    const result = run('translate', '--in', folder, '--lang', 'vi', '--provider', 'local', '--offline');
-    expect(result.status).toBe(EXIT_CODES['planned-only']);
-    expect(result.stdout.split(/\r?\n/u)[0]).toBe(
-      `plan: ${describePlan(parseArgs(['translate', '--in', folder, '--lang', 'vi', '--provider', 'local', '--offline']))}`,
-    );
-    expect(result.stderr).toContain('nothing ran');
+  it('keeps the dry-run path side-effect free', () => {
+    const output = path.join(folder, 'cli-output');
+    const result = run('extract', '--in', folder, '--out', output, '--dry-run');
+    expect(result.status).toBe(EXIT_CODES.ok);
+    expect(result.stdout).toContain('dry run: extract');
+    expect(existsSync(output)).toBe(false);
   });
 
   it('exits 2 on a usage error and names the token', () => {
@@ -595,8 +594,8 @@ describe('docs/cli.md', () => {
     for (const code of new Set(Object.values(EXIT_CODES))) expect(document).toContain(`| \`${code}\` |`);
   });
 
-  it('states that the heavy work is not importable from Node yet', () => {
-    expect(document).toContain('not importable from Node');
+  it('states that the heavy work runs through the local TypeScript bridge', () => {
+    expect(document).toContain('TypeScript bridge');
   });
 });
 

@@ -40,8 +40,9 @@ says so.
 | 10 | Release package | `dist/pdf-workspace-windows-x64-release-<stamp>` and its `.zip` | `pwsh -File scripts/package-native.ps1` |
 | 11 | Feature inventory (warning) | `docs/features.md` updated for this release | edit `docs/features.md` |
 | 12 | The whole gate | items 1–11 in one command, on the tree that is about to ship | `node scripts/release-check.mjs --build --e2e` |
+| 13 | Trust/quality evidence | privacy, secret boundary, resource limits, consent audit, retention, golden data, OCR, translation, export, performance, i18n, a11y, and SBOM are all measured | `node scripts/release-check.mjs --json` |
 
-Items 1–4, 6–10 are blockers; items 5 and 11 are warnings. Item 12 is the gate itself.
+Items 1–4, 6–10 and 13 are blockers; items 5 and 11 are warnings. Item 12 is the gate itself.
 
 ## Blocker codes
 
@@ -59,6 +60,19 @@ blocker stops the release: the script exits 1 and the table marks the row `BLOCK
 | `gate-imports-failed` | a committed file imports a module that is not committed, so a fresh clone cannot build | item 8 |
 | `license-notice-missing` | a bundled dependency has no third-party notice; one blocker per dependency, named in the sentence | item 9 |
 | `package-artifact-missing` | there is no release package to hand over under a name and a checksum | item 10 |
+| `quality-privacy-failed` | offline/network privacy evidence did not pass | item 13 |
+| `quality-secret-boundary-failed` | secret scanning/redaction evidence did not pass | item 13 |
+| `quality-resource-limits-failed` | parser and crypto resource limits were not verified | item 13 |
+| `quality-consent-audit-failed` | cloud consent and route audit evidence did not pass | item 13 |
+| `quality-retention-failed` | retention/purge confirmation evidence did not pass | item 13 |
+| `quality-golden-dataset-failed` | no executed golden dataset evidence was recorded | item 13 |
+| `quality-ocr-benchmark-failed` | OCR CER/WER benchmark did not produce a passing run | item 13 |
+| `quality-translation-benchmark-failed` | translation benchmark evidence did not pass | item 13 |
+| `quality-export-benchmark-failed` | export benchmark evidence did not pass | item 13 |
+| `quality-performance-benchmark-failed` | performance budget evidence did not pass | item 13 |
+| `quality-i18n-failed` | i18n matrix evidence did not pass | item 13 |
+| `quality-accessibility-failed` | accessibility evidence did not pass | item 13 |
+| `quality-sbom-failed` | SBOM is missing/malformed or contains a forbidden license marker | item 13 |
 
 ## Warning codes
 
@@ -118,19 +132,17 @@ Nothing is guessed:
   newest file under `src/`, `extension/` or `tests/`. The gate warns rather than blocks precisely
   because a timestamp is a proxy no person has confirmed.
 
-## Known state on 2026-11-20
+## Known state on 2026-11-21
 
-The gate was written on a tree that had never been asked these questions, and on its
-first run it named three real gaps. They are recorded here so a red run is not mistaken
-for a broken script; re-run the gate, it is the current answer.
+The current release-gate run on this worktree has all executable trust/quality checks green and
+reports these remaining release conditions:
 
-- `changelog-missing-version` — there is no `CHANGELOG.md` in the repository at all.
-- `license-notice-missing` (twice) — `pdf-lib` and `@pdf-lib/fontkit` are bundled into the
-  web reader (`src/export/pdf.ts`, `src/export/fonts.ts`, `src/export/searchable.ts`) and
-  `public/third-party/NOTICE.txt` names neither. Both are MIT; `pdf-lib` ships its text at
-  `node_modules/pdf-lib/LICENSE.md`, and `@pdf-lib/fontkit` (a fork of foliojs/fontkit)
-  declares the licence in its `package.json` without shipping a text file. Copy the first,
-  and write the second's attribution, in the way `LICENSE-pdfjs.txt` was copied.
+- `package-artifact-missing` — no native release package exists under `dist/`; the web build is
+  present, but this gate does not treat a web directory as a native release package.
+- `native-tests-unknown` — no `RELEASE_NATIVE_TESTS` value was supplied; the native workspace is
+  outside this JavaScript gate.
+- `features-doc-stale` — the inventory timestamp is older than source/test changes; update it only
+  after reviewing the claims, not merely to silence the warning.
 
 ## What this gate does not cover
 
@@ -138,7 +150,5 @@ Named here so nobody reads a green run as more than it is:
 
 - It does not run the native suite (item 5) and does not verify that any recorded number is true.
 - The preflight lists the end-to-end suite instead of running it; a release run must pass `--e2e`.
-- It does not run the performance budgets (`node scripts/perf-budget.mjs`), the artifact structure
-  gate (`pwsh -File scripts/verify-release.ps1`), or any signing step.
-- It says nothing about translation quality, OCR accuracy, or whether the changelog entry is
-  honest — only that one exists.
+- It does not run the artifact structure gate (`pwsh -File scripts/verify-release.ps1`), signing step, or a real cloud translation provider. The translation/export rows rest on local unit evidence and are not provider-quality claims.
+- OCR and performance rows are strict only when their scripts produce machine-readable evidence; a missing fixture, missing build, or failed budget remains a blocker rather than a guessed pass.

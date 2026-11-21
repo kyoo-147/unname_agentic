@@ -1,4 +1,5 @@
 import { TranslationError } from './retry';
+import type { AuditLog } from './audit';
 import type { ProviderKind } from './types';
 
 /**
@@ -61,7 +62,7 @@ export interface PrivacyPolicy {
 }
 
 /** Why a request was refused. Stable identifiers, safe to switch on. */
-export type PrivacyErrorCode = 'offline' | 'consent';
+export type PrivacyErrorCode = 'offline' | 'consent' | 'invalid-endpoint';
 
 /**
  * Refusal messages are part of the contract: the UI shows them verbatim, so
@@ -70,7 +71,40 @@ export type PrivacyErrorCode = 'offline' | 'consent';
 const REFUSALS: Record<PrivacyErrorCode, string> = {
   offline: 'Offline mode is on, so text can only go to a model on this machine.',
   consent: 'Cloud translation requires the stored cloud consent. Enable it in settings.',
+  'invalid-endpoint': 'The provider endpoint is invalid, so no text was sent.',
 };
+
+/** Non-sensitive evidence for one provider-routing decision. */
+export interface ConsentAuditInput {
+  readonly documentId: string;
+  readonly provider: ProviderKind;
+  readonly mode: PrivacyMode;
+  readonly endpoint: string;
+  readonly allowCloud: boolean;
+  readonly allowed: boolean;
+}
+
+/** Records route/consent evidence without persisting the endpoint or payload. */
+export function recordConsentDecision(log: AuditLog, input: ConsentAuditInput): void {
+  const endpoint = effectiveEndpoint({
+    provider: input.provider,
+    endpoint: input.endpoint,
+    allowCloud: input.allowCloud,
+  });
+  const policy = privacyPolicy(input.mode, endpoint);
+  log.append({
+    kind: 'translate',
+    documentId: input.documentId,
+    actor: 'app',
+    details: {
+      provider: input.provider,
+      mode: input.mode,
+      endpointScope: policy.scope,
+      cloudConsent: input.allowCloud,
+      allowed: input.allowed,
+    },
+  });
+}
 
 /**
  * A request the privacy policy refused. It is a {@link TranslationError} with
@@ -254,6 +288,7 @@ export function privacyPolicy(mode: PrivacyMode, endpoint: string): PrivacyPolic
  */
 export function assertCanSend(policy: PrivacyPolicy, settings: PrivacySettings): void {
   const scope = classifyEndpoint(effectiveEndpoint(settings));
+  if (scope === 'invalid') throw new PrivacyError('invalid-endpoint');
   if (scope === 'loopback') return;
   if (!policy.allowsNetwork) throw new PrivacyError('offline');
   if (policy.requiresConsent && isCloudProvider(settings.provider) && !settings.allowCloud) throw new PrivacyError('consent');

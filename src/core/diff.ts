@@ -768,3 +768,48 @@ function round4(value: number): number {
 function finiteOr(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
+
+/** A page-space rectangle suitable for rendering a visual diff overlay. */
+export interface VisualDiffRect {
+  page: number;
+  kind: 'added' | 'removed' | 'changed' | 'moved';
+  rect: { x: number; y: number; width: number; height: number };
+  color: '#2e7d32' | '#c62828' | '#ef6c00' | '#1565c0';
+  blockId: string;
+}
+
+function blockBounds(block: Block): { x: number; y: number; width: number; height: number } {
+  const xs = block.polygon.map(point => point.x);
+  const ys = block.polygon.map(point => point.y);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, width: Math.max(0, Math.max(...xs) - x), height: Math.max(0, Math.max(...ys) - y) };
+}
+
+/**
+ * Converts a semantic document diff into deterministic page-space rectangles. A changed block
+ * emits both old and new geometry, so a renderer can show exactly what disappeared and appeared.
+ */
+export function diffVisualRects(before: DocumentIR, after: DocumentIR): VisualDiffRect[] {
+  const result: VisualDiffRect[] = [];
+  for (const page of diffDocuments(before, after).pages) {
+    for (const change of page.changes) {
+      if (change.kind === 'added') {
+        const block = after.blocks.find(entry => entry.id === change.afterBlockId);
+        if (block) result.push({ page: change.page, kind: 'added', rect: blockBounds(block), color: '#2e7d32', blockId: block.id });
+      } else if (change.kind === 'removed') {
+        const block = before.blocks.find(entry => entry.id === change.beforeBlockId);
+        if (block) result.push({ page: change.page, kind: 'removed', rect: blockBounds(block), color: '#c62828', blockId: block.id });
+      } else if (change.kind === 'changed') {
+        const oldBlock = before.blocks.find(entry => entry.id === change.beforeBlockId);
+        const newBlock = after.blocks.find(entry => entry.id === change.afterBlockId);
+        if (oldBlock) result.push({ page: change.page, kind: 'changed', rect: blockBounds(oldBlock), color: '#ef6c00', blockId: oldBlock.id });
+        if (newBlock) result.push({ page: change.page, kind: 'changed', rect: blockBounds(newBlock), color: '#ef6c00', blockId: newBlock.id });
+      } else {
+        const block = after.blocks.find(entry => entry.id === change.afterBlockId);
+        if (block) result.push({ page: change.page, kind: 'moved', rect: blockBounds(block), color: '#1565c0', blockId: block.id });
+      }
+    }
+  }
+  return result;
+}

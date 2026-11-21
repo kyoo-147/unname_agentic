@@ -1,0 +1,21 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "mirror-pdf",
+      "version": "0.1.0"
+    },
+    "evidence": "Direct runtime dependencies and shipped OCR/PDF assets are listed from package.json, pnpm-lock.yaml, and repository license notices. Transitive build-only packages are not shipped."
+  },
+  "components": [
+    { "type": "library", "name": "@pdf-lib/fontkit", "version": "1.1.1", "licenses": [{ "license": { "id": "MIT" } }] },
+    { "type": "library", "name": "lucide", "version": "0.468.0", "licenses": [{ "license": { "id": "ISC" } }] },
+    { "type": "library", "name": "pdf-lib", "version": "1.17.1", "licenses": [{ "license": { "id": "MIT" } }] },
+    { "type": "library", "name": "pdfjs-dist", "version": "5.7.284", "licenses": [{ "license": { "id": "Apache-2.0" } }] },
+    { "type": "library", "name": "tesseract.js", "version": "7.0.0", "licenses": [{ "license": { "id": "Apache-2.0" } }] },
+    { "type": "library", "name": "tesseract.js-core", "version": "7.0.0", "licenses": [{ "license": { "id": "Apache-2.0" } }] }
+  ]
+}

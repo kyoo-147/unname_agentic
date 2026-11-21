@@ -1,4 +1,4 @@
-# Command line: plan a batch over a folder of PDFs
+# Command line: run a local batch over a folder of PDFs
 
 Date: 2026-11-21 (Asia/Saigon). Backlog: K04 — process a folder of PDFs in a batch without
 opening the app.
@@ -7,7 +7,8 @@ Files:
 
 - `src/core/cli-args.ts`: `parseArgs`, `usage`, `describe`, the flag and command tables, the
   exit-code table.
-- `scripts/mirror-cli.mjs`: the runner. Reads the folder, prints the plan, exits.
+- `scripts/mirror-cli.mjs`: the runner. Reads the folder and starts the local durable runtime.
+- `scripts/mirror-cli-entry.ts`: the TypeScript bridge used by the runner for import, classify, OCR boundary, extraction, optional translation and export.
 - `tests/cli-args.test.ts`: every parse case, the plan, the drift guard between the two
   copies of the table, and the runner itself, started as a process.
 - This document: every command, flag, exit code and example, and the boundary between what
@@ -15,32 +16,17 @@ Files:
 
 ## What this is, and what it is not
 
-**Is:** a parser that turns a line of flags into a command, a set of effective options and a
-list of problems; a help text rendered from the tables in the module; a canonical one-line
-plan; and a runner that lists a folder, prints the plan and exits with a documented code.
+**Is:** a parser plus a local durable runner. A non-dry run creates one idempotent job per PDF, persists checkpoints under `<out>/.automation/state.json`, imports through PDF.js and the existing document runtime, runs classification, leaves OCR-required pages in review unless an OCR adapter is supplied, extracts optional schema fields, optionally translates through the existing translation service, and writes immutable JSON and Markdown artifacts.
 
-**Is not:** the batch job. `extract`, `translate` and `export` do not do their work in this
-script. The modules that would do it — `ir.ts`, `blocks.ts`, `retrieval.ts`,
-`multi-document.ts`, `citations.ts`, `abstain.ts`, `schema.ts`, `review.ts`, `metrics.ts`,
-`release-gate.ts`, `export-check.ts`, the translation pipeline — depend on the DOM, on
-PDF.js, or on each other, and they are **not importable from Node** yet. The script plans;
-the heavy work lives in the app core until those modules load outside a browser.
-
-That is the honest state, and the runner says it in the process, not only here: a run without
-`--dry-run` prints the plan and exits **7**, with `nothing ran` on stderr. A runner that
-printed a plan and exited 0 would be claiming work it did not do, which is worse than a
-command that does not exist yet.
-
-`check` is the exception, because it needs nothing but the filesystem: it lists the PDFs in
-`--in` with their byte sizes and exits 0. It is the one command this build can really run.
+**Is not:** a cloud worker or a fabricated OCR fallback. The CLI authorizes only `--in` and `--out` roots, uses no remote provider in `extract`, and reports review or handler failures instead of silently accepting them. `check` remains a filesystem-only report.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `extract` | Read the PDFs in `--in` and write their text. Planned: exits 7 without `--dry-run`. |
-| `translate` | Translate the PDFs in `--in` into `--lang`. Planned: exits 7 without `--dry-run`. |
-| `export` | Write the documents in `--in` in `--format`. Planned: exits 7 without `--dry-run`. |
+| `extract` | Run import, classify, OCR boundary, extract and export locally. |
+| `translate` | Run the same pipeline and call the configured local translation endpoint. |
+| `export` | Run the pipeline and write the immutable JSON/Markdown export artifacts. |
 | `check` | Report what `--in` holds. Reads the folder and writes nothing. |
 
 The command may appear anywhere among the flags. A second bare word is a usage error.
@@ -84,7 +70,7 @@ Reading rules, the same in the parser and in the runner:
 
 ## Examples
 
-Read a folder and see what is in it — the one command that does its work today:
+Read a folder and see what is in it:
 
 ```sh
 node scripts/mirror-cli.mjs check --in docs/pdfs
@@ -115,29 +101,25 @@ node scripts/mirror-cli.mjs --help
 node scripts/mirror-cli.mjs --version
 ```
 
-A run without `--dry-run` that is not `check` prints the same plan and exits 7:
+A non-dry run executes the durable pipeline and prints its JSON status:
 
 ```sh
-$ node scripts/mirror-cli.mjs extract --in docs/pdfs
-plan: extract --in docs/pdfs --format md
-2 PDFs in docs/pdfs:
-  - contract.pdf (184320 B)
-  - invoice.pdf (90112 B)
-mirror-cli: nothing ran: the batch work lives in the app core until those modules load from Node. Use --dry-run for the plan alone, or open the folder in the app.
-$ # exit code: 7 (the "nothing ran" line goes to stderr)
+$ node scripts/mirror-cli.mjs extract --in docs/pdfs --out build/text
+{ "command": "extract", "status": { "jobs": [{ "state": "done" }] } }
+$ # exit code: 0
 ```
 
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
-| `0` | ok: help, version, a dry run, or a `check` that passed |
+| `0` | ok: help, version, dry run, check, or all jobs completed |
 | `2` | usage error: unknown command or flag, missing value, unexpected argument, no command |
 | `3` | missing required option: `--in`, or `--lang` for `translate` |
 | `4` | unsupported value for `--format`, `--provider` or `--lang` |
 | `5` | conflicting options: `--offline` with a cloud provider, or `--out` with `check` |
 | `6` | the `--in` folder cannot be used: it is missing, is a file, or holds no PDFs |
-| `7` | nothing ran: the plan was printed, and the batch work lives in the app core |
+| `7` | one or more jobs remain in review or failed |
 
 When a line has more than one problem the **first** one decides the exit code, and the order
 is fixed: flag problems in argv order, then the per-command requirements, then the conflicts.
@@ -153,25 +135,21 @@ is always in effect; `--dry-run` is not printed, because it is how the line was 
 what the run would do. Values are echoed as given, without shell quoting, so a line whose
 values hold a space is for reading rather than for pasting back.
 
-The runner prefixes that line: `dry run: ` for `--dry-run`, `plan: ` for a run that will stop
-after the plan, and nothing for `check`, whose line is the command it really ran.
+Dry runs print `dry run: `. Executable runs print runtime status JSON instead of a plan.
 
 ## Reports
 
-- `--format md` (default) is the human report: the plan line, the count, then one line per
-  PDF with its byte size.
-- `--format json` is one object on stdout and nothing else — `command`, `plan`, `dryRun`,
-  `ran`, `input`, `count`, `pdfs` (name and bytes) and `note`. The note is the
-  `nothing ran` sentence when the work was only planned, and `null` when `check` ran.
+- `--format md` (default) is the dry-run human report. Executable runs print runtime JSON and
+  write `<job>.result.json` plus `<job>.report.md` under `--out`.
+- `--format json` remains the check report shape. Runtime status is always JSON.
 - `--format txt` is one PDF name per line and nothing else.
 
 Only `md` prints prose, so a script can read `json` and `txt` without stripping a banner.
 
 ## One table, two copies
 
-`scripts/mirror-cli.mjs` cannot import `src/core/cli-args.ts` — the app core does not load
-from Node, which is the same reason the runner only plans. It therefore re-implements the
-parse table, and `tests/cli-args.test.ts` reads both files and compares `CLI_COMMANDS`,
+`scripts/mirror-cli.mjs` keeps a fast duplicated parse table and delegates non-dry runs to
+the TypeScript bridge, while `tests/cli-args.test.ts` reads both files and compares `CLI_COMMANDS`,
 `CLI_FLAGS`, `CLI_VALUE_FLAGS`, `CLI_FORMATS`, `PROVIDER_KINDS`, `REQUIRED_FLAGS` and
 `EXIT_CODES`. The tables are written one entry per line so that comparison is a read of the
 source, not a parser of it.
@@ -188,10 +166,8 @@ parse test. Forgetting the runner is the failure the drift guard names first.
 - Only the top level of `--in` is read. Sub-folders are not walked, which is why a batch
   folder is expected to hold its PDFs flat.
 - Only names ending in `.pdf` count, in any case; every other file is ignored.
-- Nothing writes. Even a non-dry run creates no output folder — `--out` never comes into
-  existence here.
-- No provider is contacted and no key is read. `--provider` is echoed in the plan and checked
-  for the offline conflict; the request that would use it is built by the app core.
-- No OCR, no page range, no per-file selection yet. The flags in this document are the flags
-  that exist.
+- Non-dry runs write only below the authorized `--out` folder and persist state there.
+- `extract` never contacts a provider. `translate` uses the existing local provider contract;
+  it fails or enters review if the loopback service is unavailable.
+- OCR is an explicit adapter boundary. A scanned page without an adapter is held for review.
 - Paths are echoed as given; a path with a space is not shell-quoted in the plan line.

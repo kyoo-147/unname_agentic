@@ -60,6 +60,8 @@ export interface BatchQueueOptions<T> {
   run: BatchRun<T>;
   /** Maximum jobs in flight. Defaults to 2. */
   concurrency?: number;
+  /** Called after a job settles and queue state has been updated. */
+  onSettled?: () => void;
 }
 
 type JobStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled';
@@ -79,6 +81,7 @@ type RunOutcome = { ok: true } | { ok: false; error: unknown };
 export class BatchQueue<T> {
   private readonly run: BatchRun<T>;
   private readonly concurrency: number;
+  private readonly onSettled?: () => void;
   /** Every job ever added, in add order. Retries reuse these records. */
   private readonly records = new Map<string, JobRecord<T>>();
   /** Ids ready to start, in launch order. */
@@ -92,6 +95,7 @@ export class BatchQueue<T> {
 
   constructor(options: BatchQueueOptions<T>) {
     this.run = options.run;
+    this.onSettled = options.onSettled;
     const concurrency = options.concurrency ?? 2;
     if (!Number.isInteger(concurrency) || concurrency < 1) {
       throw new Error('Concurrency must be a positive integer.');
@@ -297,5 +301,6 @@ export class BatchQueue<T> {
     // `add()` needs an explicit `start()` instead of resuming silently.
     if (this.waiting.length === 0 && this.active.size === 0) this.started = false;
     this.pump();
+    this.onSettled?.();
   }
 }

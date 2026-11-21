@@ -59,6 +59,8 @@ export interface EvalExpectation {
   readonly kind: EvalExpectationKind;
   /** Phrases the answer must contain, in the order the case lists them. */
   readonly mustContain: readonly string[];
+  /** Phrases that must not appear in the answer, used for injection-resistance cases. */
+  readonly mustNotContain: readonly string[];
   /**
    * Citation markers the answer must carry, written in the syntax `citations.ts` parses
    * (`[p12]`, `[p12:r3]`, `[#p12-r3]`, `(trang 12)`, `[[cite:…]]`). Empty for an abstention.
@@ -90,6 +92,7 @@ export interface EvalCaseInput {
 export interface EvalExpectationInput {
   readonly kind: EvalExpectationKind;
   readonly mustContain?: readonly string[];
+  readonly mustNotContain?: readonly string[];
   readonly citations?: readonly string[];
 }
 
@@ -133,7 +136,9 @@ export type EvalFailureReason =
   /** The answer lacks at least one `mustContain` phrase; `missingPhrases` names them. */
   | 'missing-phrase'
   /** The answer lacks at least one expected citation; `citations.missing` names them. */
-  | 'missing-citation';
+  | 'missing-citation'
+  /** The answer contains an injection phrase the case forbids. */
+  | 'forbidden-phrase';
 
 /** The citation side of one result: what was asked for, what the answer honoured. */
 export interface EvalCitationReport {
@@ -158,6 +163,7 @@ export interface EvalResult {
   readonly abstained: boolean;
   /** `mustContain` phrases the answer did not carry, in the case's order. */
   readonly missingPhrases: readonly string[];
+  readonly forbiddenPhrases: readonly string[];
   readonly citations: EvalCitationReport;
   /** Why the runner failed, when it threw; `null` otherwise. */
   readonly error: string | null;
@@ -303,6 +309,7 @@ function readExpectation(value: unknown, id: string, context: readonly EvalConte
     throw new EvalHarnessError('invalid-expectation', id, `${id} has kind ${describe(kind)}; a case is 'answer' or 'abstain'.`);
   }
   const mustContain = readPhrases(value.mustContain, id);
+  const mustNotContain = readPhrases(value.mustNotContain, id);
   const citations = readCitationMarkers(value.citations, id, context);
 
   if (kind === 'answer' && context.length === 0) {
@@ -315,7 +322,7 @@ function readExpectation(value: unknown, id: string, context: readonly EvalConte
     throw new EvalHarnessError('invalid-expectation', id, `${id} expects an answer but asserts no phrase and no citation; such a case passes on any prose.`);
   }
 
-  return { kind, mustContain, citations };
+  return { kind, mustContain, mustNotContain, citations };
 }
 
 function readPhrases(value: unknown, id: string): string[] {
@@ -490,6 +497,9 @@ function gradeResult(item: EvalCase, input: GradedInput): EvalResult {
   const expectedCitations = item.expected.citations;
   const reasons: EvalFailureReason[] = [];
   const missingPhrases: string[] = [];
+  const forbiddenPhrases: string[] = [];
+  collectPresentPhrases(input.answer, item.expected.mustNotContain, forbiddenPhrases);
+  if (forbiddenPhrases.length > 0) reasons.push('forbidden-phrase');
   const resolved: string[] = [];
   const missing: string[] = [];
 
@@ -529,6 +539,7 @@ function gradeResult(item: EvalCase, input: GradedInput): EvalResult {
     abstained: input.abstained,
     missingPhrases,
     citations: { expected: [...expectedCitations], resolved, missing },
+    forbiddenPhrases,
     error: input.error,
   };
 }
@@ -671,6 +682,12 @@ function containsPhrase(answer: string, phrase: string): boolean {
   const needle = normalizeForMatch(phrase);
   if (needle.length === 0) return false;
   return normalizeForMatch(answer).includes(needle);
+}
+
+function collectPresentPhrases(answer: string, mustNotContain: readonly string[], present: string[]): void {
+  for (const phrase of mustNotContain) {
+    if (containsPhrase(answer, phrase)) present.push(phrase);
+  }
 }
 
 function collectMissingPhrases(answer: string, mustContain: readonly string[], missing: string[]): void {

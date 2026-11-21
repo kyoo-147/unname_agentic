@@ -9,6 +9,8 @@ import {
   chunkDocument,
   index,
   search,
+  hybridSearch,
+  unavailableEmbeddingAdapter,
   tokenize,
 } from '../src/core/retrieval';
 
@@ -360,5 +362,39 @@ describe('index and search', () => {
     const tied = search(index(chunkDocument(samePage)), 'halves');
     expect(tied[0]?.score).toBe(tied[1]?.score);
     expect(tied.map(hit => hit.chunk.id)).toEqual(['doc-1:c1', 'doc-1:c2']);
+  });
+});
+
+describe('hybrid retrieval', () => {
+  it('keeps lexical fallback explicit when no local embedding adapter exists', () => {
+    const target = index(chunkDocument(document([
+      { text: 'The local policy covers retention.' },
+      { text: 'This passage discusses unrelated deployment.' },
+    ])));
+    const hits = hybridSearch(target, 'retention policy', { embedding: unavailableEmbeddingAdapter('test unavailable') });
+    expect(hits[0]?.retrievalMethod).toBe('lexical');
+    expect(hits[0]?.vectorScore).toBeNull();
+    expect(hits[0]?.embeddingStatus).toEqual({ state: 'unavailable', reason: 'test unavailable' });
+  });
+
+  it('fuses local vectors and lexical evidence without network access', () => {
+    const chunks = chunkDocument(document([
+      { text: 'Alpha topic with a rare term.' },
+      { text: 'Beta topic uses a semantic synonym.' },
+    ]));
+    const vectors: Record<string, number[]> = {
+      'semantic synonym': [1, 0],
+      'alpha topic with a rare term.': [0, 1],
+      'alpha topic': [1, 0],
+    };
+    const embedding = {
+      status: { state: 'available' as const, model: 'fixture-v1' },
+      embed: (text: string) => vectors[text.toLowerCase()] ?? [1, 0],
+    };
+    const hits = hybridSearch(index(chunks), 'semantic synonym', { embedding, limit: 2 });
+    expect(hits).toHaveLength(2);
+    expect(hits[0]?.retrievalMethod).toBe('hybrid');
+    expect(hits[0]?.vectorScore).not.toBeNull();
+    expect(hits[0]?.fusedScore).toBe(hits[0]?.score);
   });
 });

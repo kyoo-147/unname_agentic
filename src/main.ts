@@ -27,6 +27,15 @@ import { buildPdf, canvasToPng, type PdfPageSource } from './export/pdf';
 import { saveBlob } from './export/download';
 import { estimateCost, formatUsd } from './core/pricing';
 import {
+  BUILT_IN_INTELLIGENCE_SCHEMA_JSON,
+  extractDocumentIntelligence,
+  type DocumentIntelligenceResult,
+  type IntelligenceEvidenceState,
+  type IntelligencePageSource,
+  type IntelligenceSourceKind,
+} from './core/document-intelligence';
+import { createStatusModel, renderStatus as renderStatusStrip } from './ui/status-bar';
+import {
   isReadingMode, layoutFor, positionAfterModeChange, type ModeChange, type ReadingLayout, type ReadingMode,
 } from './core/reading-modes';
 
@@ -55,6 +64,14 @@ root.innerHTML = `<aside class="sidebar"><a class="brand" href="#" data-i18n-ari
 <dialog id="selection-dialog" role="dialog" aria-modal="true" aria-labelledby="selection-title" tabindex="-1"><div class="dialog-heading"><h2 id="selection-title" data-i18n="pairedReading">Paired reading view</h2><button id="selection-close" data-i18n-aria-label="closePaired" aria-label="Close paired view">${icon('close')}</button></div><div class="selection-columns"><section><h3 data-i18n="original">Original</h3><p id="selected-source"></p></section><section><h3 data-i18n="translation">Translation</h3><p id="selected-translation"></p></section></div><button id="selection-translate" class="primary" data-i18n="translateRegion">Translate this region</button><p class="settings-help" data-i18n="pairedHelp">Region-level correspondence. Word alignment is not inferred.</p></dialog>`;
 apply(document);
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+const intelligenceTrigger = document.createElement('button');
+intelligenceTrigger.id = 'intelligence-toggle';
+intelligenceTrigger.type = 'button';
+intelligenceTrigger.dataset.i18n = 'intelligenceToggle';
+intelligenceTrigger.textContent = t('intelligenceToggle');
+intelligenceTrigger.setAttribute('aria-controls', 'reader-panel');
+intelligenceTrigger.setAttribute('aria-expanded', 'false');
+$('outline-toggle').after(intelligenceTrigger);
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]):not([type="hidden"]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 const dialogOpeners = new WeakMap<HTMLDialogElement,HTMLElement>();
 function dialogFocusables(dialog: HTMLDialogElement): HTMLElement[] { return [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(element=>element.getClientRects().length>0); }
@@ -109,7 +126,7 @@ let readingMode: ReadingMode = readReadingMode();
 let statusView: { text: () => string; error: boolean } = { text: () => t('ready'), error: false };
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let scrollTimer: ReturnType<typeof setTimeout> | undefined;
-let panelKind: 'outline' | 'search' | null = null;
+let panelKind: 'outline' | 'search' | 'intelligence' | null = null;
 let outlineEntries: OutlineEntry[] = [];
 let outlineReady = false, outlineLoading = false;
 let searchController: AbortController | null = null;
@@ -121,12 +138,28 @@ let lastSearchQuery = '';
 let detectedCode = '';
 let thumbObserver: IntersectionObserver | null = null;
 let glossaryResult: GlossaryParseResult | null = null;
+let intelligenceResult: DocumentIntelligenceResult | null = null;
+let intelligenceSchemaText = BUILT_IN_INTELLIGENCE_SCHEMA_JSON;
+let intelligenceState: 'idle' | 'loading' | 'ready' | 'empty' | 'error' = 'idle';
+let intelligenceError = '';
+const intelligencePageSources = new Map<number, IntelligencePageSource>();
+const statusModel = createStatusModel();
 const GLOSSARY_ISSUE_KEY: Record<GlossaryIssueCode, TranslationKey> = {
   'missing-separator':'glossaryIssueMissingSeparator', 'empty-source':'glossaryIssueEmptySource', 'empty-target':'glossaryIssueEmptyTarget',
   'source-too-long':'glossaryIssueSourceTooLong', 'target-too-long':'glossaryIssueTargetTooLong', duplicate:'glossaryIssueDuplicate', 'entry-limit':'glossaryIssueEntryLimit',
 };
 
-function renderStatus() { const element=$('status'); element.textContent=statusView.text(); element.classList.toggle('is-error',statusView.error); }
+function renderStatus() {
+  const element=$('status');
+  statusModel.update({
+    page: pageNumber,
+    pageCount: pageTotal,
+    provider: providerName(),
+    message: { kind: statusView.error ? 'error' : 'info', text: statusView.text() },
+  });
+  element.replaceChildren(renderStatusStrip(statusModel, document));
+  element.classList.toggle('is-error',statusView.error);
+}
 function setStatusText(text: () => string, error = false) { statusView={ text, error }; renderStatus(); }
 function status(key: TranslationKey, error = false, vars?: Record<string,string|number>) { setStatusText(() => t(key, vars), error); }
 function statusText(message: string, error = false) { setStatusText(() => message, error); }
@@ -176,7 +209,7 @@ function resetWork() {
   observer?.disconnect(); observer=null; full=false; batching=false; paused=false; translationQueue.resume(); refreshTransportLabels();
   rotation=0; fit='width'; zoom=1; rotating=false; pageNumber=1; pageTotal=0; readingPosition={page:1,fraction:0}; activeDocKey='';
   outlineEntries=[]; outlineReady=false; outlineLoading=false;
-  panelKind=null; $('reader-panel').hidden=true; $('outline-toggle').setAttribute('aria-expanded','false'); $('search-toggle').setAttribute('aria-expanded','false');
+  panelKind=null; intelligenceResult=null; intelligenceState='idle'; intelligenceError=''; intelligencePageSources.clear(); intelligenceTrigger.setAttribute('aria-expanded','false'); $('reader-panel').hidden=true; $('outline-toggle').setAttribute('aria-expanded','false'); $('search-toggle').setAttribute('aria-expanded','false');
   searchController?.abort(); searchController=null; clearTimeout(searchTimer); lastSearchQuery=''; searchInput=null; searchStatus=null; searchList=null;
   toggleThumbnails(false);
   const hint=$('detected-language'); hint.hidden=true; hint.textContent=''; detectedCode='';
@@ -248,15 +281,23 @@ async function ensurePage(number: number,priority: number): Promise<void> {
   try { await renderQueue.enqueue(String(number),priority,async()=>{
     let result=await renderPage(current,number,{rotation});
     if(generation!==revision) return;
+    let pageSource: IntelligencePageSource = result.model.blocks.length
+      ? { page:number, sourceKind:'embedded-text', confidence:1, provenance:'PDF text layer; decoded locally from the current document.' }
+      : { page:number, sourceKind:'unknown', confidence:0, provenance:'No document blocks are available for this page.' };
     if(!result.model.blocks.length && result.rotation===0) {
       try {
         status('statusOcrScan',false,{page:number});
         const { recognizeScan }=await import('./ocr/scan');
         const scan=await recognizeScan(result.original,number,result.model.width,result.model.height,settings.sourceLanguage);
         if(generation!==revision) return;
-        if(scan.blocks.length) { result={...result,model:{...result.model,blocks:scan.blocks},warning:''}; status('statusOcrDone',false,{count:scan.blocks.length}); }
+        if(scan.blocks.length) {
+          result={...result,model:{...result.model,blocks:scan.blocks},warning:''};
+          pageSource={ page:number, sourceKind:'local-ocr', confidence:Math.max(0,Math.min(1,scan.confidence/100)), provenance:`Local OCR fallback; Tesseract mean confidence ${scan.confidence}%.` };
+          status('statusOcrDone',false,{count:scan.blocks.length});
+        }
       } catch { /* OCR is optional; the original page stays readable */ }
     }
+    intelligencePageSources.set(number,pageSource);
     rendered.set(number,result); mountPage(result); schedulePage(number,priority);
     if(result.warning) statusText(result.warning);
     evictPages(number);
@@ -590,6 +631,7 @@ $('fit-width').addEventListener('click',()=>applyFit('width'));
 $('fit-page').addEventListener('click',()=>applyFit('page'));
 $('outline-toggle').addEventListener('click',()=>{ panelKind==='outline'?closePanel():openPanel('outline'); });
 $('search-toggle').addEventListener('click',()=>{ panelKind==='search'?(searchInput?.focus()):openPanel('search'); });
+intelligenceTrigger.addEventListener('click',()=>{ panelKind==='intelligence'?closePanel():openPanel('intelligence'); });
 $('thumbnails-toggle').addEventListener('click',()=>toggleThumbnails());
 $('rotate').addEventListener('click',()=>void rotateView());
 // The segmented reading-mode control: real buttons, so Enter and Space activate them and Tab
@@ -718,28 +760,175 @@ $('full').addEventListener('click',async()=>{
 $<HTMLSelectElement>('target-language').addEventListener('change',()=>{const value=normalizeLanguageCode($<HTMLSelectElement>('target-language').value);if(value&&value!=='auto'){settings.targetLanguage=value;changeProfile();}});
 function changeProfile() {profile++; requestController.abort();requestController=new AbortController();translationQueue.reset();translations.clear();errors.clear();for(const page of rendered.values())paintMirror(page);for(const number of visible)schedulePage(number,0);updateProvider();status(canTranslate()?'statusSettingsApplied':'statusCloudNeeded');}
 
+function intelligenceSourceLabel(source: IntelligenceSourceKind): string {
+  return source === 'embedded-text' ? t('intelligenceEmbeddedText') : source === 'local-ocr' ? t('intelligenceLocalOcr') : t('intelligenceUnknownSource');
+}
+
+function intelligenceStateLabel(state: IntelligenceEvidenceState): string {
+  return state === 'evidence' ? t('intelligenceEvidence') : state === 'low-confidence' ? t('intelligenceLowConfidence') : t('intelligenceInvalid');
+}
+
+function intelligenceBlocks(): TextBlock[] {
+  return [...rendered.values()]
+    .sort((left, right) => left.model.number - right.model.number)
+    .flatMap(page => page.model.blocks);
+}
+
+function renderIntelligenceResult(container: HTMLElement): void {
+  const result = intelligenceResult;
+  if (!result) return;
+  const summary = document.createElement('p');
+  summary.className = 'reader-intelligence__summary';
+  summary.textContent = t('intelligenceBlocks', { count: intelligenceBlocks().length });
+  container.append(summary);
+
+  if (result.evidence.length) {
+    const list = document.createElement('ul');
+    list.className = 'reader-intelligence__results';
+    for (const evidence of result.evidence) {
+      const item = document.createElement('li');
+      item.className = `reader-intelligence__result reader-intelligence__result--${evidence.state}`;
+      item.dataset.state = evidence.state;
+      const heading = document.createElement('div');
+      heading.className = 'reader-intelligence__result-heading';
+      const label = document.createElement('strong');
+      label.textContent = result.schema.find(field => field.id === evidence.id)?.label ?? evidence.id;
+      const state = document.createElement('span');
+      state.className = 'reader-intelligence__state';
+      state.textContent = intelligenceStateLabel(evidence.state);
+      heading.append(label, state);
+      const value = document.createElement('p');
+      value.className = 'reader-intelligence__value';
+      value.textContent = evidence.value;
+      const meta = document.createElement('p');
+      meta.className = 'reader-intelligence__meta';
+      meta.textContent = `${t('intelligencePage', { page: evidence.page })} · ${intelligenceSourceLabel(evidence.sourceKind)} · ${t('intelligencePageConfidence')}: ${Math.round(evidence.pageConfidence * 100)}%`;
+      const provenance = document.createElement('p');
+      provenance.className = 'reader-intelligence__provenance';
+      provenance.textContent = `${t('intelligenceProvenance')}: ${evidence.provenance}`;
+      item.append(heading, value, meta, provenance);
+      item.tabIndex = 0;
+      item.addEventListener('click', () => {
+        scrollToPage(evidence.page);
+        highlight(evidence.blockId);
+      });
+      item.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); item.click(); }
+      });
+      list.append(item);
+    }
+    container.append(list);
+  }
+
+  if (result.missing.length) {
+    const missing = document.createElement('div');
+    missing.className = 'reader-intelligence__missing';
+    const title = document.createElement('strong');
+    title.textContent = t('intelligenceMissing');
+    const list = document.createElement('ul');
+    for (const field of result.missing) {
+      const item = document.createElement('li');
+      item.textContent = field.label;
+      list.append(item);
+    }
+    missing.append(title, list);
+    container.append(missing);
+  }
+}
+
+function renderIntelligence(panel: HTMLElement): void {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'reader-intelligence';
+  const description = document.createElement('p');
+  description.className = 'reader-intelligence__description';
+  description.textContent = t('intelligenceDescription');
+  const form = document.createElement('form');
+  form.className = 'reader-intelligence__form';
+  const label = document.createElement('label');
+  label.textContent = t('intelligenceSchemaLabel');
+  const textarea = document.createElement('textarea');
+  textarea.rows = 8;
+  textarea.spellcheck = false;
+  textarea.value = intelligenceSchemaText;
+  textarea.placeholder = t('intelligenceSchemaPlaceholder');
+  textarea.setAttribute('aria-label', t('intelligenceSchemaLabel'));
+  textarea.addEventListener('input', () => { intelligenceSchemaText = textarea.value; });
+  label.append(textarea);
+  const actions = document.createElement('div');
+  actions.className = 'reader-intelligence__actions';
+  const sample = document.createElement('button');
+  sample.type = 'button';
+  sample.textContent = t('intelligenceSample');
+  sample.addEventListener('click', () => { intelligenceSchemaText = BUILT_IN_INTELLIGENCE_SCHEMA_JSON; renderPanel(); });
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.className = 'primary';
+  submit.textContent = t('intelligenceRun');
+  actions.append(sample, submit);
+  form.append(label, actions);
+  form.addEventListener('submit', event => { event.preventDefault(); intelligenceSchemaText = textarea.value; void runIntelligence(); });
+  wrapper.append(description, form);
+
+  const statusLine = document.createElement('p');
+  statusLine.className = 'reader-intelligence__status';
+  statusLine.setAttribute('role', 'status');
+  statusLine.setAttribute('aria-live', 'polite');
+  if (intelligenceState === 'loading') statusLine.textContent = t('intelligenceLoading');
+  else if (intelligenceState === 'error') statusLine.textContent = t('intelligenceError', { message: intelligenceError });
+  else if (intelligenceState === 'empty') statusLine.textContent = t('intelligenceEmpty');
+  if (statusLine.textContent) wrapper.append(statusLine);
+  if (intelligenceState === 'ready' || intelligenceState === 'empty') renderIntelligenceResult(wrapper);
+  panel.append(wrapper);
+}
+
+async function runIntelligence(): Promise<void> {
+  if (!pdf) {
+    intelligenceResult = null;
+    intelligenceState = 'empty';
+    intelligenceError = '';
+    renderPanel();
+    return;
+  }
+  intelligenceState = 'loading';
+  intelligenceError = '';
+  renderPanel();
+  try {
+    await ensurePage(pageNumber, -10);
+    const result = extractDocumentIntelligence(intelligenceBlocks(), [...intelligencePageSources.values()], JSON.parse(intelligenceSchemaText));
+    intelligenceResult = result;
+    intelligenceState = result.evidence.length ? 'ready' : 'empty';
+  } catch (error) {
+    intelligenceResult = null;
+    intelligenceState = 'error';
+    intelligenceError = errorMessage(error);
+  }
+  renderPanel();
+}
+
 function renderPanel() {
   const panel=$('reader-panel'); panel.replaceChildren();
-  if(!panelKind) { panel.hidden=true; $('outline-toggle').setAttribute('aria-expanded','false'); $('search-toggle').setAttribute('aria-expanded','false'); return; }
+  if(!panelKind) { panel.hidden=true; intelligenceTrigger.setAttribute('aria-expanded','false'); $('outline-toggle').setAttribute('aria-expanded','false'); $('search-toggle').setAttribute('aria-expanded','false'); return; }
   panel.hidden=false;
   const header=document.createElement('div'); header.className='reader-panel__header';
-  const title=document.createElement('h2'); title.className='reader-panel__title'; title.textContent=t(panelKind==='outline'?'outlineToggle':'searchToggle');
+  const title=document.createElement('h2'); title.className='reader-panel__title'; title.textContent=t(panelKind==='outline'?'outlineToggle':panelKind==='search'?'searchToggle':'intelligenceTitle');
   const close=document.createElement('button'); close.type='button'; close.className='reader-panel__close'; close.textContent='×'; close.setAttribute('aria-label',t('closePanel')); close.addEventListener('click',()=>closePanel());
   header.append(title,close); panel.append(header);
-  if(panelKind==='outline') renderOutline(panel); else renderSearch(panel);
+  if(panelKind==='outline') renderOutline(panel); else if(panelKind==='search') renderSearch(panel); else renderIntelligence(panel);
+  intelligenceTrigger.setAttribute('aria-expanded',String(panelKind==='intelligence'));
   $('outline-toggle').setAttribute('aria-expanded',String(panelKind==='outline'));
   $('search-toggle').setAttribute('aria-expanded',String(panelKind==='search'));
 }
-function openPanel(kind: 'outline'|'search') {
+function openPanel(kind: 'outline'|'search'|'intelligence') {
   panelKind=kind; renderPanel();
   if(kind==='search') { searchInput?.focus(); if(lastSearchQuery.trim()) void runSearch(lastSearchQuery); }
+  else if(kind==='intelligence') { void runIntelligence(); }
   else if(outlineReady) { const first=panelButtons()[0]; if(first) first.focus(); else $('outline-toggle').focus(); }
   else $('outline-toggle').focus();
   if(kind==='outline'&&!outlineReady&&!outlineLoading) void prepareOutline();
 }
 function closePanel() {
   if(!panelKind) { toggleThumbnails(false); return; }
-  const trigger=panelKind==='search'?$('search-toggle'):$('outline-toggle');
+  const trigger=panelKind==='search'?$('search-toggle'):panelKind==='intelligence'?intelligenceTrigger:$('outline-toggle');
   panelKind=null; searchController?.abort(); searchController=null; clearTimeout(searchTimer); renderPanel(); trigger.focus();
 }
 function panelButtons() { return [...$('reader-panel').querySelectorAll<HTMLButtonElement>('.reader-outline__item:not([disabled])')]; }

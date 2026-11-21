@@ -111,6 +111,23 @@ export interface ReleaseLicenses {
   missing: readonly string[];
 }
 
+/** Independent trust/quality checks required before a release can ship. */
+export interface ReleaseQualityEvidence {
+  readonly privacy: GateState;
+  readonly secretBoundary: GateState;
+  readonly resourceLimits: GateState;
+  readonly consentAudit: GateState;
+  readonly retention: GateState;
+  readonly goldenDataset: GateState;
+  readonly ocrBenchmark: GateState;
+  readonly translationBenchmark: GateState;
+  readonly exportBenchmark: GateState;
+  readonly performanceBenchmark: GateState;
+  readonly i18n: GateState;
+  readonly accessibility: GateState;
+  readonly sbom: GateState;
+}
+
 /** Everything the gate needs, as a runner observed it. */
 export interface ReleaseGateInput {
   /**
@@ -142,6 +159,8 @@ export interface ReleaseGateInput {
   gates: ReleaseGates;
   /** The licence evidence. */
   licenses: ReleaseLicenses;
+  /** Fail-closed trust and product-quality evidence. */
+  quality: ReleaseQualityEvidence;
   /**
    * The release package the build produced — a directory or an archive path — or `null`
    * when none was found. A release with nothing to ship is not a release.
@@ -170,7 +189,20 @@ export type ReleaseBlockerCode =
   | 'gate-build-failed'
   | 'gate-imports-failed'
   | 'license-notice-missing'
-  | 'package-artifact-missing';
+  | 'package-artifact-missing'
+  | 'quality-privacy-failed'
+  | 'quality-secret-boundary-failed'
+  | 'quality-resource-limits-failed'
+  | 'quality-consent-audit-failed'
+  | 'quality-retention-failed'
+  | 'quality-golden-dataset-failed'
+  | 'quality-ocr-benchmark-failed'
+  | 'quality-translation-benchmark-failed'
+  | 'quality-export-benchmark-failed'
+  | 'quality-performance-benchmark-failed'
+  | 'quality-i18n-failed'
+  | 'quality-accessibility-failed'
+  | 'quality-sbom-failed';
 
 /**
  * A finding the release ships with, if a person accepts it.
@@ -238,6 +270,19 @@ export const RELEASE_BLOCKER_CODES: readonly ReleaseBlockerCode[] = [
   'gate-imports-failed',
   'license-notice-missing',
   'package-artifact-missing',
+  'quality-privacy-failed',
+  'quality-secret-boundary-failed',
+  'quality-resource-limits-failed',
+  'quality-consent-audit-failed',
+  'quality-retention-failed',
+  'quality-golden-dataset-failed',
+  'quality-ocr-benchmark-failed',
+  'quality-translation-benchmark-failed',
+  'quality-export-benchmark-failed',
+  'quality-performance-benchmark-failed',
+  'quality-i18n-failed',
+  'quality-accessibility-failed',
+  'quality-sbom-failed',
 ];
 
 /** Every warning code, in the order {@link evaluate} can produce them. */
@@ -282,6 +327,28 @@ const GATE_RULES: readonly GateRule[] = [
       'The committed-imports gate did not pass; a committed file imports a module that is ' +
       'not committed, so a fresh clone cannot build.',
   },
+];
+
+interface QualityRule {
+  readonly key: keyof ReleaseQualityEvidence;
+  readonly code: Extract<ReleaseBlockerCode, `quality-${string}-failed`>;
+  readonly message: string;
+}
+
+const QUALITY_RULES: readonly QualityRule[] = [
+  { key: 'privacy', code: 'quality-privacy-failed', message: 'Privacy enforcement evidence did not pass.' },
+  { key: 'secretBoundary', code: 'quality-secret-boundary-failed', message: 'Secret-boundary evidence did not pass.' },
+  { key: 'resourceLimits', code: 'quality-resource-limits-failed', message: 'Parser/resource-limit evidence did not pass.' },
+  { key: 'consentAudit', code: 'quality-consent-audit-failed', message: 'Consent and cloud-route audit evidence did not pass.' },
+  { key: 'retention', code: 'quality-retention-failed', message: 'Retention/purge evidence did not pass.' },
+  { key: 'goldenDataset', code: 'quality-golden-dataset-failed', message: 'Golden dataset evidence did not pass.' },
+  { key: 'ocrBenchmark', code: 'quality-ocr-benchmark-failed', message: 'OCR benchmark evidence did not pass.' },
+  { key: 'translationBenchmark', code: 'quality-translation-benchmark-failed', message: 'Translation benchmark evidence did not pass.' },
+  { key: 'exportBenchmark', code: 'quality-export-benchmark-failed', message: 'Export benchmark evidence did not pass.' },
+  { key: 'performanceBenchmark', code: 'quality-performance-benchmark-failed', message: 'Performance benchmark evidence did not pass.' },
+  { key: 'i18n', code: 'quality-i18n-failed', message: 'Internationalisation evidence did not pass.' },
+  { key: 'accessibility', code: 'quality-accessibility-failed', message: 'Accessibility evidence did not pass.' },
+  { key: 'sbom', code: 'quality-sbom-failed', message: 'SBOM/license evidence did not pass.' },
 ];
 
 // --- The gate --------------------------------------------------------------
@@ -344,6 +411,11 @@ export function evaluate(input: ReleaseGateInput): ReleaseGateReport {
 
   for (const rule of GATE_RULES) {
     if (input?.gates?.[rule.key] === 'pass') continue;
+    blockers.push({ code: rule.code, message: rule.message });
+  }
+
+  for (const rule of QUALITY_RULES) {
+    if (input?.quality?.[rule.key] === 'pass') continue;
     blockers.push({ code: rule.code, message: rule.message });
   }
 

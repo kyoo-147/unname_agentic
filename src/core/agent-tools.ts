@@ -980,3 +980,176 @@ function numberOrNull(value: unknown): number | null {
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
+
+/** Runtime limits for executing already-validated calls. */
+export interface ToolExecutionLimits {
+  maxSteps?: number;
+  maxBytes?: number;
+  maxMilliseconds?: number;
+  signal?: AbortSignal;
+}
+
+export type ToolExecutor = (args: Readonly<Record<string, unknown>>, context: {
+  signal: AbortSignal;
+  step: number;
+}) => unknown | Promise<unknown>;
+
+export interface ToolExecutionEvent {
+  step: number;
+  name: string;
+  status: 'completed' | 'rejected' | 'budget-exhausted' | 'cancelled' | 'failed';
+  bytesIn: number;
+  bytesOut: number;
+  elapsedMs: number;
+  reason: string | null;
+  validation: ToolCallValidation | null;
+}
+
+export interface ToolExecutionRun {
+  results: unknown[];
+  events: ToolExecutionEvent[];
+  bytesUsed: number;
+  elapsedMs: number;
+}
+
+/**
+ * Executes an allowlisted tool sequence with step, byte, time and cancellation gates.
+ * The host still owns the actual tool implementations; this wrapper makes policy and
+ * audit ordering explicit and never turns a rejected call into evidence.
+ */
+export async function executeToolCalls(
+  calls: readonly { name: string; args: unknown }[],
+  executors: Readonly<Partial<Record<AgentToolName, ToolExecutor>>>,
+  options: {
+    allowedTools?: readonly AgentToolName[];
+    context?: ToolCallContext;
+    limits?: ToolExecutionLimits;
+    onEvent?: (event: ToolExecutionEvent) => void;
+  } = {},
+): Promise<ToolExecutionRun> {
+  const started = nowMs();
+  const limits = options.limits ?? {};
+  const maxSteps = finiteFloor(limits.maxSteps, MAX_PLAN_CALLS);
+  const maxBytes = finitePositive(limits.maxBytes, Number.POSITIVE_INFINITY);
+  const maxMilliseconds = finitePositive(limits.maxMilliseconds, Number.POSITIVE_INFINITY);
+  const allowed = new Set(options.allowedTools ?? AGENT_TOOL_NAMES);
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const external = limits.signal;
+  const abortExternal = (): void => controller.abort();
+  if (external?.aborted) controller.abort();
+  else external?.addEventListener('abort', abortExternal, { once: true });
+
+  const results: unknown[] = [];
+  const events: ToolExecutionEvent[] = [];
+  let bytesUsed = 0;
+  try {
+    for (let index = 0; index < (Array.isArray(calls) ? calls.length : 0); index += 1) {
+      const call = calls[index];
+      const step = index + 1;
+      const name = typeof call?.name === 'string' ? call.name : '';
+      const args = isRecord(call?.args) ? call.args : {};
+      const bytesIn = utf8Bytes(JSON.stringify(args));
+      const elapsedBefore = nowMs() - started;
+      if (step > maxSteps || bytesUsed + bytesIn > maxBytes || elapsedBefore > maxMilliseconds) {
+        const event = executionEvent(step, name, 'budget-exhausted', bytesIn, 0, elapsedBefore, 'execution budget exhausted', null);
+        events.push(event);
+        options.onEvent?.(event);
+        continue;
+      }
+      if (signal.aborted) {
+        const event = executionEvent(step, name, 'cancelled', bytesIn, 0, elapsedBefore, 'cancelled', null);
+        events.push(event);
+        options.onEvent?.(event);
+        break;
+      }
+      if (!allowed.has(name as AgentToolName)) {
+        const event = executionEvent(step, name, 'rejected', bytesIn, 0, elapsedBefore, 'tool is not allowlisted', null);
+        events.push(event);
+        options.onEvent?.(event);
+        continue;
+      }
+      const validation = validateCall(name, args, options.context);
+      if (!validation.ok) {
+        const event = executionEvent(step, name, 'rejected', bytesIn, 0, nowMs() - started, 'invalid call', validation);
+        events.push(event);
+        options.onEvent?.(event);
+        continue;
+      }
+      const executor = executors[name as AgentToolName];
+      if (typeof executor !== 'function') {
+        const event = executionEvent(step, name, 'rejected', bytesIn, 0, nowMs() - started, 'no executor registered', validation);
+        events.push(event);
+        options.onEvent?.(event);
+        continue;
+      }
+      try {
+        const value = await withTimeout(Promise.resolve(executor(args, { signal, step })), maxMilliseconds - (nowMs() - started));
+        if (signal.aborted) {
+          const event = executionEvent(step, name, 'cancelled', bytesIn, 0, nowMs() - started, 'cancelled', validation);
+          events.push(event);
+          options.onEvent?.(event);
+          break;
+        }
+        const bytesOut = utf8Bytes(JSON.stringify(value));
+        if (bytesUsed + bytesIn + bytesOut > maxBytes) {
+          const event = executionEvent(step, name, 'budget-exhausted', bytesIn, bytesOut, nowMs() - started, 'byte budget exhausted', validation);
+          events.push(event);
+          options.onEvent?.(event);
+          continue;
+        }
+        bytesUsed += bytesIn + bytesOut;
+        results.push(value);
+        const event = executionEvent(step, name, 'completed', bytesIn, bytesOut, nowMs() - started, null, validation);
+        events.push(event);
+        options.onEvent?.(event);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        const event = executionEvent(step, name, 'failed', bytesIn, 0, nowMs() - started, reason, validation);
+        events.push(event);
+        options.onEvent?.(event);
+      }
+    }
+  } finally {
+    external?.removeEventListener('abort', abortExternal);
+  }
+  return { results, events, bytesUsed, elapsedMs: nowMs() - started };
+}
+
+function executionEvent(
+  step: number,
+  name: string,
+  status: ToolExecutionEvent['status'],
+  bytesIn: number,
+  bytesOut: number,
+  elapsedMs: number,
+  reason: string | null,
+  validation: ToolCallValidation | null,
+): ToolExecutionEvent {
+  return { step, name, status, bytesIn, bytesOut, elapsedMs, reason, validation };
+}
+
+function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
+  if (!Number.isFinite(milliseconds)) return promise;
+  if (milliseconds <= 0) return Promise.reject(new Error('execution time budget exhausted'));
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('execution time budget exhausted')), milliseconds);
+    promise.then(value => { clearTimeout(timer); resolve(value); }, error => { clearTimeout(timer); reject(error); });
+  });
+}
+
+function utf8Bytes(value: string): number {
+  return new TextEncoder().encode(typeof value === 'string' ? value : '').byteLength;
+}
+
+function finiteFloor(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : fallback;
+}
+
+function finitePositive(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
