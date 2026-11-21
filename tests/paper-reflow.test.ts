@@ -488,3 +488,252 @@ describe('reflowPaper: HTML + Markdown rendering and bidirectional lookup', () =
     expect(docFromShuffled).toEqual(doc);
   });
 });
+
+describe('reflowPaper: two-column ordering edge cases', () => {
+  it('cuts two-column pages into row bands around mid-page spanning figures and tables', () => {
+    const ir = buildPaperIr(
+      [
+        { id: 'l1', page: 1, type: 'paragraph', rect: box(LEFT_X, 100, COL_WIDTH, 60), text: 'Band 1 left.' },
+        { id: 'r1', page: 1, type: 'paragraph', rect: box(RIGHT_X, 100, COL_WIDTH, 60), text: 'Band 1 right.' },
+        { id: 'span-tbl', page: 1, type: 'table', rect: box(LEFT_X, 200, FULL_WIDTH, 90), text: 'Col1  Col2\nA  1\nB  2' },
+        { id: 'l2', page: 1, type: 'paragraph', rect: box(LEFT_X, 330, COL_WIDTH, 60), text: 'Band 2 left.' },
+        { id: 'l3', page: 1, type: 'paragraph', rect: box(LEFT_X, 400, COL_WIDTH, 60), text: 'Band 2 left second.' },
+        { id: 'r2', page: 1, type: 'paragraph', rect: box(RIGHT_X, 330, COL_WIDTH, 60), text: 'Band 2 right.' },
+      ],
+      1,
+    );
+
+    const doc = reflowPaper(ir);
+    expect(doc.blocks.map(b => b.text.split('\n')[0])).toEqual([
+      'Band 1 left.',
+      'Band 1 right.',
+      'Col1  Col2',
+      'Band 2 left.',
+      'Band 2 left second.',
+      'Band 2 right.',
+    ]);
+  });
+
+  it('still orders two-column body below heavy spanning title/abstract/figure blocks on page 1', () => {
+    const ir = buildPaperIr(
+      [
+        { id: 'title', page: 1, type: 'heading', rect: box(LEFT_X, 50, FULL_WIDTH, 28), text: 'Heavy Front Matter Paper' },
+        { id: 'authors', page: 1, type: 'paragraph', rect: box(LEFT_X, 86, FULL_WIDTH, 20), text: 'Alice Smith, Bob Jones' },
+        { id: 'abs-h', page: 1, type: 'heading', rect: box(LEFT_X, 114, FULL_WIDTH, 16), text: 'Abstract' },
+        { id: 'abs-p', page: 1, type: 'paragraph', rect: box(LEFT_X, 136, FULL_WIDTH, 50), text: 'Summary of findings.' },
+        { id: 'fig', page: 1, type: 'figure', rect: box(LEFT_X, 196, FULL_WIDTH, 120), text: 'Overview figure' },
+        { id: 'l1', page: 1, type: 'paragraph', rect: box(LEFT_X, 350, COL_WIDTH, 60), text: 'Left column first.' },
+        { id: 'r1', page: 1, type: 'paragraph', rect: box(RIGHT_X, 350, COL_WIDTH, 60), text: 'Right column first.' },
+        { id: 'l2', page: 1, type: 'paragraph', rect: box(LEFT_X, 430, COL_WIDTH, 60), text: 'Left column second.' },
+        { id: 'r2', page: 1, type: 'paragraph', rect: box(RIGHT_X, 430, COL_WIDTH, 60), text: 'Right column second.' },
+      ],
+      1,
+    );
+
+    const doc = reflowPaper(ir);
+    const bodyTexts = doc.blocks.slice(5).map(b => b.text);
+    expect(bodyTexts).toEqual([
+      'Left column first.',
+      'Left column second.',
+      'Right column first.',
+      'Right column second.',
+    ]);
+  });
+
+  it('orders three-column pages column by column and handles empty DocumentIR cleanly', () => {
+    const threeCol = buildPaperIr(
+      [
+        { id: 'c1a', page: 1, type: 'paragraph', rect: box(56, 100, 150, 50), text: 'Col 1 A' },
+        { id: 'c2a', page: 1, type: 'paragraph', rect: box(231, 100, 150, 50), text: 'Col 2 A' },
+        { id: 'c3a', page: 1, type: 'paragraph', rect: box(406, 100, 150, 50), text: 'Col 3 A' },
+        { id: 'c1b', page: 1, type: 'paragraph', rect: box(56, 170, 150, 50), text: 'Col 1 B' },
+        { id: 'c2b', page: 1, type: 'paragraph', rect: box(231, 170, 150, 50), text: 'Col 2 B' },
+        { id: 'c3b', page: 1, type: 'paragraph', rect: box(406, 170, 150, 50), text: 'Col 3 B' },
+      ],
+      1,
+    );
+    expect(reflowPaper(threeCol).blocks.map(b => b.text)).toEqual([
+      'Col 1 A',
+      'Col 1 B',
+      'Col 2 A',
+      'Col 2 B',
+      'Col 3 A',
+      'Col 3 B',
+    ]);
+
+    const emptyIr = buildDocument({ sourceSha256: SOURCE_SHA256, documentId: 'empty', pages: [], blocks: [] });
+    const emptyDoc = reflowPaper(emptyIr);
+    expect(emptyDoc.blocks).toEqual([]);
+    expect(emptyDoc.footnotes).toEqual([]);
+    expect(emptyDoc.lookup.entries).toEqual([]);
+    expect(emptyDoc.markdown).toBe('');
+  });
+});
+
+describe('reflowPaper: equation numbering, formulas, and cross-references', () => {
+  it('merges adjacent right-aligned equation numbers into formula blocks and rejects cross-column tags', () => {
+    const ir = buildPaperIr(
+      [
+        // Single-column page or spanning band with separate right-aligned (1)
+        { id: 'eq1', page: 1, type: 'formula', rect: box(140, 140, 260, 24), text: '\\nabla \\cdot E = \\rho / \\varepsilon_0' },
+        { id: 'tag1', page: 1, type: 'other', rect: box(520, 144, 24, 14), text: '(1)' },
+        // Two-column band below: left-column unnumbered formula must NOT steal right-column (2)
+        { id: 'l-eq', page: 1, type: 'formula', rect: box(LEFT_X, 240, COL_WIDTH, 24), text: 'x = y + 1' },
+        { id: 'l-p', page: 1, type: 'paragraph', rect: box(LEFT_X, 290, COL_WIDTH, 50), text: 'Left prose.' },
+        { id: 'r-tag', page: 1, type: 'other', rect: box(RIGHT_X + 180, 244, 24, 14), text: '(2)' },
+        { id: 'r-p', page: 1, type: 'paragraph', rect: box(RIGHT_X, 290, COL_WIDTH, 50), text: 'Right prose.' },
+      ],
+      1,
+    );
+
+    const doc = reflowPaper(ir);
+    const eq1 = doc.blocks.find(b => b.formula?.latex.includes('\\nabla'));
+    expect(eq1?.formula?.equationNumber).toBe('1');
+    expect(eq1?.formula?.equationNumberReflowId).toBe(`${eq1?.reflowId}-tag`);
+    // Stray `(1)` block must not remain as a paragraph
+    expect(doc.blocks.some(b => b.kind === 'paragraph' && b.text === '(1)')).toBe(false);
+
+    // Cross-column guard: left-column `x = y + 1` must NOT steal right-column `(2)`
+    const leftEq = doc.blocks.find(b => b.formula?.latex === 'x = y + 1');
+    expect(leftEq?.formula?.equationNumber).toBeUndefined();
+    expect(doc.blocks.some(b => b.text === '(2)')).toBe(true);
+  });
+
+  it('handles \\tag{...}, bracket delimiters, leading numbers, and guards math expressions', () => {
+    const ir = buildPaperIr(
+      [
+        { id: 'eq-tag', page: 1, type: 'formula', rect: box(56, 80, 500, 24), text: '$$a^2 + b^2 = c^2 \\tag{2.1}$$' },
+        { id: 'eq-bracket', page: 1, type: 'other', rect: box(56, 120, 500, 24), text: '\\[\\int_0^1 x^2 dx = 1/3\\] (A.1)' },
+        { id: 'eq-lead', page: 1, type: 'formula', rect: box(56, 160, 500, 24), text: '(3) y = mx + b' },
+        { id: 'eq-fn', page: 1, type: 'formula', rect: box(56, 200, 500, 24), text: 'y = f(1)' },
+        { id: 'eq-op', page: 1, type: 'formula', rect: box(56, 240, 500, 24), text: '(1) + (2) = 3' },
+        { id: 'eq-multi', page: 1, type: 'paragraph', rect: box(56, 280, 500, 44), text: '$$\nE = mc^2\n$$' },
+      ],
+      1,
+    );
+
+    const doc = reflowPaper(ir);
+    const formulas = doc.blocks.filter(b => b.kind === 'formula');
+    expect(formulas).toHaveLength(6);
+    expect(formulas[0]?.formula).toMatchObject({ latex: 'a^{2} + b^{2} = c^{2}', equationNumber: '2.1' });
+    expect(formulas[1]?.formula).toMatchObject({ latex: '\\int_{0}^{1} x^{2} dx = \\frac{1}{3}', equationNumber: 'A.1' });
+    expect(formulas[2]?.formula).toMatchObject({ latex: 'y = mx + b', equationNumber: '3' });
+    expect(formulas[3]?.formula).toMatchObject({ latex: 'y = f(1)' });
+    expect(formulas[3]?.formula?.equationNumber).toBeUndefined();
+    expect(formulas[4]?.formula).toMatchObject({ latex: '(1) + (2) = 3' });
+    expect(formulas[4]?.formula?.equationNumber).toBeUndefined();
+    expect(formulas[5]?.formula).toMatchObject({ latex: 'E = mc^{2}' });
+  });
+
+  it('links Equation (N) and Section X.Y cross-references accurately even when Abstract precedes Section 1', () => {
+    const ir = makeAcademicPaperIr();
+    // Add a paragraph referencing Section 2.1 explicitly
+    const irWithSecRef = buildPaperIr(
+      [
+        ...ir.blocks.map(b => ({
+          id: b.id,
+          page: b.page,
+          type: b.type,
+          polygon: b.polygon,
+          text: b.raw.includes('Equation (1) converges') ? 'See Section 2.1 and Eq. (1) for details.' : b.raw,
+        })),
+      ],
+      2,
+    );
+
+    const doc = reflowPaper(irWithSecRef);
+    const eqBlock = doc.blocks.find(b => b.kind === 'formula');
+    const sec21 = doc.blocks.find(b => b.kind === 'heading' && b.text === '2.1 Experimental Setup');
+    const paraWithRefs = doc.blocks.find(b => b.text.includes('See Section 2.1'));
+
+    expect(eqBlock).toBeDefined();
+    expect(sec21).toBeDefined();
+    const eqRef = paraWithRefs?.segments.find(s => s.kind === 'equation-ref');
+    expect(eqRef?.targetReflowId).toBe(eqBlock?.reflowId);
+
+    const secRef = paraWithRefs?.segments.find(s => s.kind === 'cross-ref');
+    expect(secRef?.targetReflowId).toBe(sec21?.reflowId);
+  });
+});
+
+describe('reflowPaper: footnotes, captions, citations, escaping, and source coord mapping', () => {
+  it('disambiguates per-page footnote resets and supports superscript/symbol footnotes without losing prose', () => {
+    const ir = buildPaperIr(
+      [
+        { id: 'p1-a', page: 1, type: 'paragraph', rect: box(56, 100, 500, 40), text: 'Alice Smith* proposed claim¹ using Figure 1.' },
+        { id: 'p1-p', page: 1, type: 'paragraph', rect: box(56, 160, 500, 40), text: 'Figure 1 shows that convergence is fast when α ≤ β.' },
+        { id: 'p1-fn-star', page: 1, type: 'footnote', rect: box(56, 700, 500, 16), text: '* Equal contribution.' },
+        { id: 'p1-fn-1', page: 1, type: 'footnote', rect: box(56, 720, 500, 16), text: '1 First page note.' },
+        { id: 'p2-b', page: 2, type: 'paragraph', rect: box(56, 100, 500, 40), text: 'Another claim^1 cites [1-3] and (see Smith, 2024; Jones & Lee, 2023).' },
+        { id: 'p2-fn-1', page: 2, type: 'footnote', rect: box(56, 720, 500, 16), text: '1 Second page note.' },
+      ],
+      2,
+    );
+
+    const doc = reflowPaper(ir);
+    expect(doc.footnotes).toHaveLength(3);
+    expect(doc.footnotes.map(f => ({ label: f.label, anchorId: f.anchorId, text: f.text }))).toEqual([
+      { label: '*', anchorId: 'fn-sym1', text: 'Equal contribution.' },
+      { label: '1', anchorId: 'fn-1', text: 'First page note.' },
+      { label: '1', anchorId: 'fn-1-p2', text: 'Second page note.' },
+    ]);
+
+    // Ensure "Figure 1 shows that..." stayed a paragraph and wasn't hijacked as a caption
+    expect(doc.blocks.some(b => b.kind === 'paragraph' && b.text.startsWith('Figure 1 shows that'))).toBe(true);
+
+    // Ensure Markdown keys don't collide across pages
+    expect(doc.markdown).toContain('[^1-p1]: First page note.');
+    expect(doc.markdown).toContain('[^1-p2]: Second page note.');
+    expect(doc.markdown).toContain('[^*]: Equal contribution.');
+    expect(doc.markdown).toContain('$\\alpha \\le \\beta$');
+    expect(doc.citations.some(c => c.keys.join(',') === '1,2,3')).toBe(true);
+    expect(doc.citations.some(c => c.keys.length === 2 && c.style === 'author-year')).toBe(true);
+  });
+
+  it('escapes HTML special characters and rejects cross-column caption binding', () => {
+    const ir = buildPaperIr(
+      [
+        { id: 'fig-left', page: 1, type: 'figure', rect: box(LEFT_X, 120, COL_WIDTH, 140), text: 'Compare <script>alert(1)</script> & A < B' },
+        { id: 'cap-right', page: 1, type: 'other', rect: box(RIGHT_X, 120, COL_WIDTH, 24), text: 'Figure 1. Unrelated right column caption.' },
+      ],
+      1,
+    );
+
+    const doc = reflowPaper(ir);
+    const fig = doc.blocks.find(b => b.kind === 'figure');
+    expect(fig?.caption).toBeUndefined();
+    expect(doc.html).toContain('&lt;script&gt;alert(1)&lt;/script&gt; &amp;');
+    expect(doc.html).toContain('A &lt; B');
+    expect(doc.html).not.toContain('<script>');
+  });
+
+  it('handles overlapping rect / point hit-testing, misses in gutters, page mismatch, and non-mutation', () => {
+    const ir = makeAcademicPaperIr();
+    const snapshot = JSON.stringify(ir);
+    const doc = reflowPaper(ir);
+
+    // Gutter click (between LEFT_X + COL_WIDTH = 292 and RIGHT_X = 320) returns null
+    expect(resolveReflowId(doc, { page: 1, x: 306, y: 250 })).toBeNull();
+    // Out-of-range page returns null
+    expect(resolveReflowId(doc, { page: 99, x: 100, y: 100 })).toBeNull();
+    // Disjoint rect returns null
+    expect(resolveReflowId(doc, { page: 1, rect: box(0, 0, 5, 5) })).toBeNull();
+
+    // Slightly shifted overlapping rect matches p1-h1 (`1 Introduction`)
+    const introHeading = doc.blocks.find(b => b.text === '1 Introduction');
+    expect(introHeading).toBeDefined();
+    if (introHeading) {
+      const shifted = box(
+        introHeading.source.rect.x + 2,
+        introHeading.source.rect.y + 1,
+        introHeading.source.rect.width - 4,
+        introHeading.source.rect.height - 2,
+      );
+      expect(resolveReflowId(doc, { page: 1, rect: shifted })).toBe(introHeading.reflowId);
+      expect(resolveReflowId(doc, { page: 2, blockId: introHeading.source.blockId })).toBeNull();
+    }
+
+    // Input IR was never mutated
+    expect(JSON.stringify(ir)).toBe(snapshot);
+  });
+});
