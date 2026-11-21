@@ -155,6 +155,34 @@ describe('opt-in native PDF companion', () => {
       await vi.advanceTimersByTimeAsync(5000); expect(h.connect).toHaveBeenCalledOnce();
     } finally { vi.useRealTimers(); }
   });
+  it('reconnects after a native port drop and resumes the bound local session', async () => {
+    vi.useFakeTimers();
+    try {
+      const requests: Array<{ port: number; type: string }> = [];
+      const ports: Array<{ port: NativePort; drop(): void }> = [];
+      const connect = vi.fn(() => {
+        const index = ports.length; const listeners: ((message: unknown) => void)[] = []; const disconnects: (() => void)[] = []; let closed = false;
+        const port: NativePort = {
+          onMessage: { addListener: listener => { listeners.push(listener); } }, onDisconnect: { addListener: listener => { disconnects.push(listener); } },
+          disconnect: vi.fn(() => { if (!closed) { closed = true; disconnects.forEach(listener => listener()); } }),
+          postMessage: vi.fn(message => {
+            const request = message as Record<string, any>; requests.push({ port: index, type: request.type });
+            const reply = request.type === 'hello' ? { ok: true, protocol: 1, status: 'ready' } : request.type === 'resume' ? { ok: true, binding: request.binding, status: 'resumed', sequence: 0 } : request.type === 'poll' ? { ok: true, binding: request.binding, status: 'following', command: null } : request.type === 'chunk' ? { ok: true, binding: request.binding, next_index: request.index + 1 } : { ok: true, binding: request.binding, status: request.type === 'commit' ? 'complete' : request.type === 'end' ? 'ended' : 'receiving' };
+            queueMicrotask(() => { if (!closed) listeners.forEach(listener => listener(reply)); });
+          }),
+        };
+        const item = { port, drop: () => port.disconnect() }; ports.push(item); return port;
+      });
+      const companion = new NativeCompanion(connect);
+      await companion.open(session, async () => pdf(100), async () => {}, page, 'Synthetic');
+      ports[0]!.drop();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(requests.filter(request => request.port === 1).map(request => request.type)).toEqual(['hello', 'resume', 'poll']);
+      expect(companion.following).toBe(true);
+      await companion.stop();
+    } finally { vi.useRealTimers(); }
+  });
   it('waits for an in-flight poll before starting another explicit upload', async () => {
     vi.useFakeTimers();
     try {

@@ -113,7 +113,7 @@ describe('Chrome extension event and message boundaries', () => {
   it('rejects desktop operations from web pages, source frames, and the reader itself', async () => {
     const h = await install();
     const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
-    for (const type of ['mirror:desktop-open', 'mirror:desktop-status', 'mirror:desktop-stop']) {
+    for (const type of ['mirror:desktop-open', 'mirror:desktop-status', 'mirror:desktop-stop', 'mirror:annotation']) {
       expect((await h.message({ type })).ok).toBe(false);
       expect((await h.message({ type }, { id: 'test', tab: { id: 3 }, url: 'https://example.com/download', frameId: 0 })).ok).toBe(false);
     }
@@ -149,6 +149,7 @@ describe('Chrome extension event and message boundaries', () => {
           const reply = request.type === 'hello' ? { ok: true, protocol: 1, status: 'ready' }
             : request.type === 'chunk' ? { ok: true, binding: request.binding, next_index: request.index + 1 }
             : request.type === 'poll' ? { ok: true, binding: request.binding, status: 'following', command: { version: 1, kind: 'view_state', binding: request.binding, sequence: 1, page: { page: 2, page_count: 4, fraction: .25, zoom: 1.5 } } }
+            : request.type === 'annotation' ? { ok: true, binding: request.binding, status: 'applied', revision: 1, annotation: { ...request.annotation, base_revision: 1 } }
             : { ok: true, binding: request.binding, status: request.type === 'commit' ? 'complete' : 'receiving' };
           queueMicrotask(() => { if (!disconnected) nativeMessages.fire(reply); });
         },
@@ -159,6 +160,8 @@ describe('Chrome extension event and message boundaries', () => {
       h.chrome.tabs.get.mockImplementation(async id => ({ id, index: 0, active: true, windowId: 1, url: id === 90 ? 'chrome-extension://test/index.html?sourceTab=3' : 'https://example.com/download' }));
       const popup = { id: 'test', tab: { id: 91 }, url: 'chrome-extension://test/popup.html', frameId: 0 };
       expect((await h.message({ type: 'mirror:desktop-open' }, popup)).ok).toBe(true);
+      expect((await h.message({ type: 'mirror:desktop-open' }, popup)).ok).toBe(true);
+      await expect(h.message({ type: 'mirror:annotation', annotation: { id: 'a1', page: 2, x: .1, y: .2, width: .3, height: .1, kind: 'highlight', text: 'hello', baseRevision: 0 } })).resolves.toMatchObject({ ok: true, status: 'applied', revision: 1 });
       await vi.advanceTimersByTimeAsync(1000);
       expect(h.chrome.runtime.sendMessage).toHaveBeenCalledExactlyOnceWith({ type: 'mirror:view-state', state: { page: 3, fraction: .25, zoom: 1.5 }, targetTabId: 90, sourceTabId: 3, origin: 'desktop' });
       expect(h.chrome.tabs.sendMessage).not.toHaveBeenCalled();

@@ -26,7 +26,7 @@
 import { MirrorController, pdfPath, sourceUrl, type MirrorSession } from './controller';
 import { createTranslationTransport } from '../src/core/translation';
 import type { TranslationSettings } from '../src/core/types';
-import { NativeCompanion, NATIVE_HOST, normalizeNativePage, sameSession, COMPANION_UNAVAILABLE } from './native-bridge';
+import { NativeCompanion, NATIVE_HOST, normalizeNativePage, sameSession, COMPANION_UNAVAILABLE, type NativeAnnotation, type NativeAnnotationKind } from './native-bridge';
 
 const viewerUrl = chrome.runtime.getURL('index.html');
 const popupUrl = chrome.runtime.getURL('popup.html');
@@ -94,6 +94,14 @@ async function activeDesktopSource(): Promise<{ session: MirrorSession; title: s
   return { session, title: source.title ?? 'Browser PDF' };
 }
 
+function parseNativeAnnotation(value: unknown): NativeAnnotation {
+  if (!value || typeof value !== 'object') throw new Error('Invalid desktop annotation.');
+  const annotation = value as Record<string, unknown>;
+  const kind = annotation.kind;
+  const validKind = kind === 'highlight' || kind === 'underline' || kind === 'note' || kind === 'selection';
+  if (typeof annotation.id !== 'string' || annotation.id.length === 0 || annotation.id.length > 128 || [...annotation.id].some(character => character.charCodeAt(0) < 32) || !Number.isSafeInteger(annotation.page) || Number(annotation.page) < 0 || Number(annotation.page) > 65535 || !validKind || typeof annotation.text !== 'string' || [...annotation.text].length > 4000 || [...annotation.text].some(character => character.charCodeAt(0) < 32 && !'\n\r\t'.includes(character)) || !Number.isFinite(annotation.x) || !Number.isFinite(annotation.y) || !Number.isFinite(annotation.width) || !Number.isFinite(annotation.height) || Number(annotation.x) < 0 || Number(annotation.y) < 0 || Number(annotation.width) <= 0 || Number(annotation.height) <= 0 || Number(annotation.x) + Number(annotation.width) > 1 || Number(annotation.y) + Number(annotation.height) > 1 || !Number.isSafeInteger(annotation.baseRevision) || Number(annotation.baseRevision) < 0) throw new Error('Invalid desktop annotation.');
+  return { id: annotation.id as string, page: annotation.page as number, x: annotation.x as number, y: annotation.y as number, width: annotation.width as number, height: annotation.height as number, kind: kind as NativeAnnotationKind, text: annotation.text as string, baseRevision: annotation.baseRevision as number };
+}
 function isReader(sender: chrome.runtime.MessageSender): boolean {
   if (sender.id !== chrome.runtime.id || !sender.url) return false;
   try {
@@ -251,6 +259,11 @@ async function handle(message: Record<string, unknown>, sender: chrome.runtime.M
         async () => { await authorizeDesktop(session); },
         normalizeNativePage(viewStates.get(session.sourceTabId)), title);
       return { ok: true, status: 'PDF delivered to the local desktop inbox. Following page changes until you stop, close, or navigate the source. Open PDF Workspace to view it.' };
+    }
+    case 'mirror:annotation': {
+      if (!isReader(sender)) throw new Error('Desktop annotations require the bound extension reader.');
+      const session = await controller.authorize(identity);
+      return { ok: true, ...(await companion.annotation(session, parseNativeAnnotation(message.annotation))) };
     }
     case 'mirror:desktop-stop': {
       if (!isPopup(sender)) throw new Error('Use the extension action to stop following.');

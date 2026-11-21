@@ -11,6 +11,9 @@ export class NativeBridgeError extends Error {
 }
 export interface NativeBinding { session_id: string; source_id: string; request_nonce: string; generation: number }
 export interface NativePage { page: number; page_count: number | null; fraction: number; zoom: number }
+export type NativeAnnotationKind = 'highlight' | 'underline' | 'note' | 'selection';
+export interface NativeAnnotation { id: string; page: number; x: number; y: number; width: number; height: number; kind: NativeAnnotationKind; text: string; baseRevision: number }
+export type NativeAnnotationResult = { status: 'applied' | 'conflict'; revision: number; annotation?: NativeAnnotation } | { status: 'offline' | 'stale' };
 export interface NativePort {
   postMessage(message: unknown): void;
   disconnect(): void;
@@ -31,7 +34,7 @@ export function sameSession(a: MirrorSession, b: MirrorSession): boolean {
 class Connection {
   private pending?: { resolve(value: Record<string, unknown>): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
   private closed = false;
-  constructor(private readonly port: NativePort, private readonly onClose: () => void) {
+  constructor(private readonly port: NativePort, private readonly onClose: (reconnect: boolean) => void) {
     port.onMessage.addListener(message => {
       const pending = this.pending;
       if (!pending) { this.close(new NativeBridgeError('protocol', 'Desktop companion sent an unsolicited response.')); return; }
@@ -49,7 +52,7 @@ class Connection {
       this.pending = undefined;
       pending.resolve(reply);
     });
-    port.onDisconnect.addListener(() => this.close(new NativeBridgeError('unavailable', COMPANION_UNAVAILABLE)));
+    port.onDisconnect.addListener(() => this.close(new NativeBridgeError('unavailable', COMPANION_UNAVAILABLE), true));
   }
   request(message: unknown, timeout = 30_000): Promise<Record<string, unknown>> {
     if (this.closed) return Promise.reject(new NativeBridgeError('unavailable', COMPANION_UNAVAILABLE));
@@ -59,12 +62,12 @@ class Connection {
       try { this.port.postMessage(message); } catch { this.close(new NativeBridgeError('unavailable', COMPANION_UNAVAILABLE)); }
     });
   }
-  close(reason = new NativeBridgeError('unavailable', COMPANION_UNAVAILABLE)): void {
+  close(reason = new NativeBridgeError('unavailable', COMPANION_UNAVAILABLE), reconnect = false): void {
     if (this.closed) return;
     this.closed = true;
     if (this.pending) { clearTimeout(this.pending.timer); this.pending.reject(reason); this.pending = undefined; }
     try { this.port.disconnect(); } catch { /* The disconnected Chrome port is already closed. */ }
-    this.onClose();
+    this.onClose(reconnect);
   }
 }
 export function sameBinding(value: unknown, binding: NativeBinding): boolean {
@@ -83,6 +86,7 @@ export class NativeCompanion {
   private source?: MirrorSession;
   private active?: { session: MirrorSession; binding: NativeBinding; authorize: () => Promise<void>; sequence: number };
   private busy = false;
+  private resumeNeeded = false;
   private generation = 0;
   private revision = 0;
   private timer?: ReturnType<typeof setTimeout>;
@@ -94,7 +98,7 @@ export class NativeCompanion {
   get following(): boolean { return !!this.active; }
   get transferring(): boolean { return this.busy; }
   private cancelPoll(): void { if (this.timer !== undefined) clearTimeout(this.timer); this.timer = undefined; }
-  private invalidate(): void { this.revision++; this.cancelPoll(); this.active = undefined; this.source = undefined; this.queuedPage = undefined; this.echoes = []; }
+  private invalidate(): void { this.revision++; this.cancelPoll(); this.active = undefined; this.source = undefined; this.queuedPage = undefined; this.echoes = []; this.resumeNeeded = false; }
   private serialize(task: () => Promise<void>): Promise<void> {
     const connection = this.connection;
     this.operation = this.operation.then(task).catch(() => { connection?.close(); });
@@ -105,7 +109,7 @@ export class NativeCompanion {
     if (this.connecting) return this.connecting;
     if (this.connection) return this.connection;
     let connection: Connection;
-    try { connection = new Connection(this.connect(), () => { if (this.connection === connection) { this.connection = undefined; this.invalidate(); } }); }
+    try { connection = new Connection(this.connect(), reconnect => { if (this.connection !== connection) return; this.connection = undefined; this.connecting = undefined; if (reconnect && this.active && !this.busy) { this.resumeNeeded = true; this.schedulePoll(); } else this.invalidate(); }); }
     catch { throw new NativeBridgeError('unavailable', COMPANION_UNAVAILABLE); }
     this.connection = connection;
     this.connecting = connection.request({ type: 'hello' }).then(hello => {
@@ -121,12 +125,21 @@ export class NativeCompanion {
   }
   private schedulePoll(): void {
     this.cancelPoll();
-    if (!this.active || !this.connection || this.busy) return;
+    if (!this.active || this.busy) return;
     this.timer = setTimeout(() => {
       this.timer = undefined;
       void this.serialize(async () => {
-        const active = this.active; const connection = this.connection; const revision = this.revision;
-        if (!active || !connection || this.busy) return;
+        const active = this.active; const revision = this.revision;
+        if (!active || this.busy) return;
+        const connection = await this.connected();
+        if (revision !== this.revision) return;
+        if (this.resumeNeeded) {
+          const resumed = await connection.request({ type: 'resume', binding: active.binding });
+          if (!sameBinding(resumed.binding, active.binding) || (resumed.status !== 'resumed' && resumed.status !== 'missing') || !Number.isSafeInteger(resumed.sequence)) throw new NativeBridgeError('invalid-response', 'Invalid desktop resume response.');
+          active.sequence = resumed.sequence as number;
+          this.resumeNeeded = false;
+          if (resumed.status === 'missing') { this.active = undefined; throw new NativeBridgeError('stale', 'Desktop source is no longer available.'); }
+        }
         const reply = await connection.request({ type: 'poll', binding: active.binding, after_sequence: active.sequence }, 1000);
         if (revision !== this.revision) return;
         if (!sameBinding(reply.binding, active.binding) || reply.status !== 'following') throw new NativeBridgeError('invalid-response', 'Invalid desktop poll response.');
@@ -177,6 +190,7 @@ export class NativeCompanion {
       await authorized();
       const reply = await request({ type: 'commit', binding });
       if (reply.status !== 'complete') throw new NativeBridgeError('transfer', 'Desktop companion did not complete the PDF transfer.');
+      this.resumeNeeded = false;
       this.active = { session: { ...session }, binding, authorize, sequence: 0 };
     } catch (error) { connection?.close(); this.invalidate(); throw error; }
     finally { this.busy = false; this.schedulePoll(); }
@@ -197,6 +211,32 @@ export class NativeCompanion {
       }
     }).finally(() => { this.pageTask = undefined; });
     return this.pageTask;
+  }
+  async annotation(session: MirrorSession, annotation: NativeAnnotation): Promise<NativeAnnotationResult> {
+    const active = this.active;
+    if (!active || !sameSession(session, active.session) || this.busy) return { status: 'offline' };
+    try {
+      await this.operation;
+      const connection = await this.connected();
+      if (this.resumeNeeded) {
+        const resumed = await connection.request({ type: 'resume', binding: active.binding });
+        if (!sameBinding(resumed.binding, active.binding) || (resumed.status !== 'resumed' && resumed.status !== 'missing') || !Number.isSafeInteger(resumed.sequence)) throw new NativeBridgeError('invalid-response', 'Invalid desktop resume response.');
+        active.sequence = resumed.sequence as number;
+        this.resumeNeeded = false;
+        if (resumed.status === 'missing') { this.active = undefined; return { status: 'stale' }; }
+      }
+      await active.authorize();
+      const reply = await connection.request({ type: 'annotation', binding: active.binding, annotation: { id: annotation.id, page: annotation.page, x: annotation.x, y: annotation.y, width: annotation.width, height: annotation.height, kind: annotation.kind, text: annotation.text, base_revision: annotation.baseRevision } });
+      if (!reply || !sameBinding(reply.binding, active.binding) || (reply.status !== 'applied' && reply.status !== 'conflict') || !Number.isSafeInteger(reply.revision)) throw new NativeBridgeError('invalid-response', 'Invalid desktop annotation response.');
+      const value = reply.annotation as Record<string, unknown> | undefined;
+      const status = reply.status === 'applied' ? 'applied' : 'conflict';
+      const result: NativeAnnotationResult = { status, revision: reply.revision as number };
+      if (value) result.annotation = { id: String(value.id), page: Number(value.page), x: Number(value.x), y: Number(value.y), width: Number(value.width), height: Number(value.height), kind: value.kind as NativeAnnotationKind, text: String(value.text), baseRevision: Number(value.base_revision) };
+      return result;
+    } catch (error) {
+      if (error instanceof NativeBridgeError && (error.code === 'stale' || error.code === 'unavailable')) return { status: error.code === 'stale' ? 'stale' : 'offline' };
+      throw error;
+    }
   }
   async stop(): Promise<void> {
     const active = this.active; const connection = this.connection;

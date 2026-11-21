@@ -62,6 +62,24 @@ impl LiveHost {
 impl Drop for LiveHost { fn drop(&mut self) { let _ = self.child.kill(); let _ = self.child.wait(); } }
 fn command(sequence: u64) -> Value { json!({"version":1,"kind":"view_state","binding":binding(),"sequence":sequence,"page":page()}) }
 #[test]
+fn resume_reuses_committed_session_and_reports_annotation_conflicts() {
+    let inbox = Inbox::new();
+    let mut host = LiveHost::new(&inbox);
+    host.upload();
+    let resume = host.request(json!({"type":"resume","binding":binding()}));
+    assert_eq!(resume["ok"], true);
+    assert_eq!(resume["status"], "resumed");
+    assert_eq!(resume["sequence"], 0);
+    let annotation = json!({"id":"a1","page":1,"x":0.1,"y":0.2,"width":0.3,"height":0.1,"kind":"highlight","text":"hello","base_revision":0});
+    let applied = host.request(json!({"type":"annotation","binding":binding(),"annotation":annotation}));
+    assert_eq!(applied["status"], "applied");
+    assert_eq!(applied["revision"], 1);
+    let conflict = host.request(json!({"type":"annotation","binding":binding(),"annotation":{"id":"a1","page":1,"x":0.1,"y":0.2,"width":0.3,"height":0.1,"kind":"highlight","text":"stale","base_revision":0}}));
+    assert_eq!(conflict["status"], "conflict");
+    assert_eq!(conflict["revision"], 1);
+}
+
+#[test]
 fn poll_reads_only_current_fixed_command_and_rejects_replay() {
     let inbox = Inbox::new(); let mut host = LiveHost::new(&inbox); host.upload();
     let directory = inbox.entries().pop().unwrap();
