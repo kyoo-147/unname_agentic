@@ -4,7 +4,7 @@ Cập nhật: **2026-11-21**, trên nền inventory `63d0d5c`, với wave-N chec
 
 Ký hiệu: ✅ có mã **và** có bằng chứng chạy · 🟡 có mã nhưng thiếu test/UX hoặc còn giới hạn đáng kể · ⬜ chưa có.
 
-Số đo tại thời điểm này: **2.429 unit test web**, **51 e2e Playwright**, typecheck/build/import checks sạch local. Native verification vẫn phụ thuộc Windows SDK (`rc.exe`) và receipt native riêng.
+Số đo tại thời điểm này: **2.429 unit test web**, **51 e2e Playwright**, typecheck/build/import checks sạch local. Native Cargo tests đã chạy với Windows SDK `rc.exe` trong PATH.
 
 ## Wave-N release checkpoint (2026-11-21)
 
@@ -14,7 +14,7 @@ Số đo tại thời điểm này: **2.429 unit test web**, **51 e2e Playwright
 | Full-document cancellation | Playwright cancellation coverage | ✅ 51/51 local |
 | Changelog và third-party notices | `CHANGELOG.md`, `public/third-party/` | ✅ |
 | Web typecheck/unit/build/imports | release check: 2.429 tests, exit 0 | ✅ local |
-| Native Windows build | thiếu `rc.exe` trong Windows SDK | 🟡 blocked |
+| Native Cargo tests | 149 passed, 2 ignored; `rc.exe` được nạp từ Windows SDK | ✅ local |
 | GitHub Actions | account bị khóa billing, web job không khởi động | 🟡 external |
 
 ---
