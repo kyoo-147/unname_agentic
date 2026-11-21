@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { deflateRawSync } from 'node:zlib';
+import { describe, expect, it, vi } from 'vitest';
 import {
   CONVERTIBLE_FORMATS,
+  ConverterError,
   convertDocument,
   convertDocx,
   convertEpub,
@@ -10,8 +12,11 @@ import {
   convertPptx,
   convertXlsx,
   decodeHtmlEntities,
+  inflateRawPure,
+  parseZip,
+  sha256HexBytes,
 } from '../src/core/converters';
-import { DOCUMENT_IR_SCHEMA_VERSION, serialize, validate } from '../src/core/ir';
+import { DOCUMENT_IR_SCHEMA_VERSION, deserialize, serialize, validate } from '../src/core/ir';
 
 // --- Byte & ZIP fixture helpers --------------------------------------------
 
@@ -62,6 +67,9 @@ function crc32(bytes: Uint8Array): number {
 interface FixtureZipEntry {
   readonly name: string;
   readonly data: string | Uint8Array;
+  readonly method?: number;
+  readonly flags?: number;
+  readonly dataDescriptor?: boolean;
 }
 
 function buildZip(entries: readonly FixtureZipEntry[]): Uint8Array {
@@ -72,23 +80,28 @@ function buildZip(entries: readonly FixtureZipEntry[]): Uint8Array {
   for (const entry of entries) {
     const nameBytes = utf8(entry.name);
     const rawData = typeof entry.data === 'string' ? utf8(entry.data) : entry.data;
+    const method = entry.method ?? 0;
+    const compressed = method === 8 ? new Uint8Array(deflateRawSync(rawData)) : rawData;
     const crc = crc32(rawData);
-    const flags = 0x0800; // UTF-8 filename bit
+    const flags = (entry.flags ?? 0x0800) | (entry.dataDescriptor ? 0x0008 : 0);
 
     const localHeader = concatBytes([
       new Uint8Array([0x50, 0x4b, 0x03, 0x04]),
       u16le(20),
       u16le(flags),
-      u16le(0), // STORE
+      u16le(method),
       u16le(0),
       u16le(0),
-      u32le(crc),
-      u32le(rawData.length),
-      u32le(rawData.length),
+      u32le(entry.dataDescriptor ? 0 : crc),
+      u32le(entry.dataDescriptor ? 0 : compressed.length),
+      u32le(entry.dataDescriptor ? 0 : rawData.length),
       u16le(nameBytes.length),
       u16le(0),
       nameBytes,
-      rawData,
+      compressed,
+      ...(entry.dataDescriptor
+        ? [new Uint8Array([0x50, 0x4b, 0x07, 0x08]), u32le(crc), u32le(compressed.length), u32le(rawData.length)]
+        : []),
     ]);
 
     const centralHeader = concatBytes([
@@ -96,11 +109,11 @@ function buildZip(entries: readonly FixtureZipEntry[]): Uint8Array {
       u16le(20),
       u16le(20),
       u16le(flags),
-      u16le(0),
+      u16le(method),
       u16le(0),
       u16le(0),
       u32le(crc),
-      u32le(rawData.length),
+      u32le(compressed.length),
       u32le(rawData.length),
       u16le(nameBytes.length),
       u16le(0),
@@ -590,5 +603,324 @@ describe('convertImage', () => {
     expect(rBe.metadata).toMatchObject({ imageWidth: 640, imageHeight: 480 });
     expect(rBe.ir.pages[0]).toEqual({ index: 1, width: 640, height: 480, rotation: 0 });
     expect(validate(rBe.ir)).toEqual([]);
+  });
+});
+
+// --- UTF-8, DEFLATE ZIP, pagination, and validateIR compliance -------------
+
+function encodeUtf16LeWithBom(text: string): Uint8Array {
+  const buf = new Uint8Array(2 + text.length * 2);
+  buf[0] = 0xff;
+  buf[1] = 0xfe;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    buf[2 + i * 2] = code & 0xff;
+    buf[2 + i * 2 + 1] = (code >>> 8) & 0xff;
+  }
+  return buf;
+}
+
+function converterErrorCode(run: () => unknown): string {
+  try {
+    run();
+  } catch (error) {
+    return error instanceof ConverterError ? error.code : `other:${String(error)}`;
+  }
+  return 'no-error';
+}
+
+describe('E12 SHA-256, DEFLATE ZIP, and UTF-8 handling', () => {
+  it('computes FIPS 180-4 SHA-256 matching Node crypto across empty, UTF-8, and binary bytes', () => {
+    const samples = [
+      new Uint8Array(0),
+      utf8('Tiếng Việt — 日本語 📄'),
+      new Uint8Array(55).fill(0x61),
+      new Uint8Array(56).fill(0x62),
+      new Uint8Array(64).fill(0x63),
+      new Uint8Array(128).map((_, idx) => (idx * 37) & 0xff),
+    ];
+    for (const sample of samples) {
+      expect(sha256HexBytes(sample)).toBe(sha256(sample));
+    }
+  });
+
+  it('decompresses DEFLATE stored, fixed-Huffman, and dynamic-Huffman blocks with inflateRawPure', () => {
+    // Stored DEFLATE block (BTYPE = 00): "hi"
+    const storedDeflate = new Uint8Array([0x01, 0x02, 0x00, 0xfd, 0xff, 0x68, 0x69]);
+    expect(new TextDecoder().decode(inflateRawPure(storedDeflate))).toBe('hi');
+
+    // Short payload -> fixed Huffman (BTYPE = 01)
+    const shortInput = utf8('Hello DEFLATE!');
+    expect(new TextDecoder().decode(inflateRawPure(new Uint8Array(deflateRawSync(shortInput))))).toBe('Hello DEFLATE!');
+
+    // Large repetitive XML + UTF-8 -> dynamic Huffman (BTYPE = 10)
+    const largeText = Array.from({ length: 120 }, (_, i) => `<w:p><w:r><w:t>Đoạn ${i}: Tiếng Việt &amp; 日本語</w:t></w:r></w:p>`).join('\n');
+    const largeCompressed = new Uint8Array(deflateRawSync(utf8(largeText)));
+    expect(new TextDecoder().decode(inflateRawPure(largeCompressed))).toBe(largeText);
+  });
+
+  it('converts DEFLATE-compressed DOCX, PPTX, XLSX, and EPUB via both Node zlib and inflateRawPure', () => {
+    const docx = buildZip([
+      { name: '[Content_Types].xml', data: '<Types/>', method: 8 },
+      {
+        name: 'docProps/core.xml',
+        data: '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Báo cáo 2026</dc:title><dc:creator>Nguyễn Văn A</dc:creator><dc:language>vi</dc:language></cp:coreProperties>',
+        method: 8,
+      },
+      {
+        name: 'word/styles.xml',
+        data: '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="TieuDe1"><w:name w:val="heading 1"/></w:style></w:styles>',
+        method: 8,
+      },
+      {
+        name: 'word/document.xml',
+        data: `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:pPr><w:pStyle w:val="TieuDe1"/></w:pPr><w:r><w:t>Tổng quan 📄</w:t></w:r></w:p>
+    <w:sdt><w:sdtContent><w:p><w:r><w:t>Tiếng Việt chuẩn UTF-8 và </w:t></w:r><w:del><w:delText>bị xóa</w:delText></w:del><w:r><w:t>日本語.</w:t></w:r></w:p></w:sdtContent></w:sdt>
+    <w:p><w:r><w:br w:type="page"/><w:t>Trang hai</w:t></w:r></w:p>
+  </w:body>
+</w:document>`,
+        method: 8,
+        dataDescriptor: true,
+      },
+    ]);
+
+    const viaNode = convertDocx(docx);
+    const viaPure = convertDocx(docx, { inflateRaw: inflateRawPure });
+    expect(serialize(viaPure.ir)).toBe(serialize(viaNode.ir));
+    expect(serialize(convertDocument(docx).ir)).toBe(serialize(viaNode.ir));
+
+    // Simulate browser environment (no globalThis.process / node:zlib)
+    let viaBrowserFallback: ReturnType<typeof convertDocument>;
+    try {
+      vi.stubGlobal('process', undefined);
+      viaBrowserFallback = convertDocument(docx);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(serialize(viaBrowserFallback.ir)).toBe(serialize(viaNode.ir));
+
+    expect(validate(viaPure.ir)).toEqual([]);
+    expect(viaPure.metadata).toMatchObject({ title: 'Báo cáo 2026', creator: 'Nguyễn Văn A', language: 'vi' });
+    expect(viaPure.ir.pages.map(p => p.index)).toEqual([1, 2]);
+    expect(viaPure.ir.blocks.map(b => [b.page, b.type, b.raw])).toEqual([
+      [1, 'heading', 'Tổng quan 📄'],
+      [1, 'paragraph', 'Tiếng Việt chuẩn UTF-8 và 日本語.'],
+      [2, 'paragraph', 'Trang hai'],
+    ]);
+    // Ensure round-trip serialization stays valid
+    const roundTripped = deserialize(serialize(viaPure.ir));
+    expect(validate(roundTripped)).toEqual([]);
+  });
+
+  it('handles UTF-8 ZIP filenames and DEFLATE EPUB chapters', () => {
+    const epub = buildZip([
+      { name: 'mimetype', data: 'application/epub+zip', method: 0 },
+      {
+        name: 'META-INF/container.xml',
+        data: '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/package.opf"/></rootfiles></container>',
+        method: 8,
+      },
+      {
+        name: 'OEBPS/package.opf',
+        data: `<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Truyện Ngắn</dc:title>
+    <dc:creator>Tác Giả</dc:creator>
+    <dc:language>vi</dc:language>
+  </metadata>
+  <manifest>
+    <item id="c1" href="Chương_1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="c1"/></spine>
+</package>`,
+        method: 8,
+      },
+      {
+        name: 'OEBPS/Chương_1.xhtml',
+        data: '<html><body><h1>Mở đầu</h1><p>Xin chào thế giới.</p></body></html>',
+        method: 8,
+      },
+    ]);
+
+    const result = convertEpub(epub, { inflateRaw: inflateRawPure });
+    expect(validate(result.ir)).toEqual([]);
+    expect(result.metadata).toMatchObject({ title: 'Truyện Ngắn', author: 'Tác Giả', language: 'vi' });
+    expect(result.ir.blocks.map(b => [b.type, b.raw])).toEqual([
+      ['heading', 'Mở đầu'],
+      ['paragraph', 'Xin chào thế giới.'],
+    ]);
+  });
+
+  it('paginates multi-page DOCX documents and clamps out-of-bounds PPTX geometry to pass validate()', () => {
+    const manyParagraphs = Array.from({ length: 45 }, (_, i) => `<w:p><w:r><w:t>Paragraph ${i + 1}: steady text line</w:t></w:r></w:p>`).join('');
+    const longDocx = buildZip([
+      {
+        name: 'word/document.xml',
+        data: `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${manyParagraphs}</w:body></w:document>`,
+        method: 8,
+      },
+    ]);
+    const docxResult = convertDocx(longDocx);
+    expect(docxResult.ir.pages.length).toBeGreaterThan(1);
+    expect(validate(docxResult.ir)).toEqual([]);
+
+    const pptx = buildZip([
+      {
+        name: 'ppt/presentation.xml',
+        data: '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldSz cx="12192000" cy="6858000"/></p:presentation>',
+        method: 8,
+      },
+      {
+        name: 'ppt/slides/slide1.xml',
+        data: `<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree>
+    <p:grpSp>
+      <p:sp>
+        <p:spPr><a:xfrm><a:off x="-127000" y="6350000"/><a:ext cx="19050000" cy="3810000"/></a:xfrm></p:spPr>
+        <p:txBody><a:p><a:r><a:t>Clamped grouped text</a:t></a:r></a:p></p:txBody>
+      </p:sp>
+    </p:grpSp>
+    <p:graphicFrame>
+      <a:graphic><a:graphicData><a:tbl>
+        <a:tr><a:tc><a:txBody><a:p><a:r><a:t>H1</a:t></a:r></a:p></a:txBody></a:tc><a:tc><a:txBody><a:p><a:r><a:t>H2</a:t></a:r></a:p></a:txBody></a:tc></a:tr>
+      </a:tbl></a:graphicData></a:graphic>
+    </p:graphicFrame>
+  </p:spTree></p:cSld>
+</p:sld>`,
+        method: 8,
+      },
+    ]);
+    const pptxResult = convertPptx(pptx, { inflateRaw: inflateRawPure });
+    expect(serialize(convertDocument(pptx).ir)).toBe(serialize(pptxResult.ir));
+    expect(validate(pptxResult.ir)).toEqual([]);
+    expect(pptxResult.ir.blocks.map(b => [b.type, b.raw])).toEqual([
+      ['table', 'H1\tH2'],
+      ['paragraph', 'Clamped grouped text'],
+    ]);
+
+    const narrowPptx = buildZip([
+      {
+        name: 'ppt/presentation.xml',
+        data: '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldSz cx="508000" cy="508000"/></p:presentation>',
+        method: 8,
+      },
+      {
+        name: 'ppt/slides/slide1.xml',
+        data: '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Narrow fallback</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>',
+        method: 8,
+      },
+    ]);
+    const narrowResult = convertDocument(narrowPptx);
+    expect(narrowResult.format).toBe('pptx');
+    expect(validate(narrowResult.ir)).toEqual([]);
+
+    const xlsxDeflate = buildZip([
+      {
+        name: 'xl/workbook.xml',
+        data: '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets><sheet name="Báo cáo" sheetId="1"/></sheets></workbook>',
+        method: 8,
+      },
+      {
+        name: 'xl/worksheets/sheet1.xml',
+        data: '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Số lượng</t></is></c><c r="B1"><v>99</v></c></row></sheetData></worksheet>',
+        method: 8,
+      },
+    ]);
+    const xlsxResult = convertXlsx(xlsxDeflate, { inflateRaw: inflateRawPure });
+    expect(serialize(convertDocument(xlsxDeflate).ir)).toBe(serialize(xlsxResult.ir));
+    expect(validate(xlsxResult.ir)).toEqual([]);
+    expect(xlsxResult.metadata.sheetNames).toEqual(['Báo cáo']);
+    expect(xlsxResult.ir.blocks.filter(b => b.type === 'table')[0]?.raw).toBe('Số lượng\t99');
+  });
+
+  it('decodes UTF-16LE HTML, handles HTML fragments via filename, and validates empty HTML', () => {
+    const utf16Html = encodeUtf16LeWithBom('<html lang="vi"><head><title>Tiêu đề</title></head><body><p>Xin ch&#224;o &#x1EC7; &#8212;</p></body></html>');
+    const res16 = convertHtml(utf16Html);
+    expect(validate(res16.ir)).toEqual([]);
+    expect(res16.metadata.title).toBe('Tiêu đề');
+    expect(res16.ir.blocks[0]?.raw).toBe('Xin chào ệ —');
+    expect(serialize(convertDocument(utf16Html).ir)).toBe(serialize(res16.ir));
+
+    const utf16Frag = convertDocument(encodeUtf16LeWithBom('<p>Đoạn UTF-16</p>'), { filename: 'utf16-frag.html' });
+    expect(utf16Frag.format).toBe('html');
+    expect(validate(utf16Frag.ir)).toEqual([]);
+    expect(utf16Frag.ir.blocks[0]?.raw).toBe('Đoạn UTF-16');
+
+    const frag = convertDocument(utf8('<p>Fragment &amp; test</p>'), { filename: 'snippet.html' });
+    expect(frag.format).toBe('html');
+    expect(validate(frag.ir)).toEqual([]);
+    expect(frag.ir.blocks[0]?.raw).toBe('Fragment & test');
+
+    const emptyHtml = convertHtml(utf8('<!DOCTYPE html><html><body></body></html>'));
+    expect(validate(emptyHtml.ir)).toEqual([]);
+    expect(emptyHtml.ir.pages).toHaveLength(1);
+    expect(emptyHtml.ir.blocks).toEqual([]);
+  });
+});
+
+describe('E12 corrupted archives and malformed input errors', () => {
+  it('rejects empty or non-Uint8Array inputs and unsupported formats', () => {
+    expect(converterErrorCode(() => convertDocument(new Uint8Array(0)))).toBe('invalid-input');
+    expect(converterErrorCode(() => convertDocument(null as unknown as Uint8Array))).toBe('invalid-input');
+    expect(converterErrorCode(() => convertDocument(utf8('%PDF-1.7\n'), { filename: 'doc.pdf' }))).toBe('unsupported-format');
+    expect(converterErrorCode(() => convertDocument(utf8('{\\rtf1 hello}')))).toBe('unsupported-format');
+    expect(converterErrorCode(() => convertDocument(new Uint8Array([0x01, 0x02, 0x03, 0x04])))).toBe('unsupported-format');
+  });
+
+  it('rejects truncated ZIPs, bad EOCD offsets, CRC mismatches, bad compression, and bad DEFLATE streams', () => {
+    // Truncated ZIP (no EOCD)
+    expect(converterErrorCode(() => parseZip(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 20, 0, 0, 0])))).toBe('corrupted-archive');
+
+    // Valid ZIP whose central directory offset is corrupted
+    const validZip = buildZip([{ name: 'word/document.xml', data: '<w:document/>', method: 0 }]);
+    const badOffsetZip = new Uint8Array(validZip);
+    badOffsetZip[badOffsetZip.length - 6] = 0xff; // corrupt cdOffset in EOCD
+    expect(converterErrorCode(() => parseZip(badOffsetZip))).toBe('corrupted-archive');
+
+    // CRC mismatch on stored payload
+    const badCrcZip = new Uint8Array(validZip);
+    const xmlPos = new TextDecoder().decode(badCrcZip).indexOf('<w:document/>');
+    badCrcZip[xmlPos + 1] = 0x58; // mutate 'w' -> 'X'
+    expect(converterErrorCode(() => parseZip(badCrcZip))).toBe('corrupted-archive');
+
+    // Unsupported compression method (method = 99)
+    const unsupportedMethodZip = buildZip([{ name: 'word/document.xml', data: '<w:document/>', method: 99 }]);
+    expect(converterErrorCode(() => parseZip(unsupportedMethodZip))).toBe('unsupported-compression');
+
+    // Encrypted entry bit (flags = 0x0001)
+    const encryptedZip = buildZip([{ name: 'word/document.xml', data: '<w:document/>', flags: 0x0801 }]);
+    expect(converterErrorCode(() => parseZip(encryptedZip))).toBe('unsupported-compression');
+
+    // Corrupted DEFLATE payload tested via both default inflate and inflateRawPure
+    const deflatedZip = buildZip([{ name: 'word/document.xml', data: '<w:document><w:body/></w:document>', method: 8 }]);
+    const corruptedDeflate = new Uint8Array(deflatedZip);
+    const corruptIdx = 30 + 'word/document.xml'.length;
+    corruptedDeflate[corruptIdx] = (corruptedDeflate[corruptIdx] ?? 0) ^ 0xff;
+    expect(converterErrorCode(() => convertDocx(corruptedDeflate))).toBe('decompression-failed');
+    expect(converterErrorCode(() => convertDocx(corruptedDeflate, { inflateRaw: inflateRawPure }))).toBe('decompression-failed');
+  });
+
+  it('rejects missing package parts, malformed XML, and malformed image headers', () => {
+    const emptyZip = buildZip([{ name: '[Content_Types].xml', data: '<Types/>' }]);
+    expect(converterErrorCode(() => convertDocx(emptyZip))).toBe('missing-part');
+    expect(converterErrorCode(() => convertPptx(emptyZip))).toBe('missing-part');
+    expect(converterErrorCode(() => convertXlsx(emptyZip))).toBe('missing-part');
+    expect(converterErrorCode(() => convertEpub(emptyZip))).toBe('missing-part');
+
+    const badEpub = buildZip([
+      { name: 'META-INF/container.xml', data: '<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>' },
+      { name: 'OEBPS/content.opf', data: '<package><manifest><item id="c1" href="ch1.xhtml"/></manifest><spine><itemref idref="c1"/></spine></package>' },
+    ]);
+    expect(converterErrorCode(() => convertEpub(badEpub))).toBe('missing-part');
+
+    const brokenXmlDocx = buildZip([{ name: 'word/document.xml', data: '<w:document><w:body><w:p></w:document>' }]);
+    expect(converterErrorCode(() => convertDocx(brokenXmlDocx))).toBe('malformed-xml');
+
+    // Malformed PNG, JPEG without SOF, and TIFF missing ImageWidth
+    expect(converterErrorCode(() => convertImage(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])))).toBe('malformed-image');
+    expect(converterErrorCode(() => convertImage(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xd9])))).toBe('malformed-image');
+    expect(converterErrorCode(() => convertImage(new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])))).toBe('malformed-image');
   });
 });
