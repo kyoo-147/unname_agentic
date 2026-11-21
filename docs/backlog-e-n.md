@@ -104,7 +104,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | H02 | **P1** | Nhúng/subset fonts đa ngôn ngữ CJK/RTL cho bản dịch | Không tofu khi mở trên máy khác. | ✅ `src/export/fonts.ts`: Noto Sans (OFL) + fontkit, "Tiếng Việt — số 42" trích lại đúng dấu; CJK báo thiếu glyph rõ ràng |
 | H03 | **P1** | Xuất PDF song ngữ với trang xen kẽ | Có option, giữ chất lượng. | ✅ `planPairs` mode `alternating`/`interleaved` + 31 test: fit rule có số liệu, fallback có lý do, page furniture theo lề trái/phải |
 | H04 | **P1** | Bookmarks/highlight/note cá nhân | Lưu theo user, mở lại vẫn còn. | ✅ `src/core/annotations.ts` + 14 test: anchor theo block, backlinks, reanchor sau re-parse (kept/moved/orphan), export/import có version |
-| H05 | **P1** | Chèn text, callout, hình, shape, watermark | Export lại PDF và giữ được toạ độ.  ⬜ |
+| H05 | **P1** | Chèn text, callout, hình, shape, watermark | Export lại PDF và giữ được toạ độ. | ✅ `src/export/pdf-overlays.ts` + 13 test: chèn textbox/callout/PNG/JPEG/rect/ellipse/line/arrow/watermark xoay mờ qua pdf-lib + Noto Sans, round-trip bằng `pdf-lib` và `pdfjs-dist` |
 | H06 | **P1** | Sửa text OCR và translated block inline | Undo/redo, autosave và so khớp nguồn.  ⬜ |
 | H07 | **P1** | Tách, ghép, đổi thứ tự, xoay, xoá/trích trang | Page thumbnails phản ánh edit tức thời.  ⬜ |
 | H08 | **P1** | Trích bảng ra CSV/XLSX và công thức ra LaTeX | Dữ liệu đúng row/col và chọn đúng bảng.  ⬜ |
