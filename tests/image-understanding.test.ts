@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_READABLE_BLUR_SCORE,
   MIN_READABLE_CONTRAST,
   MIN_READABLE_DPI,
   MIN_READABLE_LONG_EDGE_PX,
@@ -13,6 +14,7 @@ import {
   planVisualUnderstanding,
   toVisionKind,
   understandVisualRegion,
+  understandVisualRegions,
   verifyVisualGrounding,
   type VisualRegionInput,
 } from '../src/core/image-understanding';
@@ -505,3 +507,403 @@ describe('grounding check against figure labels and ticks', () => {
     expect(topology.hasCycles).toBe(false);
   });
 });
+
+describe('flowchart topology', () => {
+  it('traces parallel branches, join points, decision counts, retry back-edges, and dangling edges', () => {
+    const topology = analyzeFlowchartTopology(
+      [
+        { id: 'start', label: 'Receive Job', kind: 'start' },
+        { id: 'route', label: 'Needs OCR?', kind: 'decision' },
+        { id: 'ocr', label: 'Run OCR', kind: 'process' },
+        { id: 'text', label: 'Extract Stream', kind: 'process' },
+        { id: 'verify', label: 'Quality OK?', kind: 'decision' },
+        { id: 'done', label: 'Emit IR', kind: 'end' },
+        { id: 'legend', label: 'Dashed = async', kind: 'annotation' },
+      ],
+      [
+        { from: 'start', to: 'route' },
+        { from: 'route', to: 'ocr', label: 'yes' },
+        { from: 'route', to: 'text', label: 'no' },
+        { from: 'ocr', to: 'verify' },
+        { from: 'text', to: 'verify' },
+        { from: 'verify', to: 'done', label: 'pass' },
+        { from: 'verify', to: 'ocr', label: 'retry', dashed: true },
+        { from: 'done', to: 'missing-sink', label: 'notify' },
+      ],
+    );
+
+    expect(topology.entryNodeIds).toEqual(['start']);
+    expect(topology.terminalNodeIds).toEqual(['done']);
+    expect(topology.decisionNodeIds).toEqual(['route', 'verify']);
+    expect(topology.branchCount).toBe(4);
+    expect(topology.hasCycles).toBe(true);
+    expect(topology.backEdges).toHaveLength(1);
+    expect(topology.backEdges[0]).toMatchObject({ from: 'verify', to: 'ocr', label: 'retry', dashed: true });
+    expect(topology.disconnectedNodeIds).toEqual(['legend']);
+    expect(topology.danglingEdges).toHaveLength(1);
+    expect(topology.danglingEdges[0]).toMatchObject({ from: 'done', to: 'missing-sink' });
+    expect(topology.orderedNodeIds).toEqual(['start', 'route', 'ocr', 'text', 'verify', 'done']);
+  });
+
+  it('breaks pure cycles with no zero-in-degree node deterministically', () => {
+    const topology = analyzeFlowchartTopology(
+      [
+        { id: 'poll', label: 'Poll Queue', kind: 'process' },
+        { id: 'dispatch', label: 'Dispatch Task', kind: 'process' },
+        { id: 'ack', label: 'Acknowledge', kind: 'process' },
+      ],
+      [
+        { from: 'poll', to: 'dispatch' },
+        { from: 'dispatch', to: 'ack' },
+        { from: 'ack', to: 'poll' },
+      ],
+    );
+
+    expect(topology.entryNodeIds).toEqual(['poll']);
+    expect(topology.hasCycles).toBe(true);
+    expect(topology.backEdges).toHaveLength(1);
+    expect(topology.backEdges[0]).toMatchObject({ from: 'ack', to: 'poll' });
+    expect(topology.orderedNodeIds).toEqual(['poll', 'dispatch', 'ack']);
+  });
+
+  it('parses flowchart topology from multimodal structured text lines and builds diagram topology too', () => {
+    const textAnswer = [
+      'description: Requests pass authentication before branching to cache or origin.',
+      'nodes: n1[start]: Client; n2[decision]: Cached?; n3[end]: Hit; n4[process]: Origin',
+      'edges: n1 -> n2; n2 ->|yes| n3; n2 -- miss --> n4; n4 -> n2 [populate]',
+      'labels: Client; Cached?; Hit; Origin',
+      'confidence: 0.89',
+    ].join('\n');
+
+    const flowResult = understandVisualRegion(
+      baseRegion({
+        imageId: 'img-flow-text',
+        caption: 'Figure 2. Cache lookup flowchart.',
+      }),
+      textAnswer,
+    );
+
+    expect(flowResult.kind).toBe('flowchart');
+    expect(flowResult.status).toBe('understood');
+    expect(flowResult.nodes.map(n => n.id)).toEqual(['n1', 'n2', 'n3', 'n4']);
+    expect(flowResult.edges.map(e => ({ from: e.from, to: e.to, label: e.label }))).toEqual([
+      { from: 'n1', to: 'n2', label: '' },
+      { from: 'n2', to: 'n3', label: 'yes' },
+      { from: 'n2', to: 'n4', label: 'miss' },
+      { from: 'n4', to: 'n2', label: 'populate' },
+    ]);
+    expect(flowResult.topology?.decisionNodeIds).toEqual(['n2']);
+    expect(flowResult.topology?.hasCycles).toBe(true);
+
+    const diagramResult = understandVisualRegion(
+      baseRegion({
+        imageId: 'img-arch',
+        caption: 'Figure 3. Module dependency diagram.',
+      }),
+      {
+        description: 'Parser feeds translator which outputs PDF blocks.',
+        nodes: [
+          { id: 'parser', label: 'Parser', kind: 'component' },
+          { id: 'translator', label: 'Translator', kind: 'component' },
+          { id: 'writer', label: 'PDF Writer', kind: 'component' },
+        ],
+        edges: [
+          { from: 'parser', to: 'translator' },
+          { from: 'translator', to: 'writer' },
+        ],
+      },
+    );
+
+    expect(diagramResult.kind).toBe('diagram');
+    expect(diagramResult.topology?.orderedNodeIds).toEqual(['parser', 'translator', 'writer']);
+    expect(diagramResult.topology?.hasCycles).toBe(false);
+  });
+});
+
+describe('multi-series chart grounding and batch caption binding', () => {
+  it('grounds multi-series charts across dual axes, negative ticks, thousands separators, and percentages', () => {
+    const region = baseRegion({
+      imageId: 'img-multi-series',
+      labels: [
+        { text: '1,250', role: 'data-label' },
+        { text: '1,480', role: 'data-label' },
+        { text: '−3.5%', role: 'data-label' },
+        { text: '12.5%', role: 'data-label' },
+      ],
+      axes: [
+        { id: 'x', orientation: 'x', label: 'Year', ticks: ['2023', '2024'] },
+        { id: 'y', orientation: 'y', label: 'Volume', unit: 'units', ticks: [0, 1000, 2000] },
+        { id: 'y2', orientation: 'y2', label: 'Delta', unit: '%', ticks: [-10, 0, 10, 20] },
+      ],
+    });
+
+    const result = understandVisualRegion(region, {
+      description: 'Volume rose from 1250 in 2023 to 1480 in 2024 while Delta shifted from -3.5% to 12.5%.',
+      series: [
+        {
+          id: 'vol',
+          name: 'Volume',
+          unit: 'units',
+          axisId: 'y',
+          points: [
+            { x: '2023', y: 1250 },
+            { x: '2024', y: 1480 },
+          ],
+        },
+        {
+          id: 'delta',
+          name: 'Delta',
+          unit: '%',
+          axisId: 'y2',
+          points: [
+            { x: '2023', y: -3.5 },
+            { x: '2024', y: 12.5 },
+          ],
+        },
+      ],
+      numbers: [
+        { label: 'vol-2023', value: 1250 },
+        { label: 'delta-2024', value: 12.5 },
+      ],
+    });
+
+    expect(result.status).toBe('understood');
+    expect(result.grounding.passed).toBe(true);
+    expect(result.grounding.rejectedNumbers).toEqual([]);
+    expect(result.units).toBe('units, %');
+    expect(result.series[0]?.points.every(p => p.grounded)).toBe(true);
+    expect(result.series[1]?.points.every(p => p.grounded)).toBe(true);
+  });
+
+  it('isolates unverified and illegible points per series without polluting verified series', () => {
+    const region = baseRegion({
+      imageId: 'img-multi-mixed',
+      labels: ['42', '68', '55', '?'],
+      axes: [{ orientation: 'y', unit: '%', ticks: [0, 25, 50, 75, 100] }],
+    });
+
+    const result = understandVisualRegion(region, {
+      description: 'Series A reached 42 and 68; Series B reached 55.',
+      series: [
+        {
+          id: 'a',
+          name: 'Series A',
+          points: [
+            { x: 'Q1', y: 42 },
+            { x: 'Q2', y: 68 },
+          ],
+        },
+        {
+          id: 'b',
+          name: 'Series B',
+          points: [
+            { x: 'Q1', y: 55 },
+            { x: 'Q2', y: 91 }, // unverified hallucination
+            { x: 'Q3', y: '?' }, // unreadable value
+          ],
+        },
+      ],
+    });
+
+    expect(result.status).toBe('partial');
+    expect(result.grounding.passed).toBe(false);
+    expect(result.grounding.rejectedClaims).toEqual([
+      {
+        source: 'series',
+        seriesId: 'b',
+        label: 'Q2',
+        value: 91,
+        raw: '91',
+        reason: 'not-in-figure-labels-or-ticks',
+      },
+    ]);
+    expect(result.series[0]?.points).toEqual([
+      { x: 'Q1', y: 42, illegible: false, grounded: true },
+      { x: 'Q2', y: 68, illegible: false, grounded: true },
+    ]);
+    expect(result.series[1]?.points).toEqual([
+      { x: 'Q1', y: 55, illegible: false, grounded: true },
+      { x: 'Q2', y: null, illegible: false, grounded: false },
+      { x: 'Q3', y: null, illegible: true, grounded: false },
+    ]);
+    expect(result.unreadableFields).toContain('series:Series B:Q3');
+  });
+
+  it('prevents untrusted response labels from spoofing grounding and abstains under strictGrounding', () => {
+    const region = baseRegion({
+      imageId: 'img-strict',
+      labels: ['10', '20'],
+      axes: [{ orientation: 'y', ticks: [0, 10, 20, 30] }],
+    });
+
+    const spoofAttempt = understandVisualRegion(region, {
+      description: 'The peak hit 999 units.',
+      labels: ['999'],
+      numbers: [{ label: 'peak', value: 999 }],
+    });
+    expect(spoofAttempt.grounding.passed).toBe(false);
+    expect(spoofAttempt.grounding.rejectedNumbers).toEqual([999]);
+    expect(spoofAttempt.numbers).toEqual([]);
+
+    const strictResult = understandVisualRegion(
+      region,
+      { description: 'The peak hit 999 units.' },
+      { strictGrounding: true },
+    );
+    expect(strictResult.status).toBe('abstain');
+    expect(strictResult.abstained).toBe(true);
+    expect(strictResult.abstentionReasons).toEqual(['unverified-numeric-claim']);
+    expect(strictResult.description).toBeNull();
+  });
+
+  it('catches unverified numbers dropped by parseVisionAnswer into grounding rejections', () => {
+    const region = baseRegion({
+      imageId: 'img-text-dropped',
+      labels: ['10', '20'],
+      axes: [{ orientation: 'y', ticks: [0, 10, 20] }],
+    });
+    const textResponse = [
+      'description: Values grow from 10 to 20 across the period.',
+      'axes: y [units]: 0, 10, 20',
+      'series: Growth (units): t0=10 units, t1=20 units',
+      'numbers: start = 10; end = 20; peak = 999',
+      'confidence: 0.8',
+    ].join('\n');
+
+    const result = understandVisualRegion(region, textResponse);
+    expect(result.numbers).toEqual([
+      { label: 'start', value: 10 },
+      { label: 'end', value: 20 },
+    ]);
+    expect(result.grounding.passed).toBe(false);
+    expect(result.grounding.rejectedNumbers).toEqual([999]);
+    expect(result.series[0]?.points).toEqual([
+      { x: 't0', y: 10, illegible: false, grounded: true },
+      { x: 't1', y: 20, illegible: false, grounded: true },
+    ]);
+  });
+
+  it('binds two figures on the same page to distinct captions by reading order and resolves existing figure blocks', () => {
+    const leftRegion = baseRegion({
+      imageId: 'img-left',
+      bbox: rect(60, 100, 220, 160),
+      cues: { hasAxes: true },
+    });
+    const rightRegion = baseRegion({
+      imageId: 'img-right',
+      bbox: rect(332, 100, 220, 160),
+      cues: { hasAxes: true },
+    });
+
+    const blocks: CaptionInputBlock[] = [
+      // Existing figure block overlapping rightRegion: must reuse it instead of creating an ambiguity tie.
+      { id: 'blk-fig-right', type: 'figure', page: 1, text: '', rect: rect(332, 100, 220, 160), pageHeight: 792 },
+      captionBlock('cap-left', rect(60, 272, 220, 16), 'Figure 1. Left chart.'),
+      captionBlock('cap-right', rect(332, 272, 220, 16), 'Figure 2. Right chart.'),
+    ];
+
+    const results = understandVisualRegions(
+      [
+        { region: leftRegion, response: { description: 'Left series.' } },
+        { region: rightRegion, response: { description: 'Right series.' } },
+      ],
+      { blocks },
+    );
+
+    expect(results).toHaveLength(2);
+    expect(results[0]?.captionBlockId).toBe('cap-left');
+    expect(results[1]?.captionBlockId).toBe('cap-right');
+    expect(results[1]?.sourceBlockId).toBe('blk-fig-right');
+  });
+});
+
+describe('abstention boundaries and determinism', () => {
+  it('enforces exact readability boundaries and accumulates multiple abstention reasons', () => {
+    const exactOk = assessVisualReadability(
+      baseRegion({
+        widthPx: MIN_READABLE_LONG_EDGE_PX,
+        heightPx: MIN_READABLE_SHORT_EDGE_PX,
+        dpi: MIN_READABLE_DPI,
+        quality: {
+          contrast: MIN_READABLE_CONTRAST,
+          blurScore: MAX_READABLE_BLUR_SCORE,
+          ocrConfidence: MIN_READABLE_OCR_CONFIDENCE,
+          legible: true,
+        },
+      }),
+    );
+    expect(exactOk.readable).toBe(true);
+    expect(exactOk.reasons).toEqual([]);
+
+    const multiFail = assessVisualReadability(
+      baseRegion({
+        widthPx: MIN_READABLE_LONG_EDGE_PX - 1,
+        heightPx: MIN_READABLE_SHORT_EDGE_PX - 1,
+        dpi: MIN_READABLE_DPI - 1,
+        quality: {
+          contrast: MIN_READABLE_CONTRAST - 0.1,
+          blurScore: MAX_READABLE_BLUR_SCORE + 0.01,
+          ocrConfidence: MIN_READABLE_OCR_CONFIDENCE - 0.01,
+          legible: false,
+        },
+      }),
+    );
+    expect(multiFail.readable).toBe(false);
+    expect(multiFail.reasons).toEqual([
+      'low-resolution',
+      'low-dpi',
+      'illegible-content',
+      'low-contrast',
+      'blurry-image',
+      'low-ocr-confidence',
+    ]);
+  });
+
+  it('abstains on low vision confidence, missing description, or Vietnamese illegible prose', () => {
+    expect(
+      understandVisualRegion(baseRegion(), 'description: A chart.\nconfidence: 0.15').abstentionReasons,
+    ).toEqual(['low-vision-confidence']);
+
+    expect(
+      understandVisualRegion(baseRegion(), 'numbers: peak = 42\nconfidence: 0.8').abstentionReasons,
+    ).toEqual(['missing-description']);
+
+    expect(
+      understandVisualRegion(baseRegion(), 'description: Biểu đồ quá mờ không đọc được số liệu.')
+        .abstentionReasons,
+    ).toEqual(['illegible-content']);
+  });
+
+  it('never invents a description when called before a vision model responds', () => {
+    const result = understandVisualRegion(
+      baseRegion({
+        caption: 'Biểu đồ 1. Tăng trưởng theo quý.',
+        labels: ['25%', '50%'],
+      }),
+    );
+
+    expect(result.abstained).toBe(false);
+    expect(result.status).toBe('partial');
+    expect(result.kind).toBe('chart');
+    expect(result.description).toBeNull();
+    expect(result.visionRequest).not.toBeNull();
+  });
+
+  it('produces byte-identical deterministic outputs across repeated calls', () => {
+    const region = baseRegion({
+      imageId: 'img-det',
+      labels: ['10', '20', '30'],
+      axes: [{ orientation: 'y', ticks: [0, 10, 20, 30] }],
+    });
+    const response = {
+      description: 'Values rise from 10 to 30.',
+      series: [{ name: 'Metric', points: [{ x: 't0', y: 10 }, { x: 't1', y: 30 }] }],
+    };
+    const blocks = [captionBlock('cap-det', rect(60, 390, 400, 16), 'Figure 1. Deterministic test.')];
+
+    const first = understandVisualRegion(region, response, { blocks });
+    const second = understandVisualRegion(region, response, { blocks });
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+  });
+});
+
