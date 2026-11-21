@@ -94,7 +94,7 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | G13 | **P2** | Translation cache thông minh có version | Cache hit/miss, không trả bản dịch cũ. | ✅ `src/core/cache.ts` + 27 test: key = SHA-256(source, langs, provider, model, promptVersion, glossary), TTL rồi LRU, persist/restore có version |
 | G14 | **P2** | Auto route engine theo ngôn ngữ, độ dài, chi phí, privacy | Có rule/override và telemetry cục bộ. | ✅ \src/core/engine-router.ts\ + 15 test: chọn engine theo ngôn ngữ/chi phí/glossary/override, offline chặn tuyệt đối cloud, telemetry JSON |
 | G15 | **P2** | Import/export glossary và TM: CSV/TMX/TBX ở mức phù hợp | Đọc/ghi UTF-8 và báo lỗi schema rõ ràng. | ✅ \src/core/tm-exchange.ts\ + 14 test: RFC4180 CSV, TMX 1.4b, TBX-Basic UTF-8/BOM round-trip và báo lỗi kèm số dòng |
-| G16 | **P3** | Reviewer mode phân vai translator/editor/approver | Mỗi chỉnh sửa có trạng thái và audit log.  ⬜ |
+| G16 | **P3** | Reviewer mode phân vai translator/editor/approver | Mỗi chỉnh sửa có trạng thái và audit log. | ✅ \src/core/reviewer-mode.ts\ + 10 test: máy trạng thái 3 vai, chặn vượt quyền, diff theo từ và chuỗi SHA-256 trên \AuditLog\ |
 
 ### H. PDF editor, xuất file & công cụ tài liệu — 16 mục
 
