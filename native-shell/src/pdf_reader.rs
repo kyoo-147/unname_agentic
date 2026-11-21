@@ -183,6 +183,40 @@ pub struct PdfReader {
 
 impl EventEmitter<PdfReaderEvent> for PdfReader {}
 
+/// One rendered block with both language sides: the pair the pane draws, the id
+/// a chat citation names, and the two texts an export writes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReaderBlock {
+    /// Page-scoped id, `p<page>-r<rank>` with the same 1-based page and reading
+    /// rank a chat citation uses.
+    pub id: String,
+    /// The text the document prints.
+    pub source: String,
+    /// The translation, absent until the provider has answered for this block.
+    pub translation: Option<String>,
+}
+
+/// One page of the document with the blocks the reader holds for it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReaderPage {
+    /// 0-based position, as every page number inside the reader.
+    pub page: usize,
+    /// Reading order.
+    pub blocks: Vec<ReaderBlock>,
+}
+
+/// The pane's blocks of `page` (0-based) with both languages, each numbered
+/// `p<page+1>-r<rank>` so an exporter can name a block the chat already names.
+fn reader_page(page: usize, blocks: &[TextBlock]) -> ReaderPage {
+    let page_number = page + 1;
+    let blocks = blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| ReaderBlock { id: format!("p{page_number}-r{}", index + 1), source: block.source.clone(), translation: block.translated.clone() })
+        .collect();
+    ReaderPage { page, blocks }
+}
+
 impl PdfReader {
     /// The current page's source text, bounded for a chat prompt.
     pub fn document_context(&self) -> Option<(String, String)> {
@@ -194,6 +228,29 @@ impl PdfReader {
             .or_else(|| match &self.source { Source::Pdf(path) => path.file_stem().and_then(|stem| stem.to_str()).map(str::to_string), Source::Capture(_) => None })
             .unwrap_or_else(|| "PDF".to_string());
         Some((title, text.chars().take(6000).collect()))
+    }
+
+    /// The blocks of one 0-based page with both languages, or `None` when the
+    /// reader is not holding that page. Read-only: the pane and an export see
+    /// the same sources and translations.
+    pub fn page_blocks(&self, page: usize) -> Option<ReaderPage> {
+        self.held_pages().into_iter().find(|held| held.page == page)
+    }
+
+    /// Every page the reader holds, in page order: the document-level list an
+    /// export walks. The reader prepares one page at a time, so today this is the
+    /// page on screen; its blocks are the structures the pane renders.
+    pub fn document_pages(&self) -> Vec<ReaderPage> {
+        let mut pages = self.held_pages();
+        pages.sort_by_key(|page| page.page);
+        pages
+    }
+
+    fn held_pages(&self) -> Vec<ReaderPage> {
+        match &self.prepared {
+            Some(prepared) => vec![reader_page(usize::from(self.page), &prepared.frame.blocks)],
+            None => Vec::new(),
+        }
     }
 
     pub fn new(path: PathBuf, initial_page: u16, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -616,6 +673,31 @@ mod page_input_tests {
     fn clamps_to_the_document() {
         assert_eq!(parse_page_input("999", 4), Some(4));
         assert_eq!(parse_page_input("1", 4), Some(1));
+    }
+}
+
+#[cfg(test)]
+mod reader_block_tests {
+    use super::{ReaderBlock, reader_page};
+    use mirror_pdf_desktop::model::{BlockRect, TextBlock};
+
+    fn block(id: u64, source: &str, translated: Option<&str>) -> TextBlock {
+        TextBlock { id, source: source.into(), translated: translated.map(str::to_string), rect: BlockRect { x: 0., y: 0., width: 1., height: 1. }, background: None, font_size: 12., bold: false }
+    }
+
+    /// 翻译对: the accessor hands an export the same pair the pane draws, each
+    /// block named the way a chat citation names it.
+    #[test]
+    fn a_page_pairs_each_block_with_its_translation_and_a_page_scoped_id() {
+        let page = reader_page(2, &[block(4, "Revenue", Some("Doanh thu")), block(5, "Costs", None)]);
+        assert_eq!(page.page, 2);
+        assert_eq!(
+            page.blocks,
+            vec![
+                ReaderBlock { id: "p3-r1".into(), source: "Revenue".into(), translation: Some("Doanh thu".into()) },
+                ReaderBlock { id: "p3-r2".into(), source: "Costs".into(), translation: None },
+            ]
+        );
     }
 }
 /// 扫描页遮罩: the colour a block sits on, and how much of the region it covers.

@@ -41,6 +41,8 @@ test('leaves the browser print dialog alone when nothing is translated', async (
   await page.goto('/');
   await page.locator('#file-input').setInputFiles(resolve('tests/fixtures/mirror-field-notes.pdf'));
   await expect(page.locator('.page-pair')).toHaveCount(4);
+  await expect(page.locator('#status')).toContainText('Bản gốc đã sẵn sàng');
+  await page.locator('#pause').click();
 
   // With no translations the Ctrl/Cmd+P shortcut must not hijack the browser dialog:
   // the app falls through, so the status line keeps its untranslated message.

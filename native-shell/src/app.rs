@@ -2,7 +2,7 @@
 //! (see `sidebar.rs`) and the editor on the right, with the
 //! 64px top bar (breadcrumb title + save status) above the page.
 
-use crate::export_native::{ExportDocument, ExportFormat, export_document, suggested_name, write_export_path};
+use crate::export_native::{ExportBlock, ExportDocument, ExportFormat, export_document, suggested_name, write_export_path};
 use crate::input::{TextField, TextFieldEvent};
 use crate::settings::display_title;
 use crate::store::Entry;
@@ -271,6 +271,10 @@ pub struct Workspace {
     pub search_open: bool,
     pub status: SaveStatus,
     pub row_menu: Option<RowMenu>,
+    /// 导出文档: the open format menu, positioned under the export button.
+    pub export_menu: Option<Point<Pixels>>,
+    /// Last-frame bounds of the header export button, to hang its menu from.
+    pub export_btn_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     pub rename: Option<Rename>,
     /// Last-frame bounds of each row's "…" button, to hang its menu from.
     pub more_bounds: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
@@ -449,6 +453,8 @@ impl Workspace {
             search_open: false,
             status: SaveStatus::Idle,
             row_menu: None,
+            export_menu: None,
+            export_btn_bounds: Rc::new(Cell::new(None)),
             rename: None,
             more_bounds: Default::default(),
             list_scroll: ScrollHandle::new(),
@@ -589,15 +595,16 @@ impl Workspace {
         self.open_import(window, cx);
     }
 
-    /// 导出文档: ask the system save panel where, then write the open document in
-    /// the format the chosen extension names. The panel itself confirms a
-    /// replacement, so the write may replace the file it returned.
-    pub fn export_open_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// 导出文档: write the open document in the chosen form. The save panel is
+    /// asked where; an existing file is refused, never replaced, because this is
+    /// the one control that writes outside the library.
+    pub fn export_document_as(&mut self, format: ExportFormat, window: &mut Window, cx: &mut Context<Self>) {
+        self.export_menu = None;
         let Some(document) = self.export_snapshot(cx) else {
             self.show_toast_kind(ToastKind::Info, crate::i18n::tr3("没有可导出的文字。打开一份 PDF 后再导出。", "There is no text to export yet. Open a PDF first.", "Chưa có văn bản để xuất. Hãy mở một PDF trước."), cx);
             return;
         };
-        let suggested = suggested_name(&document.title, ExportFormat::Markdown);
+        let suggested = suggested_name(&document.title, format);
         // A scripted devtools run answers the panel through `take_pick`, exactly
         // as 保存原始 PDF does.
         let picked = crate::devtools::take_pick().and_then(|paths| paths.into_iter().next());
@@ -609,8 +616,8 @@ impl Workspace {
             }) else {
                 return;
             };
-            let content = export_document(&document, ExportFormat::from_path(&path));
-            let write = cx.background_executor().spawn(async move { write_export_path(&path, &content, true) });
+            let content = export_document(&document, format);
+            let write = cx.background_executor().spawn(async move { write_export_path(&path, &content, false) });
             let result = write.await;
             let _ = this.update(cx, |workspace, cx| match result {
                 Ok(path) => workspace.show_toast(&crate::i18n::tr3_fill("已导出 {}", "Exported {}", "Đã xuất {}", path.display()), cx),
@@ -620,17 +627,58 @@ impl Workspace {
         .detach();
     }
 
-    /// The open document as the export engine takes it: the record's title, and
-    /// the text the reader is showing, or the record's body when no reader is
-    /// open. The reader shares its page text through `document_context` (the
-    /// bounded view the chat gets); paired blocks stay inside the reader, so this
-    /// app-level export carries the page's source text.
+    /// The exported document: the record's title and the reader's blocks with
+    /// both languages, so a saved file carries the translations the pane is
+    /// showing. Without a prepared page it falls back to the page text, then to
+    /// the record's body, which is all a document nobody translated has.
     fn export_snapshot(&self, cx: &App) -> Option<ExportDocument> {
         let entry = self.current.as_ref().and_then(|id| self.entries.iter().find(|entry| &entry.id == id));
         let title = entry.map(|entry| display_title(&entry.title)).unwrap_or_else(|| crate::i18n::tr3("文档", "Document", "Tài liệu").to_string());
-        let text = self.pdf_reader.as_ref().and_then(|reader| reader.read(cx).document_context()).map(|(_, text)| text).or_else(|| entry.map(|entry| entry.body.clone())).unwrap_or_default();
+        let reader = self.pdf_reader.as_ref().map(|reader| reader.read(cx));
+        if let Some(reader) = &reader {
+            let pages: Vec<(usize, Vec<ExportBlock>)> = reader
+                .document_pages()
+                .into_iter()
+                .map(|page| (page.page, page.blocks.into_iter().map(|block| ExportBlock::text(block.id, block.source, block.translation)).collect()))
+                .collect();
+            if !pages.is_empty() {
+                return Some(ExportDocument::from_pages(title, pages));
+            }
+        }
+        let text = reader.and_then(|reader| reader.document_context()).map(|(_, text)| text).or_else(|| entry.map(|entry| entry.body.clone())).unwrap_or_default();
         let document = ExportDocument::from_text(title, &text);
         (!document.is_empty()).then_some(document)
+    }
+
+    /// 导出格式: the small format menu under the export button. Each row picks a
+    /// form; the save panel still asks for the path.
+    fn render_export_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let origin = self.export_menu?;
+        let anchor = self.export_btn_bounds.clone();
+        let menu = crate::ui::popover()
+            .id("export-menu")
+            .occlude()
+            .w(px(180.))
+            .py(px(crate::ui::MENU_PAD_Y))
+            .on_mouse_down_out(cx.listener(move |w, ev: &MouseDownEvent, _, cx| {
+                // A press on the button itself: its click closes the menu.
+                if anchor.get().is_some_and(|bounds| bounds.contains(&ev.position)) {
+                    return;
+                }
+                w.export_menu = None;
+                cx.notify();
+            }))
+            .child(Self::export_menu_row(cx, "export-markdown", ExportFormat::Markdown))
+            .child(Self::export_menu_row(cx, "export-text", ExportFormat::Text))
+            .child(Self::export_menu_row(cx, "export-json", ExportFormat::Json));
+        Some(deferred(anchored().anchor(Corner::TopRight).position(origin).snap_to_window_with_margin(px(8.)).child(menu)).with_priority(2).into_any_element())
+    }
+
+    fn export_menu_row(cx: &mut Context<Self>, key: &'static str, format: ExportFormat) -> impl IntoElement {
+        let group: SharedString = SharedString::from(key);
+        crate::ui::menu_row(key, group.clone())
+            .child(div().flex_1().min_w_0().child(crate::ui::menu_label(format.label(), group, gpui::white())))
+            .on_click(cx.listener(move |w, _, window, cx| w.export_document_as(format, window, cx)))
     }
 
     pub fn open_capture_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -675,11 +723,11 @@ impl Workspace {
         let picker = self.capture_picker.as_ref()?;
         let mut list = div().id("capture-source-list").max_h(px(320.)).overflow_y_scroll().flex().flex_col().gap(px(4.));
         if picker.loading {
-            list = list.child(div().py(px(28.)).text_center().text_color(Theme::text_caption()).child("Finding open windows and displays…"));
+            list = list.child(div().py(px(28.)).text_center().text_color(Theme::text_caption()).child(crate::i18n::tr3("正在查找打开的窗口和显示器…", "Finding open windows and displays…", "Đang tìm cửa sổ và màn hình đang mở…")));
         } else if let Some(error) = &picker.error {
             list = list.child(div().py(px(20.)).text_size(px(13.)).text_color(Theme::danger()).child(error.clone()));
         } else if picker.sources.is_empty() {
-            list = list.child(div().py(px(28.)).text_center().text_color(Theme::text_caption()).child("No capture sources found. Open a document window, then refresh."));
+            list = list.child(div().py(px(28.)).text_center().text_color(Theme::text_caption()).child(crate::i18n::tr3("未找到可捕获的来源。请打开一个文档窗口，然后刷新。", "No capture sources found. Open a document window, then refresh.", "Không tìm thấy nguồn nào. Hãy mở một cửa sổ tài liệu rồi làm mới.")));
         } else {
             for (i, source) in picker.sources.iter().enumerate() {
                 let selected = source.clone();
@@ -1085,6 +1133,7 @@ impl Workspace {
             crumbs.push(sep());
         }
         let record_more = self.more_btn_bounds.clone();
+        let record_export = self.export_btn_bounds.clone();
         div()
             .id("top-bar").relative()
             .h(px(HEADER_H))
@@ -1169,12 +1218,16 @@ impl Workspace {
                     .items_center()
                     .when(self.current.is_some() || self.live_source.is_some(), |d| {
                         d.child(
-                            // 导出文档: the save panel decides the path and the
-                            // extension decides the format, so one button is the
-                            // whole control.
+                            // 导出文档: the button opens a small format menu, and the
+                            // save panel still decides the path.
                             seg("doc-export", "export")
+                                .relative()
                                 .tip(crate::i18n::tr3("导出文档", "Export document", "Xuất tài liệu"), None)
-                                .on_click(cx.listener(|w, _, window, cx| w.export_open_document(window, cx))),
+                                .child(canvas(move |b, _, _| record_export.set(Some(b)), |_, _, _, _| {}).absolute().inset_0())
+                                .on_click(cx.listener(|w, _, _, cx| {
+                                    w.export_menu = if w.export_menu.is_some() { None } else { w.export_btn_bounds.get().map(|b| point(b.right(), b.bottom() + px(4.))) };
+                                    cx.notify();
+                                })),
                         )
                         .child(
                             // No tooltip while its dropdown is open; the menu hangs
@@ -1223,6 +1276,7 @@ impl Render for Workspace {
         let trash_menu = self.render_trash_menu(cx);
         let home_menus = self.render_home_menus(cx);
         let theme_menu = self.render_theme_menu(cx);
+        let export_menu = self.render_export_menu(cx);
         let toast = self.render_toast(window);
         let main = match self.view {
             View::Doc => div()

@@ -26,6 +26,9 @@ import { documentTitle, printHtml, PrintTimeoutError, PrintUnavailableError } fr
 import { buildPdf, canvasToPng, type PdfPageSource } from './export/pdf';
 import { saveBlob } from './export/download';
 import { estimateCost, formatUsd } from './core/pricing';
+import {
+  isReadingMode, layoutFor, positionAfterModeChange, type ModeChange, type ReadingLayout, type ReadingMode,
+} from './core/reading-modes';
 
 initLocale();
 
@@ -36,12 +39,16 @@ const icon = (name: string) => {
 const root = document.querySelector<HTMLDivElement>('#app')!;
 const targetOptions = (selected?: string) => SUPPORTED_TARGETS.map(target => `<option value="${target.code}"${target.code===selected?' selected':''}>${target.nativeName}</option>`).join('');
 const localeSwitcher = () => `<div class="locale-switch" role="group" data-i18n-aria-label="languageSwitcher" aria-label="Language">${LOCALES.map(locale => `<button type="button" data-locale="${locale}" aria-pressed="${locale === getLocale()}">${localeLabel(locale)}</button>`).join('')}</div>`;
+/** localStorage key for the reading-mode choice; the `mirror.` prefix matches the other settings keys. */
+const READING_MODE_KEY = 'mirror.reading-mode';
+/** Mode a fresh profile starts in: the two-column view the reader has always shown. */
+const DEFAULT_READING_MODE: ReadingMode = 'side-by-side';
 let settings: TranslationSettings = { ...defaultSettings, glossary:{} };
 
 root.innerHTML = `<aside class="sidebar"><a class="brand" href="#" data-i18n-aria-label="libraryAria" aria-label="Mirror library">${icon('book')}<span>mirror<span class="brand-dot">.</span></span></a><button class="open-button" data-open>${icon('plus')} <span data-i18n="openPdf">Open PDF</span> <kbd>Ctrl O</kbd></button><div class="nav-label" data-i18n="workspaceLabel">YOUR WORKSPACE</div><button class="nav-item active" id="library-nav">${icon('book')} <span data-i18n="myLibrary">My library</span> <span id="library-count">0</span></button><div class="sidebar-note"><span class="small-orbit"></span><p><span data-i18n="sidebarNoteLead">A different language.</span><br><span data-i18n="sidebarNoteTail">The same perspective.</span></p></div><button class="nav-item settings-button" id="settings-open">${icon('settings')} <span data-i18n="settingsNav">Translation settings</span></button><div class="privacy-note"><span data-i18n="privacyLead">Documents stay in this session.</span><br><span data-i18n="privacyTail">Cloud translation is opt-in.</span></div></aside>
 <main id="main-content" tabindex="-1"><header class="topbar"><div class="breadcrumb"><span data-i18n="workspace">Workspace</span>${icon('arrow')}<strong id="breadcrumb">My library</strong></div>${localeSwitcher()}<span class="local-badge"><i></i> <span data-i18n="localFirst">Local-first reading</span></span></header>
 <section id="library" class="library"><div class="library-heading"><div><div class="eyebrow" data-i18n="libraryEyebrow">A LITTLE CLOSER TO UNDERSTANDING</div><h1 data-i18n="libraryTitle">Your reading room.</h1><p data-i18n="libraryLead">Keep the original. Find the meaning beside it.</p></div><button class="primary" data-open>${icon('plus')} <span data-i18n="importDocument">Import document</span></button></div><div class="library-section-heading"><h2><span data-i18n="allDocuments" style="color:inherit;font-size:inherit;margin-left:0">All documents</span> <span id="document-count">0</span></h2><span data-i18n="recentlyOpened">Recently opened</span></div><div id="documents" class="documents"></div><button class="drop-zone" data-open>${icon('upload')}<strong data-i18n="dropTitle">Your next good read belongs here</strong><span data-i18n="dropHint">Drop a PDF, or browse your files</span><small data-i18n="dropMeta">PDF documents · read locally · no account needed</small></button><div class="library-footnote"><span data-i18n="stepOpen">01 — OPEN</span><span data-i18n="stepRead">02 — READ SIDE BY SIDE</span><span data-i18n="stepUnderstand">03 — UNDERSTAND MORE</span></div></section>
-<section id="reader" hidden><div class="reader-toolbar"><div class="document-heading"><div class="document-title" id="document-title"></div><span id="detected-language" class="detected-language" aria-live="polite" hidden></span></div><div class="toolbar-group reader-nav"><button id="prev-page" type="button" data-i18n-aria-label="previousPage" aria-label="${t('previousPage')}" disabled>‹</button><input id="page-input" class="page-input" type="number" min="1" value="1" inputmode="numeric" data-i18n-aria-label="pageInputAria" aria-label="${t('pageInputAria')}"><span class="page-total">/ <b id="page-total">0</b></span><button id="next-page" type="button" data-i18n-aria-label="nextPage" aria-label="${t('nextPage')}" disabled>›</button></div><div class="toolbar-group view-actions"><button id="fit-width" type="button" data-i18n="fitWidth">Fit width</button><button id="fit-page" type="button" data-i18n="fitPage">Fit page</button><button id="rotate" type="button" data-i18n="rotatePage">Rotate page</button><button id="outline-toggle" type="button" data-i18n="outlineToggle" aria-controls="reader-panel" aria-expanded="false">Outline</button><button id="search-toggle" type="button" data-i18n="searchToggle" aria-controls="reader-panel" aria-expanded="false">Search</button><button id="thumbnails-toggle" type="button" data-i18n="thumbnailsToggle" aria-controls="thumbnails" aria-expanded="false">Thumbnails</button></div><div class="toolbar-actions"><label class="language-label"><span data-i18n="targetLanguageLabel">To</span> <select id="target-language" data-i18n-aria-label="targetLanguageAria" aria-label="${t('targetLanguageAria')}">${targetOptions(settings.targetLanguage)}</select></label><button id="zoom-out" data-i18n-aria-label="zoomOut" aria-label="${t('zoomOut')}">−</button><output id="zoom-label">100%</output><button id="zoom-in" data-i18n-aria-label="zoomIn" aria-label="${t('zoomIn')}">+</button><button id="pause">Pause</button><button id="full">Translate all</button><button id="retry" data-i18n="retry">Retry</button><button id="export-bilingual" data-i18n="exportBilingual">Export bilingual text</button><button id="export-print" data-i18n="exportPrint">Print / Save as PDF</button><button id="export-pdf" data-i18n="exportPdf">Download real PDF</button><a id="original-link" target="_blank" rel="noopener" hidden><span data-i18n="openOriginal">Open original ↗</span></a></div></div><div class="pane-headings"><span><span data-i18n="originalHeading">ORIGINAL</span> <small data-i18n="originalNote">Unchanged source</small></span><span><span data-i18n="translatedHeading">TRANSLATED MIRROR</span> <small id="provider-label" data-i18n="providerInitial">Local · Vietnamese</small></span></div><div class="reader-body"><aside id="reader-panel" class="reader-panel reader-panel--overlay" data-i18n-aria-label="readerPanelAria" aria-label="${t('readerPanelAria')}" hidden></aside><div id="reading-scroll" class="reading-scroll"><div id="pages"></div></div><div id="thumbnails" class="reader-thumbstrip reader-thumbstrip--overlay" data-i18n-aria-label="thumbnailsToggle" aria-label="${t('thumbnailsToggle')}" hidden></div></div><div class="reader-bottom"><span id="page-status" data-i18n="pageInitial">Page 1</span><span><span data-i18n="linkedPages">Linked pages</span> <span class="linked-symbol">↔</span> <span data-i18n="selectRegionHint">Select any text region to compare</span></span><button id="reset-split" data-i18n="resetSplit">Reset split</button></div></section>
+<section id="reader" hidden><div class="reader-toolbar"><div class="document-heading"><div class="document-title" id="document-title"></div><span id="detected-language" class="detected-language" aria-live="polite" hidden></span></div><div class="toolbar-group reader-nav"><button id="prev-page" type="button" data-i18n-aria-label="previousPage" aria-label="${t('previousPage')}" disabled>‹</button><input id="page-input" class="page-input" type="number" min="1" value="1" inputmode="numeric" data-i18n-aria-label="pageInputAria" aria-label="${t('pageInputAria')}"><span class="page-total">/ <b id="page-total">0</b></span><button id="next-page" type="button" data-i18n-aria-label="nextPage" aria-label="${t('nextPage')}" disabled>›</button></div><div class="toolbar-group view-actions"><button id="fit-width" type="button" data-i18n="fitWidth">Fit width</button><button id="fit-page" type="button" data-i18n="fitPage">Fit page</button><button id="rotate" type="button" data-i18n="rotatePage">Rotate page</button><button id="outline-toggle" type="button" data-i18n="outlineToggle" aria-controls="reader-panel" aria-expanded="false">Outline</button><button id="search-toggle" type="button" data-i18n="searchToggle" aria-controls="reader-panel" aria-expanded="false">Search</button><button id="thumbnails-toggle" type="button" data-i18n="thumbnailsToggle" aria-controls="thumbnails" aria-expanded="false">Thumbnails</button></div><div class="toolbar-group reading-modes" id="reading-mode-switch" role="group" data-i18n-aria-label="readingMode" aria-label="Reading mode"><button type="button" id="reading-mode-side-by-side" data-reading-mode="side-by-side" data-i18n="readingModeSideBySide" aria-pressed="false">Side by side</button><button type="button" id="reading-mode-overlay" data-reading-mode="overlay" data-i18n="readingModeOverlay" aria-pressed="false">Overlay</button><button type="button" id="reading-mode-interleaved" data-reading-mode="interleaved" data-i18n="readingModeInterleaved" aria-pressed="false">Interleaved</button><button type="button" id="reading-mode-reflow" data-reading-mode="reflow" data-i18n="readingModeReflow" aria-pressed="false">Reflow</button></div><div class="toolbar-actions"><label class="language-label"><span data-i18n="targetLanguageLabel">To</span> <select id="target-language" data-i18n-aria-label="targetLanguageAria" aria-label="${t('targetLanguageAria')}">${targetOptions(settings.targetLanguage)}</select></label><button id="zoom-out" data-i18n-aria-label="zoomOut" aria-label="${t('zoomOut')}">−</button><output id="zoom-label">100%</output><button id="zoom-in" data-i18n-aria-label="zoomIn" aria-label="${t('zoomIn')}">+</button><button id="pause">Pause</button><button id="full">Translate all</button><button id="retry" data-i18n="retry">Retry</button><button id="export-bilingual" data-i18n="exportBilingual">Export bilingual text</button><button id="export-print" data-i18n="exportPrint">Print / Save as PDF</button><button id="export-pdf" data-i18n="exportPdf">Download real PDF</button><a id="original-link" target="_blank" rel="noopener" hidden><span data-i18n="openOriginal">Open original ↗</span></a></div></div><div class="pane-headings"><span><span data-i18n="originalHeading">ORIGINAL</span> <small data-i18n="originalNote">Unchanged source</small></span><span><span data-i18n="translatedHeading">TRANSLATED MIRROR</span> <small id="provider-label" data-i18n="providerInitial">Local · Vietnamese</small></span></div><div class="reader-body"><aside id="reader-panel" class="reader-panel reader-panel--overlay" data-i18n-aria-label="readerPanelAria" aria-label="${t('readerPanelAria')}" hidden></aside><div id="reading-scroll" class="reading-scroll"><div id="pages"></div></div><div id="thumbnails" class="reader-thumbstrip reader-thumbstrip--overlay" data-i18n-aria-label="thumbnailsToggle" aria-label="${t('thumbnailsToggle')}" hidden></div></div><div class="reader-bottom"><span id="page-status" data-i18n="pageInitial">Page 1</span><span><span data-i18n="linkedPages">Linked pages</span> <span class="linked-symbol">↔</span> <span data-i18n="selectRegionHint">Select any text region to compare</span></span><button id="reset-split" data-i18n="resetSplit">Reset split</button></div></section>
 <div class="status-bar" id="status" role="status" aria-live="polite" aria-atomic="true" data-i18n="ready">Ready when you are.</div></main>
 <input type="file" id="file-input" accept="application/pdf,.pdf" hidden multiple>
 <dialog id="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1"><form id="settings-form"><div class="dialog-heading"><div><span class="eyebrow" data-i18n="settingsEyebrow">MAKE IT YOURS</span><h2 id="settings-title" data-i18n="translationSettings">Translation settings</h2></div><button type="button" id="settings-close" data-i18n-aria-label="closeSettings" aria-label="Close settings">${icon('close')}</button></div>${localeSwitcher()}<p class="dialog-description" data-i18n="settingsDescription">Only extracted text is sent to your chosen provider. Your PDF stays here. Credentials are kept in memory, not saved.</p><label><span data-i18n="providerLabel">Provider</span><select name="provider"><option value="local" data-i18n="providerLocal">Local / Ollama (OpenAI-compatible)</option><option value="google" data-i18n="providerGoogle">Google Cloud Translation</option><option value="deepl" data-i18n="providerDeepl">DeepL</option><option value="openai" data-i18n="providerOpenai">OpenAI-compatible API</option></select></label><label><span data-i18n="apiEndpoint">API endpoint</span><input name="endpoint" type="url" placeholder="http://127.0.0.1:11434/v1" required></label><label><span data-i18n="model">Model</span><input name="model" autocomplete="off"></label><div class="form-row"><label><span data-i18n="sourceLanguage">Source language</span><select name="sourceLanguage"><option value="auto" data-i18n="sourceAuto">Detect automatically</option>${targetOptions()}</select></label><label><span data-i18n="targetLanguage">Target language</span><select name="targetLanguage">${targetOptions()}</select></label></div><label><span data-i18n="apiKey">API key</span><input name="apiKey" type="password" autocomplete="off" data-i18n-placeholder="apiKeyPlaceholder" placeholder="Not needed for a local server"></label><label class="glossary-field"><span data-i18n="glossaryLabel">Glossary</span><textarea name="glossary" rows="5" spellcheck="false" data-i18n-placeholder="glossaryPlaceholder" placeholder="transformer = bộ biến đổi"></textarea></label><p class="settings-help" data-i18n="glossaryHelp">One term per line as "source = translation". Up to 200 terms.</p><p class="settings-help" data-i18n="glossaryProviderHint">Google and DeepL do not accept a custom glossary.</p><p id="glossary-status" class="glossary-status" role="status" aria-live="polite"></p><label class="consent"><input name="allowCloud" type="checkbox"><span data-i18n="cloudConsent">I allow extracted document text to be sent to the selected cloud provider. Provider charges may apply.</span></label><p class="settings-help" data-i18n="settingsHelp">Local endpoints must use localhost. If the provider is unavailable, the original stays readable; no substitute translation is invented.</p><button class="primary" type="submit" data-i18n="applySettings">Apply & translate visible pages</button></form></dialog>
@@ -98,6 +105,7 @@ let observer: IntersectionObserver | null = null;
 let pageNumber = 1, pageTotal = 0;
 let pageSize = { width:612, height:792 };
 let readingPosition = { page:1, fraction:0 };
+let readingMode: ReadingMode = readReadingMode();
 let statusView: { text: () => string; error: boolean } = { text: () => t('ready'), error: false };
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let scrollTimer: ReturnType<typeof setTimeout> | undefined;
@@ -415,8 +423,8 @@ function applyScale() {
 function applyFit(mode: 'width'|'page') {
   fit=mode;
   const scroll=$('reading-scroll');
-  const contentWidth=Math.max(240,scroll.clientWidth-44);
-  const paneWidth=Math.max(120,contentWidth*split/100-9);
+  // The mode decides how wide the pane carrying the page is, so fit follows the same planner.
+  const paneWidth=readingPaneWidth();
   const paneHeight=Math.max(160,scroll.clientHeight-80);
   const rotated=rotatePageSize(pageSize,rotation);
   const naturalHeight=paneWidth*rotated.height/Math.max(1,rotated.width);
@@ -436,6 +444,100 @@ function scrollToPage(number: number,fraction = 0) {
 function flashPage(number: number) {
   const row=pageNodes.get(number); if(!row) return;
   row.classList.add('is-search-hit'); setTimeout(()=>row.classList.remove('is-search-hit'),1600);
+}
+
+// --- Reading modes (backlog item L06) -----------------------------------------
+//
+// The four modes come from src/core/reading-modes.ts. The planner decides the pane widths the
+// reader fits a page into and converts a reading position between modes; this file owns the DOM
+// class that gives each page pair its geometry and the toolbar control that picks the mode.
+
+/** Restores the saved reading mode; an unknown or unreadable value falls back to the default. */
+function readReadingMode(): ReadingMode {
+  const store=storage(); if(!store) return DEFAULT_READING_MODE;
+  try { const saved=store.getItem(READING_MODE_KEY); return isReadingMode(saved)?saved:DEFAULT_READING_MODE; } catch { return DEFAULT_READING_MODE; }
+}
+/** Persists the reading mode next to the other `mirror.` settings. */
+function saveReadingMode(mode: ReadingMode): void {
+  const store=storage(); if(!store) return;
+  try { store.setItem(READING_MODE_KEY,mode); } catch { /* blocked storage keeps the choice for this session */ }
+}
+/** The page's width divided by its height after rotation, which calibrates one page in the planner. */
+function currentPageAspect(): number {
+  const size=rotatePageSize(pageSize,rotation);
+  return size.width>0&&size.height>0?size.width/size.height:612/792;
+}
+/** Width #pages gives its children inside the reading view, matching its 22 px side padding. */
+function readingContentWidth(): number { return Math.max(240,$('reading-scroll').clientWidth-44); }
+/** The planner layout for the current mode at a viewport, in reading-view pixels. */
+function readingLayout(width: number,height: number): ReadingLayout {
+  return layoutFor(readingMode,{ width:Math.max(1,width), height:Math.max(1,height) },currentPageAspect());
+}
+/**
+ * Width of the pane that carries the page, in reading-view pixels. Side-by-side keeps the
+ * reader's splitter position; the other modes ask the planner for the pane they give the page.
+ */
+function readingPaneWidth(): number {
+  const contentWidth=readingContentWidth();
+  if(readingMode==='side-by-side') return Math.max(120,contentWidth*split/100-9);
+  try {
+    const layout=readingLayout(contentWidth,Math.max(1,$('reading-scroll').clientHeight));
+    const pane=layout.panes.find(candidate=>candidate.role==='translation')??layout.panes[0];
+    if(pane&&pane.width>0) return Math.max(120,pane.width);
+  } catch { /* a hidden reading view has no geometry; the full content width stands in */ }
+  return Math.max(120,contentWidth);
+}
+function readingModeButtons(): HTMLButtonElement[] {
+  return [...$('reading-mode-switch').querySelectorAll<HTMLButtonElement>('[data-reading-mode]')];
+}
+/** Applies the current mode to the reading surface: geometry class, planner sizes and toolbar state. */
+function refreshReadingModeUi(): void {
+  const pages=$('pages'), scroll=$('reading-scroll');
+  pages.dataset.readingMode=readingMode; scroll.dataset.readingMode=readingMode;
+  for(const mode of ['side-by-side','overlay','interleaved','reflow'] as const) pages.classList.toggle(`reading-mode--${mode}`,readingMode===mode);
+  for(const button of readingModeButtons()) button.setAttribute('aria-pressed',String(button.dataset.readingMode===readingMode));
+  if(!(scroll.clientWidth>0)) return;
+  try {
+    // Publish the planner's own rail width and overlay opacity, so CSS and the planner agree.
+    const layout=readingLayout(readingContentWidth(),scroll.clientHeight);
+    const rail=layout.panes.find(pane=>pane.role==='source')?.width;
+    if(readingMode==='reflow'&&rail!==undefined) pages.style.setProperty('--reading-rail',`${rail}px`);
+    const opacity=layout.overlays[0]?.opacity;
+    if(layout.mode==='overlay'&&opacity!==undefined) pages.style.setProperty('--reading-overlay-opacity',String(opacity));
+  } catch { /* a transient layout publishes no sizes; CSS keeps its defaults */ }
+}
+/** The live reading position, taken from the real scroll offset instead of the debounced state. */
+function readingPositionNow(): { page:number; fraction:number } {
+  const rows=[...pageNodes.entries()].map(([page,element])=>({ page,top:element.offsetTop,height:element.offsetHeight }));
+  const scroll=$('reading-scroll');
+  if(!rows.length) return readingPosition;
+  return { page:pageForScroll(rows,scroll.scrollTop), fraction:readingFraction(rows,scroll.scrollTop) };
+}
+/**
+ * Switches how the original and the translation share the reading view.
+ *
+ * The page and the progress inside it are the invariant: positionAfterModeChange maps them into
+ * the mode being entered, and scrollToPage restores that place on the real rows. The choice is
+ * persisted with the other `mirror.` settings, so a reload puts the reader back in it.
+ */
+function setReadingMode(mode: ReadingMode,options: { restoreScroll?: boolean } = {}): void {
+  if(!isReadingMode(mode)) return;
+  const previous=readingMode;
+  const scroll=$('reading-scroll');
+  const position=readingPositionNow();
+  let change: ModeChange | null = null;
+  if(mode!==previous&&pdf&&scroll.clientWidth>0&&scroll.clientHeight>0) {
+    try {
+      change=positionAfterModeChange(previous,mode,{ page:position.page, progress:position.fraction },{
+        viewport: { width:readingContentWidth(), height:scroll.clientHeight },
+        pageAspect: currentPageAspect(),
+      });
+    } catch { change=null; /* a transient layout must not strand the reader */ }
+  }
+  readingMode=mode; saveReadingMode(mode); refreshReadingModeUi();
+  // The fit follows the pane the mode gives the page; a manual zoom stays where the reader left it.
+  if(fit==='width'||fit==='page') applyFit(fit); else applyScale();
+  if(change&&options.restoreScroll!==false) scrollToPage(change.page,change.progress);
 }
 
 function updateLibrary() {
@@ -490,6 +592,23 @@ $('outline-toggle').addEventListener('click',()=>{ panelKind==='outline'?closePa
 $('search-toggle').addEventListener('click',()=>{ panelKind==='search'?(searchInput?.focus()):openPanel('search'); });
 $('thumbnails-toggle').addEventListener('click',()=>toggleThumbnails());
 $('rotate').addEventListener('click',()=>void rotateView());
+// The segmented reading-mode control: real buttons, so Enter and Space activate them and Tab
+// walks them in order. Arrow keys only move focus inside the group, as in a toolbar.
+$('reading-mode-switch').addEventListener('click',event=>{
+  const button=(event.target as HTMLElement|null)?.closest<HTMLButtonElement>('[data-reading-mode]');
+  const mode=button?.dataset.readingMode;
+  if(isReadingMode(mode)) setReadingMode(mode);
+});
+$('reading-mode-switch').addEventListener('keydown',event=>{
+  if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+  const buttons=readingModeButtons();
+  const index=buttons.indexOf(document.activeElement as HTMLButtonElement);
+  if(index<0) return;
+  event.preventDefault();
+  const last=buttons[buttons.length-1];
+  const next=event.key==='Home'?buttons[0]:event.key==='End'?last:buttons[(index+(event.key==='ArrowLeft'?-1:1)+buttons.length)%buttons.length];
+  next?.focus();
+});
 $('zoom-in').addEventListener('click',()=>{fit='actual';zoom=Math.min(3,zoom+.1);applyScale();});
 $('zoom-out').addEventListener('click',()=>{fit='actual';zoom=Math.max(.55,zoom-.1);applyScale();});
 $('pause').addEventListener('click',()=>{paused=!paused;if(paused)translationQueue.pause();else translationQueue.resume();refreshTransportLabels();status(paused?'statusPaused':'statusResumed');});

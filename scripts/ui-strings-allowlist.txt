@@ -1,0 +1,19 @@
+# Accepted user-facing English literals in the native UI.
+#
+# Read by scripts/check-ui-strings.mjs. Every non-comment line is:
+#
+#     <path>:<literal>  # <reason>
+#
+# The literal is matched on its decoded text (what Rust reads out of the source)
+# and surrounding whitespace is ignored. The reason is mandatory: an entry
+# without one is a configuration error, so an exception cannot be added without
+# saying why. Prefer translating through crate::i18n::tr3(zh, en, vi); use this
+# file only when the string genuinely is not product copy.
+#
+# Stale entries (matching nothing) are reported as warnings so they can be
+# removed once the code they excused changes.
+
+# Developer-only layout preview overlay, enabled by PDF_WORKSPACE_LAYOUT_PREVIEW=1
+# for screenshot/layout work. It is not rendered in the shipped UI, so it carries
+# no translation: the overlay is addressed to whoever runs the preview mode.
+native-shell/src/home.rs:Layout preview  # layout-preview mode only (PDF_WORKSPACE_LAYOUT_PREVIEW=1), not the shipped UI
