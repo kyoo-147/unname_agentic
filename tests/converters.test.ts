@@ -923,4 +923,16 @@ describe('E12 corrupted archives and malformed input errors', () => {
     expect(converterErrorCode(() => convertImage(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xd9])))).toBe('malformed-image');
     expect(converterErrorCode(() => convertImage(new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])))).toBe('malformed-image');
   });
+
+  it('rejects ZIP archives that exceed entry and XML safety limits', () => {
+    const tooManyEntries = buildZip(
+      Array.from({ length: 4097 }, (_, index) => ({ name: `empty/${index}.xml`, data: '' })),
+    );
+    expect(converterErrorCode(() => parseZip(tooManyEntries))).toBe('corrupted-archive');
+
+    const oversizedXml = buildZip([
+      { name: 'word/document.xml', data: `<w:document>${'x'.repeat(16 * 1024 * 1024)}</w:document>` },
+    ]);
+    expect(converterErrorCode(() => convertDocx(oversizedXml))).toBe('malformed-xml');
+  });
 });

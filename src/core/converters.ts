@@ -136,6 +136,9 @@ const MARGIN_Y = 54;
 const BLOCK_GAP = 10;
 const EMU_PER_POINT = 12700;
 const MAX_UNCOMPRESSED_ENTRY_BYTES = 128 * 1024 * 1024;
+const MAX_ZIP_ENTRIES = 4096;
+const MAX_ZIP_UNCOMPRESSED_BYTES = 256 * 1024 * 1024;
+const MAX_XML_CHARS = 16 * 1024 * 1024;
 
 // --- Public entry points ---------------------------------------------------
 
@@ -628,6 +631,9 @@ export function parseZip(
   if (totalEntries === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) {
     throw new ConverterError('corrupted-archive', 'ZIP64 archives are not supported.');
   }
+  if (totalEntries > MAX_ZIP_ENTRIES) {
+    throw new ConverterError('corrupted-archive', `ZIP archive contains ${totalEntries} entries, above the ${MAX_ZIP_ENTRIES}-entry limit.`);
+  }
   if (cdOffset > eocdOffset || cdOffset + cdSize > eocdOffset) {
     throw new ConverterError('corrupted-archive', 'ZIP central directory bounds extend past End of Central Directory.');
   }
@@ -637,6 +643,7 @@ export function parseZip(
   const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
   const cdEnd = cdOffset + cdSize;
   let cursor = cdOffset;
+  let totalUncompressedBytes = 0;
 
   for (let i = 0; i < totalEntries; i += 1) {
     if (cursor + 46 > cdEnd) {
@@ -670,6 +677,10 @@ export function parseZip(
     }
     if (uncompressedSize > MAX_UNCOMPRESSED_ENTRY_BYTES) {
       throw new ConverterError('corrupted-archive', `ZIP entry "${name}" exceeds maximum uncompressed size limit.`);
+    }
+    totalUncompressedBytes += uncompressedSize;
+    if (totalUncompressedBytes > MAX_ZIP_UNCOMPRESSED_BYTES) {
+      throw new ConverterError('corrupted-archive', `ZIP archive exceeds the ${MAX_ZIP_UNCOMPRESSED_BYTES}-byte total uncompressed size limit.`);
     }
     if (localHeaderOffset + 30 > cdOffset) {
       throw new ConverterError('corrupted-archive', `ZIP local header offset out of bounds for "${name}".`);
@@ -1360,6 +1371,9 @@ function parseAttributes(raw: string): Map<string, string> {
 }
 
 function parseXmlDocument(xml: string, partName: string): XmlElement {
+  if (xml.length > MAX_XML_CHARS) {
+    throw new ConverterError('malformed-xml', `XML part "${partName}" exceeds the ${MAX_XML_CHARS}-character safety limit.`);
+  }
   const root = createElement('#root');
   const stack: XmlElement[] = [root];
   let index = 0;
