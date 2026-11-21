@@ -1,35 +1,29 @@
 #!/usr/bin/env node
 /**
- * mirror-cli — plan a batch over a folder of PDFs (backlog K04).
+ * mirror-cli — execute a local durable batch over a folder of PDFs (backlog K04).
  *
- * `src/core/cli-args.ts` decides what a line of flags means. This script is the runner: it
- * reads the folder, prints the plan, and exits with a documented code. It cannot import the
- * TypeScript module — Node would have to strip types through the whole app core, and the
- * modules that do the heavy work (`ir.ts`, `blocks.ts`, `export-check.ts`, the translation
- * pipeline) are not loadable from Node yet — so it re-implements the parse table here.
+ * `src/core/cli-args.ts` decides what a line of flags means. This script keeps the fast
+ * plan/check path in plain Node and delegates executable work to the TypeScript bridge through
+ * the local `tsx` package. It re-implements the parse table so help and validation work before
+ * the bridge starts.
  *
- * That duplication is the one cost of shipping the command line now, and it is guarded:
+ * The fast help/check parser stays duplicated for a dependency-free startup path, and it is guarded:
  * `tests/cli-args.test.ts` reads both files and compares `CLI_COMMANDS`, `CLI_FLAGS`,
  * `CLI_VALUE_FLAGS`, `CLI_FORMATS`, `PROVIDER_KINDS`, `REQUIRED_FLAGS` and `EXIT_CODES`. Add
  * a flag to one file and the test names the other. The tables are on one line each so that
  * comparison is a plain read of the source.
  *
- * What it does, and what it does not:
+ * What it does:
  *
  * - `check` is real: it lists the PDFs in `--in` with their byte sizes. It reads and writes
  *   nothing else.
- * - `extract`, `translate` and `export` are planned. With `--dry-run` the runner prints the
- *   plan and exits 0; without it, it prints the same plan and exits 7, saying plainly that
- *   nothing ran. That is the honest state of this build, and `docs/cli.md` says so too. A
- *   runner that exited 0 after printing a plan would be claiming work it did not do.
+ * - `extract`, `translate` and `export` delegate non-dry runs to `mirror-cli-entry.ts`, which
+ *   uses the durable local automation runtime. A review or failed job exits 7.
  * - `--format` picks the report shape: `md` is the human one (plan line, count, file list),
  *   `json` is one object on stdout, `txt` is one PDF name per line. Only `md` prints prose,
  *   so a script can read `json` and `txt` without stripping a banner.
  * - A dry run never creates `--out` or writes a byte. Reading the folder is not a change.
- * - `--lang` is passed through unchecked on purpose: the alias table lives in
- *   `src/core/language.ts`, and a second copy here would disagree with it. The parser
- *   (`src/core/cli-args.ts`) does check the code and refuses a wrong one before a plan is
- *   made; this runner only plans.
+ * - `--lang` is validated by the TypeScript parser before the executable bridge runs.
  *
  * Usage:
  *   node scripts/mirror-cli.mjs check --in docs/pdfs
@@ -43,6 +37,7 @@
  * `src/core/cli-args.ts`.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -112,9 +107,7 @@ const COMMAND_SUMMARY = {
 };
 
 /** The sentence a non-dry run prints before exiting 7. */
-const PLANNED_ONLY_NOTE =
-  'nothing ran: the batch work lives in the app core until those modules load from Node. ' +
-  'Use --dry-run for the plan alone, or open the folder in the app.';
+const PLANNED_ONLY_NOTE = 'nothing ran: the batch did not reach a completed state; inspect the persisted job state.';
 
 const COMMAND_SET = new Set(CLI_COMMANDS);
 const FLAG_SET = new Set(CLI_FLAGS);
@@ -325,7 +318,7 @@ function usage() {
     `  ${String(EXIT_CODES['unsupported-format']).padStart(2)}  unsupported value for --format or --provider`,
     `  ${String(EXIT_CODES['conflicting-options']).padStart(2)}  conflicting options`,
     `  ${String(EXIT_CODES['input-unusable']).padStart(2)}  the --in folder cannot be used (missing, not a folder, no PDFs)`,
-    `  ${String(EXIT_CODES['planned-only']).padStart(2)}  nothing ran: the batch work lives in the app core`,
+    `  ${String(EXIT_CODES['planned-only']).padStart(2)}  one or more jobs remain in review or failed`,
     '',
     'Examples:',
     `  ${PROGRAM} check --in docs/pdfs`,
@@ -345,6 +338,13 @@ function version() {
   } catch {
     return 'unknown';
   }
+}
+
+function runExecutable(argv) {
+  const tsx = path.join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  const entry = path.join(ROOT, 'scripts', 'mirror-cli-entry.ts');
+  const result = spawnSync(process.execPath, [tsx, entry, ...argv], { cwd: ROOT, stdio: 'inherit', env: process.env });
+  return typeof result.status === 'number' ? result.status : EXIT_CODES['planned-only'];
 }
 
 /** The PDFs at the top level of `dir`, sorted by name. Sub-folders are not walked. */
@@ -434,6 +434,8 @@ function main(argv) {
   }
 
   const ran = command === 'check';
+
+  if (!ran && !options.dryRun) return runExecutable(process.argv.slice(2));
 
   if (options.format === 'json') {
     process.stdout.write(
