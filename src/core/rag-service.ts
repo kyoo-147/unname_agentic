@@ -33,7 +33,38 @@ import {
   type CitationMarker,
   type ResolvedCitation,
 } from './citations';
-import type { DocumentIR } from './ir';
+import type { BlockType, DocumentIR } from './ir';
+import type { Rect } from './types';
+
+/** Why caller-owned semantic retrieval is unavailable without fabricating evidence. */
+export type SemanticUnavailableReason = 'offline-mode' | 'no-provider' | 'provider-error' | 'invalid-result';
+
+export interface SemanticHit {
+  chunkId: string;
+  score: number;
+}
+
+export type SemanticRetrieval =
+  | { status: 'available'; hits: SemanticHit[] }
+  | { status: 'unavailable'; reason: SemanticUnavailableReason; detail?: string };
+
+export interface SemanticRetrievalRequest {
+  question: string;
+  chunks: readonly Chunk[];
+  limit: number;
+}
+
+/** The host owns the provider. This service never downloads models or opens a network. */
+export type RagSemanticRetriever = (request: SemanticRetrievalRequest) => SemanticRetrieval;
+
+export interface RagSelection {
+  page?: number;
+  region?: Rect;
+  blockIds?: readonly string[];
+  kinds?: readonly ChunkKind[];
+  blockTypes?: readonly BlockType[];
+  required?: boolean;
+}
 
 /** Metadata fields available on the existing retrieval chunk shape. */
 export interface RagMetadataFilters {
@@ -81,6 +112,8 @@ export interface RagTransportRequest {
   prompt: string;
   context: readonly ContextBlock[];
   queryPlans: readonly RagQueryPlan[];
+  semantic: SemanticRetrieval;
+  selection: RagSelection | null;
   toolTrace: readonly RagToolTrace[];
 }
 
@@ -103,7 +136,8 @@ export interface RagRetrievalHit {
   lexicalScore: number;
   vectorScore: number | null;
   fusedScore: number;
-  retrievalMethod: 'lexical' | 'vector' | 'hybrid';
+  semanticScore: number | null;
+  retrievalMethod: 'lexical' | 'vector' | 'hybrid' | 'semantic' | 'selection';
   embeddingStatus: EmbeddingStatus;
   matchedTerms: string[];
   selected: boolean;
@@ -116,6 +150,10 @@ export interface RagPrepareOptions {
   lexicalWeight?: number;
   vectorWeight?: number;
   filters?: RagFilters;
+  selection?: RagSelection;
+  offline?: boolean;
+  semanticRetriever?: RagSemanticRetriever;
+  semanticTopK?: number;
   maxContextChars?: number;
   maxExcerptChars?: number;
   minExcerptChars?: number;
@@ -135,6 +173,8 @@ export interface RagPrepared {
   assessment: EvidenceAssessment;
   queryPlans: RagQueryPlan[];
   retrievalHits: RagRetrievalHit[];
+  semantic: SemanticRetrieval;
+  selection: RagSelection | null;
   embeddingStatus: EmbeddingStatus;
   retrievalMethod: 'lexical' | 'hybrid';
   toolTrace: RagToolTrace[];
@@ -181,6 +221,9 @@ export interface RagServiceOptions {
   embedding?: EmbeddingAdapter;
   lexicalWeight?: number;
   vectorWeight?: number;
+  offline?: boolean;
+  semanticRetriever?: RagSemanticRetriever;
+  semanticTopK?: number;
   maxContextChars?: number;
   maxExcerptChars?: number;
   minExcerptChars?: number;
@@ -224,6 +267,8 @@ export function createRagService(workspace: Workspace, defaults: RagServiceOptio
         prompt: prepared.prompt,
         context: prepared.context,
         queryPlans: prepared.queryPlans,
+        semantic: prepared.semantic,
+        selection: prepared.selection,
         toolTrace: prepared.toolTrace,
       }), documents);
     },
@@ -241,15 +286,15 @@ function prepareRequest(
     plan: rewriteQuery(text, { documentTitle: document.title, language: document.ir.language }),
   }));
   const questionFilters = rewriteQuery(text).filters;
-  const candidates = collectChunks(documents, options.filters, questionFilters);
-  const ranked = rankChunks(candidates, queryPlans, options);
-  const context = selectContext(ranked, documents, options);
+  const candidates = collectChunks(documents, options.filters, questionFilters, options.selection);
+  const ranked = rankChunks(candidates, queryPlans, text, options);
+  const context = selectContext(ranked.hits, documents, options);
   const assessment = assessEvidence(text, context);
   const prompt = formatPrompt(fencedContext(context), text);
   const toolTrace = auditToolCalls(options.toolCalls, options);
 
   const selected = new Set(context.flatMap(block => `${block.documentId}\u0000${block.blockIds.join('\u0001')}\u0000${block.page}`));
-  const retrievalHits = ranked.map(hit => ({
+  const retrievalHits = ranked.hits.map(hit => ({
     documentId: hit.chunk.documentId,
     chunkId: hit.chunk.id,
     page: hit.chunk.page,
@@ -260,6 +305,7 @@ function prepareRequest(
     lexicalScore: hit.lexicalScore,
     vectorScore: hit.vectorScore,
     fusedScore: hit.fusedScore,
+    semanticScore: hit.semanticScore,
     retrievalMethod: hit.retrievalMethod,
     embeddingStatus: hit.embeddingStatus,
     matchedTerms: [...hit.matchedTerms],
@@ -273,6 +319,8 @@ function prepareRequest(
     assessment,
     queryPlans,
     retrievalHits,
+    semantic: ranked.semantic,
+    selection: options.selection,
     toolTrace,
     abstainLanguage: options.abstainLanguage,
     embeddingStatus: options.embedding.status,
@@ -352,6 +400,10 @@ interface WorkspaceDocumentView {
 
 interface NormalizedPrepareOptions {
   filters: RagFilters;
+  selection: RagSelection | null;
+  offline: boolean;
+  semanticRetriever?: RagSemanticRetriever;
+  semanticTopK: number;
   maxContextChars: number;
   maxExcerptChars: number;
   minExcerptChars: number;
@@ -369,6 +421,10 @@ interface NormalizedPrepareOptions {
 function normalizeDefaults(options: RagServiceOptions): NormalizedPrepareOptions {
   return {
     filters: {},
+    selection: null,
+    offline: options.offline !== false,
+    semanticRetriever: options.semanticRetriever,
+    semanticTopK: budgetOr(options.semanticTopK, 10),
     maxContextChars: positiveOr(options.maxContextChars, 6000),
     maxExcerptChars: positiveOr(options.maxExcerptChars, 1200),
     minExcerptChars: positiveOr(options.minExcerptChars, 120),
@@ -392,6 +448,10 @@ function mergeOptions(
     ...defaults,
     ...options,
     filters: options.filters ?? defaults.filters,
+    selection: options.selection ?? defaults.selection,
+    offline: options.offline ?? defaults.offline,
+    semanticRetriever: options.semanticRetriever ?? defaults.semanticRetriever,
+    semanticTopK: budgetOr(options.semanticTopK, defaults.semanticTopK),
     maxContextChars: positiveOr(options.maxContextChars, defaults.maxContextChars),
     maxExcerptChars: positiveOr(options.maxExcerptChars, defaults.maxExcerptChars),
     minExcerptChars: positiveOr(options.minExcerptChars, defaults.minExcerptChars),
@@ -424,12 +484,18 @@ function usableDocuments(workspace: Workspace | undefined): WorkspaceDocumentVie
   return documents;
 }
 
+interface CandidateChunk {
+  chunk: Chunk;
+  selected: boolean;
+}
+
 function collectChunks(
   documents: readonly WorkspaceDocumentView[],
   filters: RagFilters,
   questionFilters: QueryFilters,
-): Chunk[] {
-  const chunks: Chunk[] = [];
+  selection: RagSelection | null,
+): CandidateChunk[] {
+  const chunks: CandidateChunk[] = [];
   for (const document of documents) {
     for (const sourceChunk of chunkDocument(document.ir)) {
       const chunk: Chunk = {
@@ -437,7 +503,10 @@ function collectChunks(
         id: `${document.id}\u0000${sourceChunk.id}`,
         documentId: document.id,
       };
-      if (matchesFilters(chunk, document.ir, filters, questionFilters)) chunks.push(chunk);
+      if (!matchesFilters(chunk, document.ir, filters, questionFilters)) continue;
+      const selected = matchesSelection(chunk, document.ir, selection);
+      if (selection?.required && !selected) continue;
+      chunks.push({ chunk, selected });
     }
   }
   return chunks;
@@ -463,12 +532,102 @@ function matchesFilters(chunk: Chunk, ir: DocumentIR, filters: RagFilters, quest
   return true;
 }
 
-function rankChunks(
+function matchesSelection(chunk: Chunk, ir: DocumentIR, selection: RagSelection | null): boolean {
+  if (!selection) return false;
+  if (selection.page !== undefined && chunk.page !== selection.page) return false;
+  if (selection.kinds !== undefined && !selection.kinds.includes(chunk.kind)) return false;
+  const blocks = ir.blocks.filter(block => chunk.blockIds.includes(block.id));
+  if (selection.blockIds !== undefined && !blocks.some(block => selection.blockIds?.includes(block.id))) return false;
+  if (selection.blockTypes !== undefined && !blocks.some(block => selection.blockTypes?.includes(block.type))) return false;
+  const region = selection.region;
+  if (region !== undefined && !blocks.some(block => rectanglesIntersect(polygonRect(block.polygon), region))) return false;
+  return selection.page !== undefined
+    || selection.kinds !== undefined
+    || selection.blockIds !== undefined
+    || selection.blockTypes !== undefined
+    || selection.region !== undefined;
+}
+
+function polygonRect(polygon: readonly { x: number; y: number }[]): Rect {
+  const xs = polygon.map(point => point.x);
+  const ys = polygon.map(point => point.y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  return { x: left, y: top, width: Math.max(...xs) - left, height: Math.max(...ys) - top };
+}
+
+function rectanglesIntersect(left: Rect, right: Rect): boolean {
+  return left.x < right.x + right.width
+    && right.x < left.x + left.width
+    && left.y < right.y + right.height
+    && right.y < left.y + left.height;
+}
+
+function resolveSemanticRetrieval(
   chunks: readonly Chunk[],
-  queryPlans: readonly RagQueryPlan[],
+  question: string,
   options: NormalizedPrepareOptions,
-): HybridSearchHit[] {
-  if (chunks.length === 0) return [];
+): SemanticRetrieval {
+  if (options.offline) return { status: 'unavailable', reason: 'offline-mode' };
+  if (!options.semanticRetriever) return { status: 'unavailable', reason: 'no-provider' };
+  let result: SemanticRetrieval;
+  try {
+    result = options.semanticRetriever({ question, chunks, limit: options.semanticTopK });
+  } catch {
+    return { status: 'unavailable', reason: 'provider-error' };
+  }
+  if (!result || (result.status !== 'available' && result.status !== 'unavailable')) {
+    return { status: 'unavailable', reason: 'invalid-result' };
+  }
+  if (result.status === 'unavailable') return result;
+  if (!Array.isArray(result.hits)) return { status: 'unavailable', reason: 'invalid-result' };
+  const chunkIds = new Set(chunks.map(chunk => chunk.id));
+  const deduped = new Map<string, SemanticHit>();
+  for (const hit of result.hits) {
+    if (!hit || typeof hit.chunkId !== 'string' || !chunkIds.has(hit.chunkId) || !Number.isFinite(hit.score)) {
+      return { status: 'unavailable', reason: 'invalid-result' };
+    }
+    const previous = deduped.get(hit.chunkId);
+    if (!previous || hit.score > previous.score) deduped.set(hit.chunkId, { chunkId: hit.chunkId, score: hit.score });
+  }
+  return {
+    status: 'available',
+    hits: [...deduped.values()]
+      .sort((left, right) => right.score - left.score || compareText(left.chunkId, right.chunkId))
+      .slice(0, options.semanticTopK),
+  };
+}
+
+function reciprocalRankScore(lexicalRank: number | undefined, semanticRank: number | undefined): number {
+  const lexical = lexicalRank === undefined ? 0 : 1 / (60 + lexicalRank);
+  const semantic = semanticRank === undefined ? 0 : 1 / (60 + semanticRank);
+  return Number((lexical + semantic).toFixed(6));
+}
+
+type RankedRetrievalMethod = 'lexical' | 'vector' | 'hybrid' | 'semantic' | 'selection';
+
+interface RankedHit extends Omit<HybridSearchHit, 'score' | 'fusedScore' | 'retrievalMethod'> {
+  score: number;
+  fusedScore: number;
+  semanticScore: number | null;
+  retrievalMethod: RankedRetrievalMethod;
+  selected: boolean;
+}
+
+interface RankedRetrieval {
+  hits: RankedHit[];
+  semantic: SemanticRetrieval;
+}
+
+function rankChunks(
+  candidates: readonly CandidateChunk[],
+  queryPlans: readonly RagQueryPlan[],
+  question: string,
+  options: NormalizedPrepareOptions,
+): RankedRetrieval {
+  const chunks = candidates.map(candidate => candidate.chunk);
+  const semantic = resolveSemanticRetrieval(chunks, question, options);
+  if (chunks.length === 0) return { hits: [], semantic };
   const target = index(chunks);
   const merged = new Map<string, HybridSearchHit>();
   const queries = new Set<string>();
@@ -502,22 +661,77 @@ function rankChunks(
     }
   }
 
-  return [...merged.values()].sort(
-    (left, right) => right.fusedScore - left.fusedScore
-      || left.chunk.page - right.chunk.page
-      || compareText(left.chunk.documentId, right.chunk.documentId)
-      || compareText(left.chunk.id, right.chunk.id),
-  );
+  const lexical = [...merged.values()].sort((left, right) => right.fusedScore - left.fusedScore
+    || left.chunk.page - right.chunk.page
+    || compareText(left.chunk.documentId, right.chunk.documentId)
+    || compareText(left.chunk.id, right.chunk.id));
+  const lexicalById = new Map(lexical.map(hit => [hit.chunk.id, hit]));
+  const lexicalRank = new Map(lexical.map((hit, index) => [hit.chunk.id, index + 1]));
+  const semanticById = new Map(semantic.status === 'available' ? semantic.hits.map(hit => [hit.chunkId, hit]) : []);
+  const semanticRank = new Map(semantic.status === 'available'
+    ? [...semantic.hits].map((hit, index) => [hit.chunkId, index + 1])
+    : []);
+  const selectedById = new Map(candidates.map(candidate => [candidate.chunk.id, candidate.selected]));
+  const chunkById = new Map(chunks.map(chunk => [chunk.id, chunk]));
+  const ids = new Set<string>([
+    ...lexicalById.keys(),
+    ...semanticById.keys(),
+    ...candidates.filter(candidate => candidate.selected).map(candidate => candidate.chunk.id),
+  ]);
+  const hits: RankedHit[] = [];
+  for (const id of ids) {
+    const lexicalHit = lexicalById.get(id);
+    const semanticHit = semanticById.get(id);
+    const sourceChunk = lexicalHit?.chunk ?? chunkById.get(id);
+    if (!sourceChunk) continue;
+    const selected = selectedById.get(id) === true;
+    const semanticScore = semanticHit?.score ?? null;
+    const base = lexicalHit ?? {
+      chunk: sourceChunk,
+      score: 0,
+      lexicalScore: 0,
+      vectorScore: null,
+      fusedScore: 0,
+      retrievalMethod: 'lexical' as const,
+      embeddingStatus: options.embedding.status,
+      matchedTerms: [],
+    };
+    const fusedScore = semantic.status === 'available' && semantic.hits.length > 0
+      ? reciprocalRankScore(lexicalRank.get(id), semanticRank.get(id))
+      : base.fusedScore;
+    const retrievalMethod: RankedRetrievalMethod = semanticHit && lexicalHit
+      ? 'hybrid'
+      : semanticHit
+        ? 'semantic'
+        : selected && !lexicalHit
+          ? 'selection'
+          : base.retrievalMethod;
+    hits.push({
+      ...base,
+      score: fusedScore,
+      fusedScore,
+      semanticScore,
+      retrievalMethod,
+      selected,
+    });
+  }
+  hits.sort((left, right) => Number(right.selected) - Number(left.selected)
+    || right.fusedScore - left.fusedScore
+    || left.chunk.page - right.chunk.page
+    || compareText(left.chunk.documentId, right.chunk.documentId)
+    || compareText(left.chunk.id, right.chunk.id));
+  return { hits, semantic };
 }
 
+
 function selectContext(
-  ranked: readonly HybridSearchHit[],
+  ranked: readonly RankedHit[],
   documents: readonly WorkspaceDocumentView[],
   options: NormalizedPrepareOptions,
 ): ContextBlock[] {
   if (ranked.length === 0) return [];
   const titles = new Map(documents.map(document => [document.id, document.title]));
-  const byDocument = new Map<string, HybridSearchHit[]>();
+  const byDocument = new Map<string, RankedHit[]>();
   for (const hit of ranked) {
     const list = byDocument.get(hit.chunk.documentId);
     if (list) list.push(hit);
@@ -526,7 +740,7 @@ function selectContext(
 
   const matched = documents.map(document => document.id).filter(id => (byDocument.get(id)?.length ?? 0) > 0);
   const perDocumentCap = matched.length > 1 ? Math.floor(options.maxContextChars * options.documentShare) : options.maxContextChars;
-  const selected: Array<{ hit: HybridSearchHit; excerpt: string }> = [];
+  const selected: Array<{ hit: RankedHit; excerpt: string }> = [];
   const allocation = new Map<string, number>();
   const cursor = new Map<string, number>();
   let total = 0;

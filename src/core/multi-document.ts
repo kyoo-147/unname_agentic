@@ -135,7 +135,7 @@ export interface ContextBlock {
   lexicalScore?: number;
   vectorScore?: number | null;
   fusedScore?: number;
-  retrievalMethod?: 'lexical' | 'vector' | 'hybrid';
+  retrievalMethod?: 'lexical' | 'vector' | 'hybrid' | 'semantic' | 'selection';
 }
 
 export interface PlanContextOptions {

@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { buildDocument, type DocumentIR } from '../src/core/ir';
+import { buildDocument, type BlockType, type DocumentIR } from '../src/core/ir';
 import { createRagService, type RagTransport } from '../src/core/rag-service';
 
 interface BlockSpec {
   page: number;
   text: string;
+  type?: BlockType;
   x?: number;
   y?: number;
 }
@@ -19,6 +20,7 @@ function document(documentId: string, blocks: readonly BlockSpec[]): DocumentIR 
     blocks: blocks.map((block, index) => ({
       page: block.page,
       text: block.text,
+      type: block.type,
       rect: { x: block.x ?? 72, y: block.y ?? 72 + index * 40, width: 468, height: 24 },
     })),
   });
@@ -130,5 +132,44 @@ describe('rag service', () => {
     expect(prepared.toolTrace.map(event => event.status)).toEqual(['allowed', 'rejected', 'budget-exhausted']);
     expect(prepared.toolTrace[1]?.reason).toBe('not-allowlisted');
     expect(prepared.toolTrace[2]?.reason).toBe('step-budget-exhausted');
+  });
+
+  it('reports semantic retrieval as unavailable without fabricating scores or calling a provider offline', () => {
+    let called = false;
+    const service = createRagService(workspace(), {
+      semanticRetriever: () => {
+        called = true;
+        throw new Error('must not be called offline');
+      },
+    });
+
+    const prepared = service.prepare('What is the retention period?', { offline: true });
+
+    expect(called).toBe(false);
+    expect(prepared.semantic).toEqual({ status: 'unavailable', reason: 'offline-mode' });
+    expect(prepared.retrievalHits.every(hit => hit.semanticScore === null)).toBe(true);
+  });
+
+  it('exposes an explicit no-provider state when online semantic retrieval is requested', () => {
+    const prepared = createRagService(workspace()).prepare('What is the retention period?', { offline: false });
+
+    expect(prepared.semantic).toEqual({ status: 'unavailable', reason: 'no-provider' });
+  });
+
+  it('prioritizes selected text, figure or table context even when lexical terms do not match', () => {
+    const selectedDocument = document('selected', [
+      { page: 1, text: 'Revenue by quarter: Q1 10, Q2 12.', type: 'table' },
+      { page: 2, text: 'A figure caption with the plotted trend.', type: 'figure' },
+    ]);
+    const service = createRagService({ documents: [{ id: 'selected', title: 'Selected report', ir: selectedDocument }] });
+    const prepared = service.prepare('Explain this selected object.', {
+      selection: { blockTypes: ['table'], required: true },
+      maxContextChars: 500,
+      minExcerptChars: 1,
+    });
+
+    expect(prepared.context).toHaveLength(1);
+    expect(prepared.context[0]?.blockIds).toContain('p1-r0');
+    expect(prepared.retrievalHits[0]).toEqual(expect.objectContaining({ selected: true, retrievalMethod: 'selection' }));
   });
 });
