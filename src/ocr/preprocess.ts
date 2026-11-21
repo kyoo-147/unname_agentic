@@ -1,3 +1,5 @@
+import { planDeskew, invertMap, type Matrix2D } from '../core/deskew';
+import { planPreprocess, sampleStats, type PreprocessStepKind } from '../core/preprocess';
 /**
  * Image-level preprocessing for screenshot OCR.
  *
@@ -41,6 +43,17 @@ export interface NormalizeReport {
 export interface NormalizeResult {
   image: RgbaImage;
   report: NormalizeReport;
+  transform?: OcrCoordinateTransform;
+  steps?: readonly PreprocessStepKind[];
+}
+
+export interface OcrCoordinateTransform {
+  sourceWidth: number;
+  sourceHeight: number;
+  outputWidth: number;
+  outputHeight: number;
+  sourceToOutput: Matrix2D;
+  outputToSource: Matrix2D;
 }
 
 /** Default histogram trim: enough to drop sensor specks and JPEG ringing. */
@@ -90,6 +103,17 @@ function numberOption(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
+function identityTransform(width: number, height: number): OcrCoordinateTransform {
+  const matrix: Matrix2D = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+  return {
+    sourceWidth: width,
+    sourceHeight: height,
+    outputWidth: width,
+    outputHeight: height,
+    sourceToOutput: matrix,
+    outputToSource: matrix,
+  };
+}
 function emptyImage(): RgbaImage {
   return { data: new Uint8ClampedArray(0), width: 0, height: 0 };
 }
@@ -255,6 +279,106 @@ function scaleAndStretch(image: RgbaImage, plane: Uint8Array, plan: StretchPlan)
   return { data: output, width: outWidth, height: outHeight };
 }
 
+function denoise(image: RgbaImage): RgbaImage {
+  const dimensions = dimensionsOf(image);
+  if (!dimensions || dimensions.width < 3 || dimensions.height < 3) return image;
+  const output = new Uint8ClampedArray(image.data);
+  const values = new Uint8Array(9);
+  for (let y = 1; y < dimensions.height - 1; y++) {
+    for (let x = 1; x < dimensions.width - 1; x++) {
+      const center = (y * dimensions.width + x) * 4;
+      let similar = false;
+      for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+        const neighbour = ((y + dy) * dimensions.width + x + dx) * 4;
+        if (Math.abs((image.data[center] ?? 0) - (image.data[neighbour] ?? 0)) <= 8) {
+          similar = true;
+          break;
+        }
+      }
+      if (similar) continue;
+      let index = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          values[index++] = image.data[((y + dy) * dimensions.width + x + dx) * 4] ?? 0;
+        }
+      }
+      values.sort();
+      output[center] = values[4] ?? output[center] ?? 0;
+      output[center + 1] = output[center];
+      output[center + 2] = output[center];
+    }
+  }
+  return { ...image, data: output };
+}
+
+function deskew(image: RgbaImage, angleDeg: number): { image: RgbaImage; matrix: Matrix2D } {
+  if (Math.abs(angleDeg) < 1e-9) return { image, matrix: identityTransform(image.width, image.height).sourceToOutput };
+  const plan = planDeskew(angleDeg, { width: image.width, height: image.height });
+  const output = new Uint8ClampedArray(plan.crop.width * plan.crop.height * 4);
+  for (let offset = 0; offset < output.length; offset += 4) {
+    output[offset] = 255;
+    output[offset + 1] = 255;
+    output[offset + 2] = 255;
+    output[offset + 3] = 255;
+  }
+  const inverse = invertMap(plan.matrix);
+  for (let y = 0; y < plan.crop.height; y++) {
+    for (let x = 0; x < plan.crop.width; x++) {
+      const sourceX = inverse.a * (x + 0.5) + inverse.c * (y + 0.5) + inverse.e;
+      const sourceY = inverse.b * (x + 0.5) + inverse.d * (y + 0.5) + inverse.f;
+      const sx = Math.round(sourceX - 0.5);
+      const sy = Math.round(sourceY - 0.5);
+      if (sx < 0 || sy < 0 || sx >= image.width || sy >= image.height) continue;
+      const source = (sy * image.width + sx) * 4;
+      const target = (y * plan.crop.width + x) * 4;
+      output[target] = image.data[source] ?? 255;
+      output[target + 1] = image.data[source + 1] ?? output[target];
+      output[target + 2] = image.data[source + 2] ?? output[target];
+      output[target + 3] = image.data[source + 3] ?? 255;
+    }
+  }
+  return { image: { data: output, width: plan.crop.width, height: plan.crop.height }, matrix: plan.matrix };
+}
+
+function binarize(image: RgbaImage): RgbaImage {
+  const dimensions = dimensionsOf(image);
+  if (!dimensions) return image;
+  const plane = luminancePlane(image, dimensions.pixels);
+  const histogram = histogramOf(plane);
+  const threshold = medianFromHistogram(histogram, dimensions.pixels);
+  const output = new Uint8ClampedArray(image.data);
+  for (let index = 0; index < dimensions.pixels; index++) {
+    const value = (plane[index] ?? 0) <= threshold ? 0 : 255;
+    const offset = index * 4;
+    output[offset] = value;
+    output[offset + 1] = value;
+    output[offset + 2] = value;
+  }
+  return { ...image, data: output };
+}
+
+function scaleImage(image: RgbaImage, scale: number): RgbaImage {
+  if (scale <= 1) return image;
+  const width = image.width * scale;
+  const height = image.height * scale;
+  const output = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const source = (Math.floor(y / scale) * image.width + Math.floor(x / scale)) * 4;
+      const target = (y * width + x) * 4;
+      output[target] = image.data[source] ?? 255;
+      output[target + 1] = image.data[source + 1] ?? output[target];
+      output[target + 2] = image.data[source + 2] ?? output[target];
+      output[target + 3] = image.data[source + 3] ?? 255;
+    }
+  }
+  return { data: output, width, height };
+}
+
+function scaleMatrix(matrix: Matrix2D, scale: number): Matrix2D {
+  return { a: matrix.a * scale, b: matrix.b * scale, c: matrix.c * scale, d: matrix.d * scale, e: matrix.e * scale, f: matrix.f * scale };
+}
+
 export function toGrayscale(image: RgbaImage): RgbaImage {
   const dimensions = dimensionsOf(image);
   if (!dimensions) return emptyImage();
@@ -312,8 +436,41 @@ export function normalizeForOcr(image: RgbaImage, options: NormalizeOptions = {}
   const gain = span > 0 ? Math.min(maxGain, 255 / span) : 1;
   const low = span > 0 ? bounds.low : 0;
 
+  const stretched = scaleAndStretch(image, plane, { width, height, scale: 1, low, gain, inverted });
+  const stats = sampleStats(image);
+  const plan = planPreprocess(stats);
+  let spatial = stretched;
+  let spatialMatrix: Matrix2D = identityTransform(width, height).sourceToOutput;
+  const steps: PreprocessStepKind[] = [];
+  for (const step of plan.steps) {
+    if (step.kind === 'none') continue;
+    steps.push(step.kind);
+    if (step.kind === 'grayscale') continue;
+    if (step.kind === 'denoise') {
+      spatial = denoise(spatial);
+      continue;
+    }
+    if (step.kind === 'deskew') {
+      const corrected = deskew(spatial, step.angleDeg);
+      spatial = corrected.image;
+      spatialMatrix = corrected.matrix;
+      continue;
+    }
+    if (step.kind === 'binarize') spatial = binarize(spatial);
+  }
+  const output = scaleImage(spatial, scale);
+  const sourceToOutput = scaleMatrix(spatialMatrix, scale);
   return {
-    image: scaleAndStretch(image, plane, { width, height, scale, low, gain, inverted }),
+    image: output,
     report: { inverted, contrastGain: Math.round(gain * 100) / 100, scale },
+    transform: {
+      sourceWidth: width,
+      sourceHeight: height,
+      outputWidth: output.width,
+      outputHeight: output.height,
+      sourceToOutput,
+      outputToSource: invertMap(sourceToOutput),
+    },
+    steps,
   };
 }

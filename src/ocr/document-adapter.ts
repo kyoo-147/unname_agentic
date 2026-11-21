@@ -1,3 +1,4 @@
+import { OcrError } from './engine';
 import type { PageKind } from '../core/classify';
 import {
   buildDocument,
@@ -31,7 +32,7 @@ const DEFAULT_MAX_CHARS = 1200;
 
 export type OcrAdapterRoute = 'scanned' | 'hybrid';
 export type OcrAdapterStatus = 'ok' | 'review' | 'skipped' | 'failed';
-export type OcrFailureCode = 'invalid-input' | 'recognition-failed' | 'empty-result';
+export type OcrFailureCode = 'invalid-input' | 'recognition-failed' | 'empty-result' | 'unavailable';
 export type OcrReviewCode = 'low-confidence' | 'dropped-words' | 'empty-region';
 
 export interface OcrPageGeometry {
@@ -259,7 +260,7 @@ export async function runOcrToDocumentIR(input: RunOcrToDocumentInput): Promise<
     return {
       status: 'failed',
       route: input.pageKind === 'hybrid' ? 'hybrid' : 'scanned',
-      code: 'recognition-failed',
+      code: error instanceof OcrError && error.code === 'unavailable' ? 'unavailable' : 'recognition-failed',
       message: error instanceof Error ? error.message : String(error),
       flags: [],
       regionsProcessed: 0,

@@ -15,6 +15,7 @@
 
 use image::{RgbaImage, imageops};
 use mirror_pdf_desktop::model::{BlockRect, PageFrame, PixelCrop, TextBlock};
+use serde::{Deserialize, Serialize};
 
 /// The largest factor [`zoom`] honours. The raster holds no more detail than it
 /// holds, so past this an upscale only multiplies memory for the same glyphs.
@@ -22,6 +23,8 @@ pub const MAX_ZOOM: f32 = 8.0;
 
 /// The step budget a fresh [`ToolTrace`] starts with.
 pub const DEFAULT_MAX_STEPS: usize = 16;
+/// Hard output cap for one zoom/crop result, independent of the trace budget.
+pub const MAX_TOOL_PIXELS: u64 = 16_000_000;
 
 /// `rect` intersected with the `0..1` page: the result is always inside the
 /// page and never larger than the request, so an overhanging rectangle keeps
@@ -60,7 +63,10 @@ pub fn crop(frame: &PageFrame, rect: BlockRect) -> RgbaImage {
 /// `1.0` through [`MAX_ZOOM`]: shrinking loses text an OCR pass needs, and
 /// enlarging past the maximum repaints identical pixels larger.
 pub fn zoom(image: &RgbaImage, factor: f32) -> RgbaImage {
-    let factor = if factor.is_nan() { 1. } else { factor.clamp(1., MAX_ZOOM) };
+    let requested = if factor.is_nan() { 1. } else { factor.clamp(1., MAX_ZOOM) };
+    let pixels = u64::from(image.width()) * u64::from(image.height());
+    let max_factor = if pixels == 0 { 1. } else { (MAX_TOOL_PIXELS as f32 / pixels as f32).sqrt().max(1.) };
+    let factor = requested.min(max_factor);
     if factor == 1. { return image.clone(); }
     let width = (image.width() as f32 * factor).round().max(1.) as u32;
     let height = (image.height() as f32 * factor).round().max(1.) as u32;
@@ -175,6 +181,10 @@ pub enum ToolError {
     BudgetExceeded { used: usize, max: usize },
     /// The OCR engine's own message, passed through unchanged.
     Ocr(String),
+    /// A typed tool request was malformed or targeted a different page.
+    InvalidRequest(String),
+    /// The requested raster would exceed the hard pixel cap.
+    ResourceLimit { requested: u64, max: u64 },
 }
 
 impl std::fmt::Display for ToolError {
@@ -182,6 +192,8 @@ impl std::fmt::Display for ToolError {
         match self {
             Self::BudgetExceeded { used, max } => write!(formatter, "{} ({used}/{max})", crate::i18n::tr3("工具调用次数已用尽", "Tool-call budget exhausted", "Đã dùng hết số lần gọi công cụ")),
             Self::Ocr(message) => formatter.write_str(message),
+            Self::InvalidRequest(message) => formatter.write_str(message),
+            Self::ResourceLimit { requested, max } => write!(formatter, "vision result is too large ({requested} pixels; max {max})"),
         }
     }
 }
@@ -214,6 +226,10 @@ impl ResultRects for RgbaImage {
 
 impl ResultRects for RegionReport {
     fn result_rects(&self) -> Vec<BlockRect> { self.text_regions.clone() }
+}
+
+impl ResultRects for Vec<VisionTextBlock> {
+    fn result_rects(&self) -> Vec<BlockRect> { self.iter().map(|block| block.region).collect() }
 }
 
 impl ResultRects for Vec<TextBlock> {
@@ -257,6 +273,161 @@ impl ToolTrace {
         let result_rects = match &outcome { Ok(value) => value.result_rects(), Err(_) => Vec::new() };
         self.entries.push(TraceEntry { tool, args, duration_ms, result_rects });
         outcome
+    }
+}
+
+/// Names match the shared TypeScript agent-tool contract.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VisionToolName { CropRegion, ZoomRegion, ReadRegionText }
+
+impl VisionToolName {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CropRegion => "crop_region",
+            Self::ZoomRegion => "zoom_region",
+            Self::ReadRegionText => "read_region_text",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum VisionTextSource { Auto, TextLayer, Ocr }
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct VisionToolCall {
+    pub name: VisionToolName,
+    pub page: u16,
+    pub region: BlockRect,
+    #[serde(default)]
+    pub scale: Option<f32>,
+    #[serde(default)]
+    pub source: Option<VisionTextSource>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct VisionTextBlock {
+    pub id: u64,
+    pub text: String,
+    pub region: BlockRect,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct VisionTraceEntry {
+    pub tool: String,
+    pub args: String,
+    pub duration_ms: u64,
+    pub result_rects: Vec<BlockRect>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct VisionToolResponse {
+    pub tool: String,
+    pub page: u16,
+    pub region: BlockRect,
+    pub image_width: u32,
+    pub image_height: u32,
+    pub scale: Option<f32>,
+    pub text: Option<String>,
+    pub source: Option<String>,
+    pub blocks: Vec<VisionTextBlock>,
+    pub trace: Vec<VisionTraceEntry>,
+}
+
+fn trace_snapshot(trace: &ToolTrace) -> Vec<VisionTraceEntry> {
+    trace.entries().iter().map(|entry| VisionTraceEntry {
+        tool: entry.tool.to_string(),
+        args: entry.args.clone(),
+        duration_ms: entry.duration_ms,
+        result_rects: entry.result_rects.clone(),
+    }).collect()
+}
+
+fn validate_call(call: &VisionToolCall, frame: &PageFrame) -> Result<BlockRect, ToolError> {
+    let expected_page = frame.page_index.saturating_add(1);
+    if call.page != expected_page {
+        return Err(ToolError::InvalidRequest(format!("page {} is not the active page {}", call.page, expected_page)));
+    }
+    if !call.region.x.is_finite() || !call.region.y.is_finite() || !call.region.width.is_finite() || !call.region.height.is_finite() {
+        return Err(ToolError::InvalidRequest("region coordinates must be finite".into()));
+    }
+    let region = clamp(call.region);
+    if region.width <= 0. || region.height <= 0. {
+        return Err(ToolError::InvalidRequest("region must have positive area inside the page".into()));
+    }
+    Ok(region)
+}
+
+fn response_for(
+    call: &VisionToolCall,
+    region: BlockRect,
+    image: &RgbaImage,
+    scale: Option<f32>,
+    text: Option<String>,
+    source: Option<String>,
+    blocks: Vec<VisionTextBlock>,
+    trace: &ToolTrace,
+) -> VisionToolResponse {
+    VisionToolResponse {
+        tool: call.name.as_str().to_string(),
+        page: call.page,
+        region,
+        image_width: image.width(),
+        image_height: image.height(),
+        scale,
+        text,
+        source,
+        blocks,
+        trace: trace_snapshot(trace),
+    }
+}
+
+/// Executes the native subset of the shared agent-tool contract.
+///
+/// The frame is never OCR'd as a whole for a region request. The returned blocks and
+/// trace retain page-space geometry, while raster outputs are bounded by
+/// [`MAX_TOOL_PIXELS`] and the caller-owned [`ToolTrace`] step budget.
+pub fn execute_vision_tool(
+    call: &VisionToolCall,
+    frame: &PageFrame,
+    engine: &dyn OcrEngine,
+    trace: &mut ToolTrace,
+) -> Result<VisionToolResponse, ToolError> {
+    let region = validate_call(call, frame)?;
+    let bounds = page_pixels(frame, region);
+    let crop_pixels = u64::from(bounds.width) * u64::from(bounds.height);
+    if crop_pixels > MAX_TOOL_PIXELS {
+        return Err(ToolError::ResourceLimit { requested: crop_pixels, max: MAX_TOOL_PIXELS });
+    }
+    match call.name {
+        VisionToolName::CropRegion => {
+            let image = trace.call("crop_region", format!("page={} region={region:?}", call.page), || Ok(crop(frame, region)))?;
+            Ok(response_for(call, region, &image, None, None, None, Vec::new(), trace))
+        }
+        VisionToolName::ZoomRegion => {
+            let factor = call.scale.unwrap_or(2.).max(1.);
+            let image = trace.call("crop_region", format!("page={} region={region:?}", call.page), || Ok(crop(frame, region)))?;
+            let zoomed = trace.call("zoom_region", format!("page={} region={region:?} scale={factor}", call.page), || Ok(zoom(&image, factor)))?;
+            let actual = if image.width() == 0 { 1. } else { zoomed.width() as f32 / image.width() as f32 };
+            Ok(response_for(call, region, &zoomed, Some(actual), None, None, Vec::new(), trace))
+        }
+        VisionToolName::ReadRegionText => {
+            let requested = call.source.unwrap_or(VisionTextSource::Auto);
+            let known: Vec<&TextBlock> = frame.blocks.iter().filter(|block| overlap(block.rect, region) > 0.).collect();
+            let use_layer = matches!(requested, VisionTextSource::TextLayer) || (matches!(requested, VisionTextSource::Auto) && !known.is_empty());
+            let source = if use_layer { "text-layer" } else { "ocr" };
+            let blocks = trace.call("read_region_text", format!("page={} region={region:?} source={source}", call.page), || {
+                if use_layer {
+                    Ok(known.into_iter().map(|block| VisionTextBlock { id: block.id, text: block.source.clone(), region: block.rect }).collect::<Vec<_>>())
+                } else {
+                    Ok(ocr_region(frame, region, engine)?.into_iter().map(|block| VisionTextBlock { id: block.id, text: block.source, region: block.rect }).collect::<Vec<_>>())
+                }
+            })?;
+            let text = blocks.iter().map(|block| block.text.as_str()).collect::<Vec<_>>().join("\n");
+            let image = crop(frame, region);
+            Ok(response_for(call, region, &image, None, Some(text), Some(source.to_string()), blocks, trace))
+        }
     }
 }
 
@@ -407,6 +578,54 @@ mod tests {
         assert!(trace.entries()[2].result_rects.is_empty(), "a raster result reports no page rectangles");
         assert!(trace.entries()[1].args.contains("x:"));
         assert!(!trace.is_exhausted());
+    }
+
+    #[test]
+    fn typed_contract_reads_text_layer_and_preserves_trace() {
+        let mut page = frame(200, 100);
+        page.blocks = vec![block(7, BlockRect { x: 0.1, y: 0.1, width: 0.3, height: 0.2 })];
+        let call = VisionToolCall {
+            name: VisionToolName::ReadRegionText,
+            page: 1,
+            region: BlockRect { x: 0., y: 0., width: 0.6, height: 0.5 },
+            scale: None,
+            source: Some(VisionTextSource::TextLayer),
+        };
+        let engine = StubOcr::new(Vec::new());
+        let mut trace = ToolTrace::new(2);
+        let response = execute_vision_tool(&call, &page, &engine, &mut trace).expect("text layer is readable");
+        assert_eq!(response.source.as_deref(), Some("text-layer"));
+        assert_eq!(response.text.as_deref(), Some("line 7"));
+        assert_eq!(response.blocks[0].region, page.blocks[0].rect);
+        assert_eq!(response.trace.len(), 1);
+        assert_eq!(response.trace[0].tool, "read_region_text");
+        let json = serde_json::to_string(&response).expect("response is serializable");
+        assert!(json.contains("read_region_text"));
+        assert!(engine.seen.borrow().is_empty(), "text-layer reads must not OCR");
+    }
+
+    #[test]
+    fn typed_contract_ocr_is_crop_only_and_budgeted() {
+        let page = frame(200, 100);
+        let call = VisionToolCall {
+            name: VisionToolName::ReadRegionText,
+            page: 1,
+            region: BlockRect { x: 0.25, y: 0.20, width: 0.50, height: 0.60 },
+            scale: None,
+            source: Some(VisionTextSource::Ocr),
+        };
+        let engine = StubOcr::new(vec![BlockRect { x: 0., y: 0., width: 0.5, height: 0.5 }]);
+        let mut trace = ToolTrace::new(1);
+        let response = execute_vision_tool(&call, &page, &engine, &mut trace).expect("OCR fits one call");
+        assert_eq!(engine.seen.borrow().as_slice(), &[(100, 60)]);
+        assert_eq!(response.source.as_deref(), Some("ocr"));
+        assert_eq!(response.trace.len(), 1);
+        assert_eq!(response.blocks.len(), 1);
+        assert_eq!(response.blocks[0].region, BlockRect { x: 0.25, y: 0.20, width: 0.25, height: 0.30 });
+
+        let zoom = VisionToolCall { name: VisionToolName::ZoomRegion, ..call };
+        let error = execute_vision_tool(&zoom, &page, &engine, &mut trace).expect_err("second call exceeds the budget");
+        assert!(matches!(error, ToolError::BudgetExceeded { used: 1, max: 1 }));
     }
 
     #[test]
