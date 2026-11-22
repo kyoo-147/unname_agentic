@@ -4259,6 +4259,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "unicode-segmentation",
  "uuid",
  "windows 0.62.2",
