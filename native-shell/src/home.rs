@@ -459,6 +459,7 @@ impl Workspace {
                 .child(div().size(px(6.)).rounded_full().bg(Theme::primary()))
                 .child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(format!("{} · {}", crate::i18n::tr3("模型", "Model", "Mô hình"), if selected_model.trim().is_empty() { crate::i18n::tr3("未配置", "Not configured", "Chưa cấu hình").to_string() } else { selected_model })))
                 .child(icon("chevron-down", 13., Theme::text_caption()))
+                .id("chat-model")
                 .on_click(cx.listener(|w, _, _, cx| { w.show_chat(cx); w.chat.update(cx, |chat, cx| chat.open_config(cx)); })))
             .child(div().w(px(1.)).h(px(18.)).bg(Theme::line_divider()))
             .child(div().id("chat-mic").size(px(26.)).rounded(px(6.)).flex().items_center().justify_center().cursor_pointer().hover(|s| s.bg(Theme::fill_hover()))
