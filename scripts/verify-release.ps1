@@ -116,19 +116,27 @@ try {
         $manifestPath = Join-Path $candidate 'MANIFEST.json'
         $checksumPath = Join-Path $candidate 'CHECKSUMS.sha256'
         $zipPath = "$candidate.zip"
-        foreach ($path in @($manifestPath, $checksumPath, $zipPath)) {
+        $zipChecksumPath = "$zipPath.sha256"
+        foreach ($path in @($manifestPath, $checksumPath, $zipPath, $zipChecksumPath)) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Native package evidence is missing: $path" }
         }
         $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
         if ($manifest.schema -ne 1 -or [string]::IsNullOrWhiteSpace($manifest.source.commit)) { throw 'Native package MANIFEST.json has no usable source commit.' }
+        if ($manifest.evidence.native_host_readiness -ne 'not-run' -or $manifest.evidence.chrome_host_e2e -ne 'not-run' -or $manifest.evidence.code_signing -ne 'not-configured') { throw 'Native package evidence must not overstate host runtime, Chrome E2E, or signing.' }
+        $zipHashLine = (Get-Content -LiteralPath $zipChecksumPath -Raw).Trim()
+        if ($zipHashLine -notmatch '^([0-9a-fA-F]{64})\s{2}(.+)$' -or $Matches[2] -cne (Split-Path -Leaf $zipPath)) { throw 'Native archive checksum sidecar is invalid.' }
+        if ((Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Matches[1].ToLowerInvariant()) { throw 'Native archive checksum mismatch.' }
         if ($manifest.profile -ne 'release') { throw "Native package profile is '$($manifest.profile)', not release." }
         $required = @('pdf_workspace.exe', 'pdfium.dll', 'pdf-workspace-host.exe', 'install-native-host.ps1', 'README.txt', 'native-messaging/com.pdfworkspace.bridge.template.json')
         foreach ($relative in $required) {
             if (-not (Test-Path -LiteralPath (Join-Path $candidate ($relative -replace '/', '\')) -PathType Leaf)) { throw "Native package file is missing: $relative" }
         }
+        $manifestPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
         foreach ($record in @($manifest.files)) {
             $relative = [string]$record.path
-            if ([string]::IsNullOrWhiteSpace($relative) -or $relative.Contains('..') -or [IO.Path]::IsPathRooted($relative)) { throw "Unsafe path in MANIFEST.json: $relative" }
+            if ([string]::IsNullOrWhiteSpace($relative) -or $relative.Contains('..') -or [IO.Path]::IsPathRooted($relative) -or $relative -match '\\') { throw "Unsafe path in MANIFEST.json: $relative" }
+            if (-not $manifestPaths.Add($relative)) { throw "Duplicate or case-colliding MANIFEST.json path: $relative" }
+            if ([string]$record.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or [int64]$record.bytes -lt 0) { throw "Invalid hash or size in MANIFEST.json: $relative" }
             $file = Join-Path $candidate ($relative -replace '/', '\')
             if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Manifest file is missing: $relative" }
             $actual = Get-FileHash -LiteralPath $file -Algorithm SHA256
@@ -136,22 +144,29 @@ try {
         }
         $checksumLines = @(Get-Content -LiteralPath $checksumPath | Where-Object { $_.Trim().Length -gt 0 })
         if ($checksumLines.Count -eq 0) { throw 'CHECKSUMS.sha256 is empty.' }
+        $checksumPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
         foreach ($line in $checksumLines) {
             if ($line -notmatch '^([0-9a-fA-F]{64})\s{2}(.+)$') { throw "Invalid checksum line: $line" }
             $relative = $Matches[2]
+            if ([string]::IsNullOrWhiteSpace($relative) -or $relative.Contains('..') -or [IO.Path]::IsPathRooted($relative) -or $relative -match '\\') { throw "Unsafe checksum path: $relative" }
+            if (-not $checksumPaths.Add($relative)) { throw "Duplicate or case-colliding checksum path: $relative" }
             $file = Join-Path $candidate ($relative -replace '/', '\')
             if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Checksum file is missing: $relative" }
             if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Matches[1].ToLowerInvariant()) { throw "Checksum mismatch: $relative" }
         }
+        if ($checksumPaths.Count -ne ($manifestPaths.Count + 1) -or -not $checksumPaths.Contains('MANIFEST.json')) { throw 'Manifest and checksum file inventories do not match.' }
+        foreach ($relative in $manifestPaths) { if (-not $checksumPaths.Contains($relative)) { throw "File is absent from CHECKSUMS.sha256: $relative" } }
+        $diskPaths = @(Get-ChildItem -LiteralPath $candidate -Recurse -File | ForEach-Object { (Get-RelativePath $candidate $_.FullName).Replace('\', '/') })
+        if (@($diskPaths | Where-Object { $_ -ne 'CHECKSUMS.sha256' }).Count -ne ($manifestPaths.Count + 1)) { throw 'Package directory contains unmanifested or missing files.' }
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $archive = [IO.Compression.ZipFile]::OpenRead($zipPath)
         try {
             $entryNames = @($archive.Entries | Where-Object { -not ($_.FullName.EndsWith('/') -or $_.FullName.EndsWith('\')) } | ForEach-Object FullName)
             foreach ($line in $checksumLines) {
                 $relative = [regex]::Match($line, '^([0-9a-fA-F]{64})\s{2}(.+)$').Groups[2].Value
-                $expected = (Split-Path -Leaf $candidate) + '/' + $relative
-                if ($entryNames -notcontains $expected) { throw "Archive entry is missing: $relative" }
+                if ($entryNames -notcontains $relative) { throw "Archive entry is missing: $relative" }
             }
+            if ($entryNames.Count -ne $checksumPaths.Count) { throw 'Archive contains duplicate, unmanifested, or missing package entries.' }
         } finally { $archive.Dispose() }
         Write-Output "Native package source commit: $($manifest.source.commit)"
         Write-Output "Native package files verified: $($checksumLines.Count)"

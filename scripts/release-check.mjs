@@ -47,6 +47,7 @@
  * could not run. This script does not sign anything and does not run the native suite.
  */
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import path from 'node:path';
@@ -465,7 +466,9 @@ function checkPackageArtifact() {
   ];
   const missing = required.filter(item => !existsSync(path.join(newest.full, ...item.split('/'))));
   const zip = `${newest.full}.zip`;
+  const zipChecksum = `${zip}.sha256`;
   if (!existsSync(zip)) missing.push(`${path.basename(zip)} (archive)`);
+  if (!existsSync(zipChecksum)) missing.push(`${path.basename(zipChecksum)} (archive checksum)`);
   if (missing.length > 0) {
     return {
       observed: `${relative(newest.full)} incomplete: missing ${missing.join(', ')}`,
@@ -477,6 +480,42 @@ function checkPackageArtifact() {
     const manifest = JSON.parse(readFileSync(path.join(newest.full, 'MANIFEST.json'), 'utf8'));
     if (manifest.schema !== 1 || manifest.profile !== 'release' || typeof manifest.source?.commit !== 'string' || manifest.source.commit.trim() === '') {
       return { observed: `${relative(newest.full)} has invalid provenance manifest`, artifact: null, state: 'fail' };
+    }
+    if (manifest.evidence?.native_host_readiness !== 'not-run' || manifest.evidence?.chrome_host_e2e !== 'not-run' || manifest.evidence?.code_signing !== 'not-configured') {
+      return { observed: `${relative(newest.full)} has invalid or overstated native/signing evidence`, artifact: null, state: 'fail' };
+    }
+    const packageFiles = new Map();
+    for (const record of manifest.files ?? []) {
+      if (typeof record.path !== 'string' || record.path.includes('..') || path.isAbsolute(record.path) || record.path.includes('\\') || packageFiles.has(record.path.toLowerCase())) {
+        return { observed: `${relative(newest.full)} has unsafe or duplicate manifest path`, artifact: null, state: 'fail' };
+      }
+      const file = path.join(newest.full, ...record.path.split('/'));
+      if (!existsSync(file) || !statSync(file).isFile()) return { observed: `${relative(newest.full)} is missing ${record.path}`, artifact: null, state: 'fail' };
+      const bytes = readFileSync(file);
+      const hash = createHash('sha256').update(bytes).digest('hex');
+      if (hash !== record.sha256 || bytes.length !== record.bytes) return { observed: `${relative(newest.full)} hash/size mismatch for ${record.path}`, artifact: null, state: 'fail' };
+      packageFiles.set(record.path.toLowerCase(), record);
+    }
+    const zipChecksumLine = readFileSync(zipChecksum, 'utf8').trim();
+    const zipChecksumMatch = /^([a-f0-9]{64})  (.+)$/u.exec(zipChecksumLine);
+    if (!zipChecksumMatch || zipChecksumMatch[2] !== path.basename(zip) || createHash('sha256').update(readFileSync(zip)).digest('hex') !== zipChecksumMatch[1]) {
+      return { observed: `${relative(newest.full)} archive checksum is invalid`, artifact: null, state: 'fail' };
+    }
+    const checksums = readFileSync(path.join(newest.full, 'CHECKSUMS.sha256'), 'utf8').split(/\r?\n/u).filter(Boolean);
+    const checksumPaths = new Set();
+    for (const line of checksums) {
+      const match = /^([a-f0-9]{64})  (.+)$/u.exec(line);
+      if (!match || match[2].includes('..') || path.isAbsolute(match[2]) || match[2].includes('\\') || checksumPaths.has(match[2].toLowerCase())) {
+        return { observed: `${relative(newest.full)} has invalid or duplicate checksum entries`, artifact: null, state: 'fail' };
+      }
+      const file = path.join(newest.full, ...match[2].split('/'));
+      if (!existsSync(file) || createHash('sha256').update(readFileSync(file)).digest('hex') !== match[1]) {
+        return { observed: `${relative(newest.full)} checksum mismatch for ${match[2]}`, artifact: null, state: 'fail' };
+      }
+      checksumPaths.add(match[2].toLowerCase());
+    }
+    if (checksumPaths.size !== packageFiles.size + 1 || !checksumPaths.has('manifest.json') || [...packageFiles.keys()].some(file => !checksumPaths.has(file))) {
+      return { observed: `${relative(newest.full)} manifest and checksum inventories differ`, artifact: null, state: 'fail' };
     }
   } catch (error) {
     return { observed: `${relative(newest.full)} MANIFEST.json is unreadable: ${error.message}`, artifact: null, state: 'fail' };

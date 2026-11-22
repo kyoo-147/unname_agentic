@@ -60,7 +60,9 @@ function Test-PackageIdentity([string]$Folder, [string]$Commit, [string]$Profile
             (Test-Path -LiteralPath (Join-Path $Folder 'CHECKSUMS.sha256') -PathType Leaf) -and
             (Test-Path -LiteralPath (Join-Path $Folder 'pdf_workspace.exe') -PathType Leaf) -and
             (Test-Path -LiteralPath (Join-Path $Folder 'pdf-workspace-host.exe') -PathType Leaf) -and
-            (Test-Path -LiteralPath (Join-Path $Folder 'pdfium.dll') -PathType Leaf)
+            (Test-Path -LiteralPath (Join-Path $Folder 'pdfium.dll') -PathType Leaf) -and
+            (Test-Path -LiteralPath "$zipPath.sha256" -PathType Leaf) -and
+            ((Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant() -eq ((Get-Content -LiteralPath "$zipPath.sha256" -Raw).Trim() -split '\s+')[0].ToLowerInvariant())
     } catch { return $false }
 }
 
@@ -111,8 +113,8 @@ if ($DryRun) {
     if (Test-Path -LiteralPath $output) {
         if (Test-PackageIdentity $output $commit $profile) { Write-Output "IDEMPOTENT=existing package is for commit $commit" }
         else { throw "Dry-run found an existing package path with a different or incomplete provenance record: $output" }
-    } elseif (Test-Path -LiteralPath $zip) {
-        throw "Dry-run found an archive without its package directory: $zip"
+    } elseif ((Test-Path -LiteralPath $zip) -or (Test-Path -LiteralPath "$zip.sha256")) {
+        throw "Dry-run found an archive or checksum sidecar without its package directory: $zip"
     } else {
         Write-Output 'DRY_RUN=ready to stage package; no files were written.'
     }
@@ -129,7 +131,7 @@ if (Test-Path -LiteralPath $output) {
     }
     throw "The package directory exists but is not a complete package for commit ${commit}: $output"
 }
-if (Test-Path -LiteralPath $zip) { throw "The archive exists without a matching package directory: $zip" }
+if ((Test-Path -LiteralPath $zip) -or (Test-Path -LiteralPath "$zip.sha256")) { throw "The archive or checksum sidecar exists without a matching package directory: $zip" }
 
 $parent = Split-Path -Parent $output
 New-Item -ItemType Directory -Force -Path $parent | Out-Null
@@ -212,8 +214,11 @@ The optional Chrome companion is not registered automatically. Load the separate
 built extension, copy its exact extension ID, then run:
 powershell -NoProfile -File .\install-native-host.ps1 -ExtensionId <32-character-ID> -HostPath <full-path-to-pdf-workspace-host.exe>
 The installer writes only this user's exact Chrome NativeMessagingHosts entry.
-The native-messaging template under native-messaging/ is documentation; do not register it
-without replacing both placeholders. No registry entry is installed merely by opening this package.
+It generates the host manifest from the exact executable path and extension ID.
+Registration is an explicit human action. Use -WhatIf or -DryRun for no-write preflight;
+-Action Verify -Diagnostics checks registration and performs a framed hello handshake;
+-Action Unregister removes only the matching current-user registry entry and retains its manifest.
+No registry entry is installed merely by opening this package.
 
 Update behavior is intentionally manual-check only. A release may expose a signed minisign
 manifest and a release-page link, but this build never downloads, replaces or simulates an update.
@@ -226,13 +231,19 @@ model weights are bundled. No credentials, provider configuration or user docume
 
 This preview is not universal PDF fidelity or translation-quality certification.
 The MANIFEST.json records the source commit and per-file SHA-256 hashes; CHECKSUMS.sha256 is the
-portable checksum list for the package files. The package was assembled from one source revision.
+portable checksum list for package files. The sibling archive has its own .sha256 sidecar.
+The package was assembled from one source revision.
 "@ | Set-Content -LiteralPath (Join-Path $stage 'README.txt') -Encoding UTF8
 
     $packageFiles = @(Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object { $_.Name -notin @('MANIFEST.json', 'CHECKSUMS.sha256') })
     $fileRecords = @($packageFiles | Sort-Object FullName | ForEach-Object {
         [ordered]@{ path = Relative $stage $_.FullName; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); bytes = $_.Length }
     })
+    $packagePaths = @($fileRecords | ForEach-Object { [string]$_.path })
+    if (@($packagePaths | Sort-Object -Unique).Count -ne $packagePaths.Count -or
+        @($packagePaths | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object -Unique).Count -ne $packagePaths.Count) {
+        throw 'Package contains duplicate or case-colliding file paths.'
+    }
     $manifestObject = [ordered]@{
         schema = 1
         application = 'pdf_workspace'
@@ -241,11 +252,12 @@ portable checksum list for the package files. The package was assembled from one
         platform = 'windows-x64'
         source = [ordered]@{ commit = $commit; dirty = $dirty; dirty_files = if ($dirty) { @($dirtyText -split "`r?`n" | Where-Object { $_ }) } else { @() } }
         update = [ordered]@{ mode = 'manual-check-only'; automatic_install = $false; signature = 'minisign manifest verification is required when an update source is configured' }
+        evidence = [ordered]@{ package_layout = 'assembled'; native_host_readiness = 'not-run'; chrome_host_e2e = 'not-run'; code_signing = 'not-configured' }
         files = $fileRecords
         note = 'Build artifact manifest, not a fidelity or translation-quality certificate.'
     }
     $manifestPath = Join-Path $stage 'MANIFEST.json'
-    $manifestObject | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+    Write-Utf8NoBom $manifestPath ($manifestObject | ConvertTo-Json -Depth 10)
 
     $checksumFiles = @(Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object { $_.Name -ne 'CHECKSUMS.sha256' } | Sort-Object FullName)
     $checksumLines = @($checksumFiles | ForEach-Object {
@@ -255,22 +267,25 @@ portable checksum list for the package files. The package was assembled from one
     Write-Utf8NoBom (Join-Path $stage 'CHECKSUMS.sha256') (($checksumLines -join "`n") + "`n")
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip, [IO.Compression.CompressionLevel]::Optimal, $true)
+    [IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip, [IO.Compression.CompressionLevel]::Optimal, $false)
     $archive = [IO.Compression.ZipFile]::OpenRead($zip)
     try {
         $expected = @(Get-ChildItem -LiteralPath $stage -Recurse -File)
         $actual = @($archive.Entries | Where-Object { -not ($_.FullName.EndsWith('/') -or $_.FullName.EndsWith('\')) })
         if ($actual.Count -ne $expected.Count) { throw "Archive has $($actual.Count) files, package has $($expected.Count)." }
         foreach ($file in $expected) {
-            $entryName = (Split-Path -Leaf $stage) + '/' + (Relative $stage $file.FullName)
-            if (-not ($actual | Where-Object FullName -eq $entryName)) { throw "Archive entry is missing: $(Relative $stage $file.FullName)" }
+            $entryName = Relative $stage $file.FullName
+            if (-not ($actual | Where-Object FullName -eq $entryName)) { throw "Archive entry is missing: $entryName" }
         }
     } finally { $archive.Dispose() }
+    $archiveHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+    Write-Utf8NoBom "$zip.sha256" "$archiveHash  $(Split-Path -Leaf $zip)`n"
 
     Move-Item -LiteralPath $stage -Destination $output
     Write-Output "PACKAGE=$output"
     Write-Output "ZIP=$zip"
     Write-Output "CHECKSUMS=$output/CHECKSUMS.sha256"
+    Write-Output "ARCHIVE_CHECKSUM=$zip.sha256"
 } finally {
     if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
 }
