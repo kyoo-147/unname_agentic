@@ -189,6 +189,7 @@ pub enum View {
     Doc,
     Home,
     Chat,
+    Intelligence,
     Trash,
     Settings,
 }
@@ -251,6 +252,7 @@ pub struct Workspace {
     pub current: Option<String>,
     pub pdf_reader: Option<Entity<crate::pdf_reader::PdfReader>>,
     pub chat: Entity<crate::chat::Chat>,
+    pub intelligence: crate::intelligence::IntegrationState,
     /// 语音输入: the opt-in microphone session and its state machine.
     pub voice: crate::voice::Voice,
     pub(crate) companion: crate::native_bridge::CompanionState,
@@ -328,6 +330,10 @@ pub struct Workspace {
 /// wherever the process happens to run.
 fn export_directory() -> std::path::PathBuf {
     dirs::document_dir().or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from)).unwrap_or_default()
+}
+
+fn intelligence_state_path() -> std::path::PathBuf {
+    crate::store::Store::root_dir().parent().unwrap_or_else(|| std::path::Path::new(".")).join("native-intelligence.json")
 }
 
 /// A macOS notification (only logged when scripted).
@@ -441,7 +447,7 @@ impl Workspace {
             store,
             entries,
             current: None,
-            pdf_reader: None, chat: cx.new(crate::chat::Chat::new), voice: Default::default(), companion: Default::default(), companion_task: None, companion_error: None,
+            pdf_reader: None, chat: cx.new(crate::chat::Chat::new), intelligence: crate::intelligence::IntegrationState::load(&intelligence_state_path()), voice: Default::default(), companion: Default::default(), companion_task: None, companion_error: None,
             pdf_importing: false,
             capture_picker: None,
             live_source: None,
@@ -585,6 +591,8 @@ impl Workspace {
             self.pdf_reader = Some(reader);
             self.live_source = None;
                 self.current = Some(id.to_string());
+            self.intelligence.dispatch(crate::intelligence::Command::RememberDocument(id.to_string()));
+            if let Err(error) = self.intelligence.save(&intelligence_state_path()) { log::warn!(target: "pdf_workspace", "could not save native intelligence state: {error}"); }
             self.view = View::Doc;
             if let Some(meta) = self.store.touch(id) && let Some(entry) = self.entries.iter_mut().find(|e| e.id == id) { entry.meta = meta; }
             self.reveal_in_tree(id);
@@ -936,6 +944,60 @@ impl Workspace {
     pub fn show_chat_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_chat(cx);
         self.chat.update(cx, |chat, cx| chat.focus(window, cx));
+    }
+
+    pub fn show_intelligence(&mut self, cx: &mut Context<Self>) {
+        self.home.chat = false;
+        self.home.recent_view = false;
+        self.show_view(View::Intelligence, cx);
+    }
+
+    pub fn select_intelligence_module(&mut self, module: crate::intelligence::ModuleId, cx: &mut Context<Self>) {
+        self.intelligence.dispatch(crate::intelligence::Command::Select(module));
+        if let Err(error) = self.intelligence.save(&intelligence_state_path()) {
+            self.show_toast_kind(ToastKind::Error, &format!("Could not save workspace view: {error}"), cx);
+        }
+        cx.notify();
+    }
+
+    fn render_intelligence(&self, cx: &mut Context<Self>) -> AnyElement {
+        let selected = self.intelligence.selected();
+        let (status_label, description) = match selected.status() {
+            crate::intelligence::ModuleStatus::Partial(message) => ("Partially available", message),
+            crate::intelligence::ModuleStatus::Unavailable(message) => ("Unavailable", message),
+        };
+        let mut choices = div().flex().flex_col().gap(px(6.));
+        for module in crate::intelligence::ModuleId::ALL {
+            let is_selected = selected == module;
+            choices = choices.child(
+                crate::ui::secondary_button(module.id(), module.title())
+                .when(is_selected, |button| button.border_color(Theme::primary()))
+                .on_click(cx.listener(move |workspace, _, _, cx| workspace.select_intelligence_module(module, cx))),
+            );
+        }
+        div().id("native-intelligence").flex_1().min_w_0().h_full().flex().flex_col()
+            .child(self.top_bar(cx))
+            .child(div().id("intelligence-content").flex_1().min_h_0().overflow_y_scroll().px(px(36.)).py(px(28.)).child(
+                div().max_w(px(760.)).flex().flex_col().gap(px(18.))
+                    .child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child("Document intelligence"))
+                    .child(div().text_size(px(13.)).text_color(Theme::text_caption()).child("Native workspace modules and their current integration status."))
+                    .child(choices)
+                    .child(div().mt(px(8.)).text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(selected.title()))
+                    .child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(status_label))
+                    .child(div().text_size(px(13.)).line_height(px(20.)).child(description))
+                    .when_some(self.current.as_ref(), |panel, id| panel.child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(format!("Current local document: {id}"))))
+                    .when(self.intelligence.active_operation().is_some(), |panel| panel.child(
+                        crate::ui::secondary_button("cancel-intelligence-operation", "Cancel operation")
+                            .on_click(cx.listener(|workspace, _, _, cx| {
+                                if let Some(id) = workspace.intelligence.active_operation().map(str::to_owned) {
+                                    workspace.intelligence.dispatch(crate::intelligence::Command::CancelOperation(id));
+                                    let _ = workspace.intelligence.save(&intelligence_state_path());
+                                    cx.notify();
+                                }
+                            })),
+                    )
+            )))
+            .into_any_element()
     }
 
     pub fn show_view(&mut self, view: View, cx: &mut Context<Self>) {        self.cancel_shortcut_recording(cx);
@@ -1354,6 +1416,7 @@ impl Render for Workspace {
                 .into_any_element(),
             View::Home => self.render_home(window, cx),
             View::Chat => div().flex_1().min_w_0().h_full().child(self.chat.clone()).into_any_element(),
+            View::Intelligence => self.render_intelligence(cx),
             View::Trash => self.render_trash(cx),
             View::Settings => self.render_settings(cx),
         };

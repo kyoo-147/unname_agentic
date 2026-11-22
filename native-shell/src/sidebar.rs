@@ -104,9 +104,8 @@ impl Lit {
     fn count(self) -> usize { [self.chat, self.home, self.recent, self.favorites].iter().filter(|on| **on).count() }
 }
 
-/// The single destination the sidebar lights: 新对话, 主页, 最近 or 收藏. Starred
-/// wins over a stale `recent_view`, because the pane then shows the starred
-/// list; anything but 主页 lights nothing.
+/// The single library destination the sidebar lights. Non-library destinations
+/// are handled by the workspace view itself.
 pub(crate) fn lit_destinations(in_home: bool, chat: bool, recent_view: bool, tab: crate::home::HomeTab) -> Lit {
     if !in_home { return Lit::default() }
     if chat { return Lit { chat: true, ..Default::default() } }
@@ -248,6 +247,10 @@ impl Workspace {
                         w.settings_page = crate::settings::Page::General;
                         w.show_view(View::Settings, cx);
                     })),
+            )
+            .child(
+                nav_row("nav-intelligence", "file-text", "file-text", crate::i18n::tr3("文档智能", "Document intelligence", "Trí tuệ tài liệu"), self.view == View::Intelligence)
+                    .on_click(cx.listener(|w, _, _, cx| w.show_intelligence(cx))),
             )
         );
 
