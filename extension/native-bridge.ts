@@ -97,6 +97,7 @@ export class NativeCompanion {
   private resumeNeeded = false;
   private generation = 0;
   private revision = 0;
+  private annotationRevision = 0;
   private timer?: ReturnType<typeof setTimeout>;
   private operation: Promise<void> = Promise.resolve();
   private queuedPage?: NativePage;
@@ -107,7 +108,7 @@ export class NativeCompanion {
   get transferring(): boolean { return this.busy; }
   private emitProgress(progress: NativeTransferProgress): void { try { this.onProgress?.(progress); } catch { /* UI reporting cannot change transfer truth. */ } }
   private cancelPoll(): void { if (this.timer !== undefined) clearTimeout(this.timer); this.timer = undefined; }
-  private invalidate(): void { this.revision++; this.cancelPoll(); this.active = undefined; this.source = undefined; this.queuedPage = undefined; this.echoes = []; this.resumeNeeded = false; }
+  private invalidate(): void { this.revision++; this.annotationRevision = 0; this.cancelPoll(); this.active = undefined; this.source = undefined; this.queuedPage = undefined; this.echoes = []; this.resumeNeeded = false; }
   private serialize(task: () => Promise<void>): Promise<void> {
     const connection = this.connection;
     this.operation = this.operation.then(task).catch(() => { connection?.close(); });
@@ -148,6 +149,7 @@ export class NativeCompanion {
           active.sequence = resumed.sequence as number;
           this.resumeNeeded = false;
           if (resumed.status === 'missing') { this.active = undefined; this.source = undefined; this.emitProgress({ state: 'error', completed: 0, total: 0, percent: 0, detail: 'Desktop source is no longer available.' }); throw new NativeBridgeError('stale', 'Desktop source is no longer available.'); }
+          this.emitProgress({ state: 'following', completed: 0, total: 0, percent: 100 });
         }
         const reply = await connection.request({ type: 'poll', binding: active.binding, after_sequence: active.sequence }, 1000);
         if (revision !== this.revision) return;
@@ -204,6 +206,7 @@ export class NativeCompanion {
       if (reply.status !== 'complete') throw new NativeBridgeError('transfer', 'Desktop companion did not complete the PDF transfer.');
       this.resumeNeeded = false;
       this.active = { session: { ...session }, binding, authorize, sequence: 0 };
+      this.annotationRevision = 0;
       this.emitProgress({ state: 'following', completed: bytes.length, total: bytes.length, percent: 100 });
     } catch (error) {
       this.emitProgress({ state: 'error', completed: 0, total: 0, percent: 0, detail: error instanceof Error ? error.message : String(error) });
@@ -243,10 +246,16 @@ export class NativeCompanion {
       }
       await active.authorize();
       const reply = await connection.request({ type: 'annotation', binding: active.binding, annotation: { id: annotation.id, page: annotation.page, x: annotation.x, y: annotation.y, width: annotation.width, height: annotation.height, kind: annotation.kind, text: annotation.text, base_revision: annotation.baseRevision } });
-      if (!reply || !sameBinding(reply.binding, active.binding) || (reply.status !== 'applied' && reply.status !== 'conflict') || !Number.isSafeInteger(reply.revision)) throw new NativeBridgeError('invalid-response', 'Invalid desktop annotation response.');
+      if (this.active !== active || !sameSession(session, active.session)) return { status: 'stale' };
+      if (!reply || !sameBinding(reply.binding, active.binding) || (reply.status !== 'applied' && reply.status !== 'conflict') || !Number.isSafeInteger(reply.revision) || Number(reply.revision) < 0 || Number(reply.revision) < this.annotationRevision) throw new NativeBridgeError('invalid-response', 'Invalid desktop annotation response.');
       const status = reply.status === 'applied' ? 'applied' : 'conflict';
       const result: NativeAnnotationResult = { status, revision: reply.revision as number };
-      if (reply.annotation !== undefined) result.annotation = nativeAnnotation(reply.annotation);
+      if (reply.status === 'conflict' && reply.annotation === undefined) throw new NativeBridgeError('invalid-response', 'Invalid desktop annotation response.');
+      if (reply.annotation !== undefined) {
+        result.annotation = nativeAnnotation(reply.annotation);
+        if (result.annotation.baseRevision !== result.revision) throw new NativeBridgeError('invalid-response', 'Invalid desktop annotation response.');
+      }
+      this.annotationRevision = result.revision;
       return result;
     } catch (error) {
       if (error instanceof NativeBridgeError && (error.code === 'stale' || error.code === 'unavailable')) return { status: error.code === 'stale' ? 'stale' : 'offline' };

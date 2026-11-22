@@ -1,32 +1,29 @@
 # Chức năng và trạng thái xác minh
 
-Cập nhật: **2026-11-22**, tích hợp tại HEAD `df70a41` (`df70a41831d775cee1a1a4cf30d6104e86d976ff`) trên nền `f5ccdd1`. Các mục cũ bên dưới là inventory lịch sử; checkpoint hiện tại chỉ ghi bằng chứng đã chạy lại hoặc được truy nguyên từ commit/worker report, không suy diễn thành kiểm thử native hay E2E hệ điều hành.
+Cập nhật: **2026-11-22**, code checkpoint `746afa0` (`fix(native): mount export menu and ignore build outputs`). `native-shell` là bề mặt sản phẩm; `dist/extension` là artifact duy nhất của Chrome extension. `dist/web` không phải artifact được chấp nhận.
+
+## Bằng chứng hiện tại tại code checkpoint `746afa0`
+
+| Nhóm / cổng | Bằng chứng chạy lại | Trạng thái |
+|---|---|---|
+| Native unit tests | `cargo test`: 180 pass, 2 ignored | ✅ local |
+| Native release build | `cargo build --release -j 1` với Windows SDK `rc.exe` | ✅ local |
+| Native messaging host | `cargo build --release --manifest-path desktop/Cargo.toml --bin pdf-workspace-host -j 1` | ✅ local build |
+| Extension | 170 files, 3,092 tests pass; typecheck/build pass | ✅ local |
+| UI string gate | 37 native files, 0 literals cần sửa | ✅ local |
+| Committed imports | 391 files resolve | ✅ local |
+| Native package | `scripts/package-native.ps1` + `verify-release.ps1 -ArtifactsOnly -RequireNativePackage`; 1,013 package files | ✅ integrity/provenance |
+| Desktop PDF runtime | `desktop/tests/pdf_runtime.rs`: 1 pass; fixture path points to extension fixture | ✅ local |
+| Native desktop E2E | `--list`/`--mock-contract` pass; `--acceptance` fails closed | 🟡 blocked |
+
+Native document-intelligence wiring is now mounted in the visible desktop surface: local lexical RAG/citation chat navigation, persisted local research cards and RIS import/export, local OCR/markup derivation with explicit partial status, and translated-PDF Save As with source-hash/page-geometry checks. The translated PDF remains a new text-only artifact and does not preserve source artwork or embed Helvetica.
+
+Remaining release blockers are explicit: real Chrome/native-host E2E and OS desktop assertions lack `CHROME_PATH`, authored FDL assertions, registered host/origin and independent PDF-reader review; PR #35 CI is blocked/unstable; signing and registry verification remain unconfigured; K10/RBAC remains deferred. These facts are not inferred from unit tests or package integrity.
+
+Các mục cũ bên dưới là inventory lịch sử; checkpoint hiện tại chỉ ghi bằng chứng đã chạy lại, không suy diễn thành kiểm thử native/browser E2E hoặc release acceptance.
 
 Ký hiệu: ✅ có mã **và** có bằng chứng chạy · 🟡 có mã nhưng thiếu test/UX hoặc còn giới hạn đáng kể · ⬜ chưa có.
 
-Số đo **lịch sử** của checkpoint trước là **3.023 unit test web** và **51 E2E được khai báo**; đây không phải bằng chứng tại final HEAD. Bằng chứng final HEAD của Wave 3 nằm ở mục dưới; không suy diễn từ số đo lịch sử sang full suite hoặc E2E hiện tại.
-
-## Wave 3 final evidence (2026-11-22, HEAD `df70a41`)
-
-| Nhóm / cổng | Bằng chứng tại final HEAD | Trạng thái |
-|---|---|---|
-| OCR | 22 focused tests pass | ✅ local |
-| RAG | 105 focused tests pass | ✅ local |
-| Quality gate | 11 focused tests pass | ✅ local |
-| Automation / CLI | 69 focused tests pass | ✅ local |
-| Research | 176 focused tests pass | ✅ worker evidence |
-| Bridge | 48 focused tests pass | ✅ worker evidence |
-| Typecheck | final `pnpm typecheck` pass | ✅ local |
-| Committed imports | 401 checks pass | ✅ local |
-| Artifact gate | current `ArtifactsOnly` 3/3 pass | ✅ local |
-
-Final HEAD limits and blockers:
-
-- No full suite, build, or Playwright rerun was performed at final HEAD.
-- Native package dry-run is blocked by a missing GPUI executable and native messaging host, with about 690 MB free on `D:`.
-- No Chrome native registry key or host is available for the real Chrome↔native path.
-- PR 34 latest CI run `44982321053` has the web job failing with zero steps; the native job was skipped.
-- Release acceptance remains open and is not claimed.
 
 
 ## Wave 3 historical integration checkpoint (2026-11-21)
@@ -60,7 +57,9 @@ The table below records the older release checkpoint and does not replace the fi
 
 ---
 
-## 1. Web reader — đọc và dịch PDF trong trình duyệt (30)
+## 1. Web reader lịch sử — đọc và dịch PDF trong trình duyệt (30)
+
+Inventory này mô tả web reader cũ, không phải bề mặt sản phẩm hiện tại.
 
 | | Chức năng | | Ghi chú |
 |---|---|---|---|
@@ -158,7 +157,7 @@ The table below records the older release checkpoint and does not replace the fi
 | D09 | e2e Chromium | ✅ | 49 test / 15 file |
 | D10 | Test native | ✅ | 63 pass / 1 ignored |
 | D11 | CI GitHub Actions | 🟡 | đã kiểm lại **trên repo public**: workflow tạo run, cả 2 job bị GitHub từ chối "account is locked due to a billing issue" — không sửa được bằng code, chỉ cần mở billing |
-| D12 | LICENSE + third-party notice | ✅ | `public/third-party/` (NOTICE + LICENSE-pdfjs 9.9 KB + LICENSE-lucide) được copy vào cả `dist/web` và `dist/extension` |
+| D12 | LICENSE + third-party notice | ✅ | Lịch sử: notices từ `extension/viewer/public/third-party/` được copy vào `dist/extension`; artifact extension không phải bằng chứng package/release native. |
 | D13 | Tài liệu kiến trúc/quyết định | ✅ | 25 quyết định có ngày + docs/ |
 | D14 | Feature flag / telemetry / crash report | ✅ | **crash report cục bộ, không gửi mạng**: panic hook ghi `<data>/logs/crash-<unix>.txt` (version, os, location, message, 40 dòng log cuối), giữ 10 file; 3 test + 1 lần panic thật |
 | D15 | Repo, remote, push | ✅ | `unname_agentic` public, HEAD trùng origin |
@@ -167,23 +166,28 @@ The table below records the older release checkpoint and does not replace the fi
 
 ## Giới hạn phải nói rõ (không giấu)
 
-- **Xuất PDF là bộ in của trình duyệt**, không có PDF writer: không giữ bố cục gốc, phụ thuộc thiết lập in của người dùng.
+- **Lưu PDF gốc** giữ nguyên source bytes; **Translated PDF** là writer native mới, text-only, không giữ artwork/annotation và không embed Helvetica.
 - **Google/DeepL không nhận glossary** (giới hạn API); UI đã ghi rõ thay vì giả vờ.
 - **OCR** chỉ có model vi/en/zh/ja/ko; `auto` dùng eng+vie. Chưa có benchmark cho ảnh nghiêng, mờ, nền phức tạp.
 - **RTL/CJK** mới chứng minh vùng dịch; chưa có PDF nguồn chữ Ả Rập/Hán có font nhúng.
 - **CI chưa từng chạy**: mọi run đều `startup_failure` do tài khoản bị khoá billing. Cổng chạy được hiện chỉ là local.
 - **Cầu Chrome ↔ desktop** (B07/B08) mới chứng minh từng nửa, chưa có demo thật hai đầu.
-- **Trash 30 ngày**: UI hứa tự xoá, mã không có.
-- **Màn hình Shortcuts** không mở được; code render còn đó nhưng không có đường vào.
+- **Trash 30 ngày**: đã có purge khi khởi động và test boundary; runtime UI/E2E vẫn chưa được claim.
+- **Màn hình Shortcuts**: đã có đường vào từ Settings và Ctrl+/; screenshot/E2E hiện tại vẫn chưa được claim.
 
 ## Lệnh xác minh
 
 ```powershell
-pnpm test ; pnpm typecheck ; pnpm build ; pnpm exec playwright test
+pnpm test:extension
+pnpm typecheck
+pnpm build                 # typecheck + extension artifact at dist/extension
 powershell -NoProfile -File scripts/build-shell.ps1 -Test
 node scripts/check-committed-imports.mjs
 powershell -NoProfile -File scripts/verify-release.ps1
 ```
+
+`dist/extension` is only the Chrome extension artifact. It does not establish native package or
+release readiness; native-shell tests/package verification are separate.
 
 ## Đã làm xong trong đợt này (2026-11-20)
 

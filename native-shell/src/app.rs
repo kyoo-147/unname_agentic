@@ -2,7 +2,7 @@
 //! (see `sidebar.rs`) and the editor on the right, with the
 //! 64px top bar (breadcrumb title + save status) above the page.
 
-use crate::export_native::{ExportBlock, ExportDocument, ExportFormat, export_document_bytes, suggested_name, write_export_bytes_path};
+use crate::export_native::{build_translated_pdf, write_translated_pdf_path, ExportBlock, ExportDocument, ExportFormat, export_document_bytes, suggested_name, write_export_bytes_path};
 use crate::input::{TextField, TextFieldEvent};
 use crate::settings::display_title;
 use crate::store::Entry;
@@ -13,6 +13,7 @@ use gpui::{prelude::FluentBuilder, *};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::{Arc, atomic::AtomicBool};
 use std::time::{Duration, Instant};
 
 /// Autosave waits for this pause in editing, but never longer than
@@ -189,6 +190,7 @@ pub enum View {
     Doc,
     Home,
     Chat,
+    Intelligence,
     Trash,
     Settings,
 }
@@ -251,6 +253,13 @@ pub struct Workspace {
     pub current: Option<String>,
     pub pdf_reader: Option<Entity<crate::pdf_reader::PdfReader>>,
     pub chat: Entity<crate::chat::Chat>,
+    pub intelligence: crate::intelligence::IntegrationState,
+    pub research: Option<pdf_library::research::ResearchStore>,
+    pub research_status: Option<String>,
+    pub ocr_busy: bool,
+    pub ocr_status: Option<String>,
+    pub ocr_document: Option<crate::pdf_reader::ocr_markup::OcrDocument>,
+    pub ocr_markup: Vec<crate::pdf_reader::ocr_markup::MarkupNode>,
     /// 语音输入: the opt-in microphone session and its state machine.
     pub voice: crate::voice::Voice,
     pub(crate) companion: crate::native_bridge::CompanionState,
@@ -330,6 +339,10 @@ fn export_directory() -> std::path::PathBuf {
     dirs::document_dir().or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from)).unwrap_or_default()
 }
 
+fn intelligence_state_path() -> std::path::PathBuf {
+    crate::store::Store::root_dir().parent().unwrap_or_else(|| std::path::Path::new(".")).join("native-intelligence.json")
+}
+
 /// A macOS notification (only logged when scripted).
 fn notify_system(title: &str, body: &str) {
     if crate::devtools::scripted() {
@@ -360,6 +373,10 @@ impl Workspace {
         // 回收站 30 天: the trash promised a countdown, so honor it on every start.
         if let Err(error) = store.purge_expired(crate::time::now()) { log::warn!(target: "pdf_workspace", "trash purge failed: {error:#}"); }
         let entries = store.list();
+        let (research, research_status) = match pdf_library::research::ResearchStore::open_at(crate::store::Store::root_dir()) {
+            Ok(store) => (Some(store), None),
+            Err(error) => (None, Some(format!("Research workspace unavailable: {error:#}"))),
+        };
         let search = cx.new(|cx| {
             let mut f = TextField::new("搜索", cx);
             f.placeholder_color = Theme::text_disabled();
@@ -441,7 +458,7 @@ impl Workspace {
             store,
             entries,
             current: None,
-            pdf_reader: None, chat: cx.new(crate::chat::Chat::new), voice: Default::default(), companion: Default::default(), companion_task: None, companion_error: None,
+            pdf_reader: None, chat: cx.new(crate::chat::Chat::new), intelligence: crate::intelligence::IntegrationState::load(&intelligence_state_path()), research, research_status, ocr_busy: false, ocr_status: None, ocr_document: None, ocr_markup: Vec::new(), voice: Default::default(), companion: Default::default(), companion_task: None, companion_error: None,
             pdf_importing: false,
             capture_picker: None,
             live_source: None,
@@ -484,6 +501,14 @@ impl Workspace {
             editor_sub: None,
             _subs: subs,
         };
+        let chat = ws.chat.clone();
+        ws._subs.push(cx.subscribe(&chat, |workspace, _, event: &crate::chat::ChatEvent, cx| {
+            if let crate::chat::ChatEvent::Navigate(target) = event {
+                if let Some(reader) = &workspace.pdf_reader {
+                    reader.update(cx, |reader, cx| reader.navigate_to_citation(target.page, &target.block_id, cx));
+                }
+            }
+        }));
         ws.sort();
         ws.load_home();
         // A fresh window always lands on the library, never the chat greeting.
@@ -577,6 +602,8 @@ impl Workspace {
             self.pdf_reader = Some(reader);
             self.live_source = None;
                 self.current = Some(id.to_string());
+            self.intelligence.dispatch(crate::intelligence::Command::RememberDocument(id.to_string()));
+            if let Err(error) = self.intelligence.save(&intelligence_state_path()) { log::warn!(target: "pdf_workspace", "could not save native intelligence state: {error}"); }
             self.view = View::Doc;
             if let Some(meta) = self.store.touch(id) && let Some(entry) = self.entries.iter_mut().find(|e| e.id == id) { entry.meta = meta; }
             self.reveal_in_tree(id);
@@ -595,11 +622,210 @@ impl Workspace {
         self.open_import(window, cx);
     }
 
+    /// Create one provenance-backed knowledge card from the first loaded source block.
+    /// No metadata lookup or network request is performed.
+    pub fn add_current_to_research(&mut self, cx: &mut Context<Self>) {
+        let Some(document_id) = self.current.clone() else {
+            self.research_status = Some("Open a local PDF before adding research evidence.".into());
+            cx.notify();
+            return;
+        };
+        let title = self
+            .entries
+            .iter()
+            .find(|entry| entry.id == document_id)
+            .map(|entry| display_title(&entry.title))
+            .unwrap_or_else(|| "Untitled document".into());
+        let Some(page) = self
+            .pdf_reader
+            .as_ref()
+            .map(|reader| reader.read(cx).document_pages())
+            .and_then(|pages| pages.into_iter().find(|page| !page.blocks.is_empty()))
+        else {
+            self.research_status = Some("No loaded source block is available for a supported evidence card.".into());
+            cx.notify();
+            return;
+        };
+        let Some(block) = page.blocks.first().cloned() else { return; };
+        let Some(research) = self.research.as_mut() else {
+            self.research_status = Some("Research workspace is unavailable on this machine.".into());
+            cx.notify();
+            return;
+        };
+        let mut result = Ok(());
+        if !research.workspace().papers.iter().any(|paper| paper.paper_id == document_id) {
+            result = research.add_paper(pdf_library::research::Paper { paper_id: document_id.clone(), title: title.clone(), ..Default::default() });
+        }
+        if result.is_ok() {
+            let card_id = format!("{document_id}-{}", block.id);
+            if !research.workspace().cards.iter().any(|card| card.card_id == card_id) {
+                let locator = pdf_library::research::ExactLocator {
+                    document_id: document_id.clone(),
+                    source_sha256: page.source_id.clone(),
+                    revision_id: page.generation.to_string(),
+                    page: page.page_number as u32,
+                    block_id: Some(block.id.clone()),
+                    quote: Some(block.source.clone()),
+                    polygon: block.polygon.iter().map(|point| [f64::from(point[0]), f64::from(point[1])]).collect(),
+                };
+                result = research.add_card(pdf_library::research::KnowledgeCard {
+                    card_id,
+                    paper_id: document_id.clone(),
+                    title: title.clone(),
+                    body: block.source.clone(),
+                    status: pdf_library::research::EvidenceStatus::Supported,
+                    locator: Some(locator),
+                    provenance: "native-local-document-block".into(),
+                    created_at: crate::time::now().to_string(),
+                });
+            }
+        }
+        if result.is_ok() {
+            let paper_ids = research.workspace().papers.iter().map(|paper| paper.paper_id.clone()).collect();
+            result = research.upsert_collection(pdf_library::research::Collection { collection_id: "native-reading-list".into(), name: "Current documents".into(), paper_ids, tags: vec!["local".into()] });
+        }
+        self.research_status = Some(match result {
+            Ok(()) => "Saved a provenance-backed research card locally.".into(),
+            Err(error) => format!("Research action failed: {error:#}"),
+        });
+        cx.notify();
+    }
+
+    pub fn export_research_ris(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(research) = &self.research else {
+            self.research_status = Some("Research workspace is unavailable on this machine.".into());
+            cx.notify();
+            return;
+        };
+        let content = research.export_ris();
+        let picked = crate::devtools::take_pick().and_then(|paths| paths.into_iter().next());
+        let prompt = picked.is_none().then(|| cx.prompt_for_new_path(&export_directory(), Some("research.ris")));
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(path) = (match prompt { Some(prompt) => prompt.await.ok().and_then(Result::ok).flatten(), None => picked }) else { return; };
+            let result = write_export_bytes_path(&path, content.as_bytes(), false);
+            let _ = this.update(cx, |workspace, cx| {
+                workspace.research_status = Some(match result {
+                    Ok(path) => format!("Exported local RIS to {}.", path.display()),
+                    Err(error) => format!("RIS export failed: {error:#}"),
+                });
+                cx.notify();
+            });
+        }).detach();
+    }
+
+    pub fn import_research_ris(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let picked = crate::devtools::take_pick();
+        let prompt = picked.is_none().then(|| cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some("Import RIS".into()), extensions: Some(vec![SharedString::from("ris")]) }));
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(paths) = (match prompt { Some(prompt) => prompt.await.ok().and_then(Result::ok).flatten(), None => picked }) else { return; };
+            let Some(path) = paths.into_iter().next() else { return; };
+            let result = std::fs::read_to_string(&path).map_err(anyhow::Error::from);
+            let _ = this.update(cx, |workspace, cx| {
+                workspace.research_status = Some(match result {
+                    Ok(content) => {
+                        let Some(research) = workspace.research.as_mut() else { return; };
+                        match research.import_ris(&content) {
+                            Ok(import) if import.errors.is_empty() => format!("Imported {} RIS records locally; metadata remains unverified.", import.records.len()),
+                            Ok(import) => format!("Imported {} RIS records with {} parse warnings; metadata remains unverified.", import.records.len(), import.errors.len()),
+                            Err(error) => format!("RIS import failed: {error:#}"),
+                        }
+                    }
+                    Err(error) => format!("RIS import failed: {error:#}"),
+                });
+                cx.notify();
+            });
+        }).detach();
+    }
+
+    pub fn run_ocr_markup(&mut self, cx: &mut Context<Self>) {
+        if self.ocr_busy { return; }
+        let Some(reader) = &self.pdf_reader else {
+            self.ocr_status = Some("Open a local PDF before running OCR markup.".into());
+            cx.notify();
+            return;
+        };
+        let input = match reader.read(cx).ocr_input() {
+            Ok(input) => input,
+            Err(error) => {
+                self.ocr_status = Some(format!("OCR unavailable: {error:#}"));
+                cx.notify();
+                return;
+            }
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let task = cx.background_executor().spawn(async move {
+            let options = crate::pdf_reader::ocr_markup::PreprocessOptions { grayscale: true, ..Default::default() };
+            let engine = crate::pdf_reader::ocr_markup::LocalOcrEngine;
+            crate::pdf_reader::ocr_markup::recognize_document(input.0, &[input.1], &options, &engine, &cancel)
+        });
+        self.ocr_busy = true;
+        self.ocr_status = Some("Running local OCR markup on the loaded page…".into());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |workspace, cx| {
+                workspace.ocr_busy = false;
+                match result {
+                    Ok(document) => {
+                        workspace.ocr_markup = crate::pdf_reader::ocr_markup::extract_markup(&document);
+                        let blocks = document.pages.iter().map(|page| page.blocks.len()).sum::<usize>();
+                        workspace.ocr_document = Some(document);
+                        workspace.ocr_status = Some(format!("Local OCR derived {blocks} blocks and {} markup nodes; source provenance retained.", workspace.ocr_markup.len()));
+                    }
+                    Err(error) => workspace.ocr_status = Some(format!("OCR unavailable or failed closed: {error}")),
+                }
+                cx.notify();
+            });
+        }).detach();
+    }
+
+    fn export_translated_pdf_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let title = self.current.as_ref().and_then(|id| self.entries.iter().find(|entry| &entry.id == id)).map(|entry| display_title(&entry.title)).unwrap_or_else(|| "document".into());
+        let Some(reader) = &self.pdf_reader else {
+            self.show_toast_kind(ToastKind::Info, "Open a local PDF before exporting a translated PDF.", cx);
+            return;
+        };
+        let input = match reader.read(cx).translated_pdf_input(&title) {
+            Ok(input) => input,
+            Err(error) => { self.show_toast_kind(ToastKind::Info, &format!("Translated PDF unavailable: {error:#}"), cx); return; }
+        };
+        let Some(source_path) = input.source_path.clone() else { return; };
+        let source_pdf = match std::fs::read(&source_path) {
+            Ok(bytes) => bytes,
+            Err(error) => { self.show_toast_kind(ToastKind::Error, &format!("Cannot read retained PDF: {error}"), cx); return; }
+        };
+        let suggested = suggested_name(&title, ExportFormat::TranslatedPdf);
+        let picked = crate::devtools::take_pick().and_then(|paths| paths.into_iter().next());
+        let prompt = picked.is_none().then(|| cx.prompt_for_new_path(&export_directory(), Some(&suggested)));
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(path) = (match prompt { Some(prompt) => prompt.await.ok().and_then(Result::ok).flatten(), None => picked }) else { return; };
+            let result = (|| -> anyhow::Result<_> {
+                let preview = build_translated_pdf(&source_pdf, &input)?;
+                anyhow::ensure!(preview.missing_translation_blocks.is_empty(), "{} untranslated source blocks; translate them before publishing", preview.missing_translation_blocks.len());
+                let cancelled = AtomicBool::new(false);
+                write_translated_pdf_path(&source_pdf, &input, &path, &cancelled)
+            })();
+            let _ = this.update(cx, |workspace, cx| {
+                match result {
+                    Ok(output) => {
+                        let warning = output.warnings.join("; ");
+                        workspace.show_toast(&format!("Translated PDF exported to {}. {}", path.display(), warning), cx);
+                    }
+                    Err(error) => workspace.show_toast_kind(ToastKind::Error, &format!("Translated PDF export failed: {error:#}"), cx),
+                }
+            });
+        }).detach();
+    }
+
     /// 导出文档: write the open document in the chosen form. The save panel is
     /// asked where; an existing file is refused, never replaced, because this is
     /// the one control that writes outside the library.
     pub fn export_document_as(&mut self, format: ExportFormat, window: &mut Window, cx: &mut Context<Self>) {
         self.export_menu = None;
+        if format == ExportFormat::TranslatedPdf {
+            self.export_translated_pdf_as(window, cx);
+            return;
+        }
         if format == ExportFormat::Pdf {
             let Some(source) = self.pdf_reader.as_ref().and_then(|reader| reader.read(cx).source_pdf_path()) else {
                 self.show_toast_kind(ToastKind::Info, crate::i18n::tr3("只有本地 PDF 可以另存为 PDF。", "Only a local PDF can be saved as PDF.", "Chỉ PDF cục bộ mới có thể lưu thành PDF."), cx);
@@ -711,7 +937,8 @@ impl Workspace {
             .child(Self::export_menu_row(cx, "export-html", ExportFormat::Html))
             .child(Self::export_menu_row(cx, "export-docx", ExportFormat::Docx))
             .child(Self::export_menu_row(cx, "export-json", ExportFormat::Json))
-            .child(Self::export_menu_row(cx, "export-pdf", ExportFormat::Pdf));
+            .child(Self::export_menu_row(cx, "export-pdf", ExportFormat::Pdf))
+            .child(Self::export_menu_row(cx, "export-translated-pdf", ExportFormat::TranslatedPdf));
         Some(deferred(anchored().anchor(Corner::TopRight).position(origin).snap_to_window_with_margin(px(8.)).child(menu)).with_priority(2).into_any_element())
     }
 
@@ -914,11 +1141,12 @@ impl Workspace {
 
     /// Switch the main pane to 主页 or 回收站 (or back to the document).
     pub fn show_chat(&mut self, cx: &mut Context<Self>) {
-        let context = self.pdf_reader.as_ref().and_then(|reader| reader.read(cx).document_context()).map(|(fallback, text)| {
+        let context = self.pdf_reader.as_ref().map(|reader| {
+            let fallback = reader.read(cx).document_context().map(|(title, _)| title).unwrap_or_else(|| "PDF".to_string());
             let title = self.current.as_ref().and_then(|id| self.entries.iter().find(|entry| &entry.id == id)).map(|entry| entry.title.clone()).unwrap_or(fallback);
-            (title, text)
+            (title, reader.read(cx).document_pages())
         });
-        self.chat.update(cx, |chat, cx| chat.set_context(context, cx));
+        self.chat.update(cx, |chat, cx| chat.set_document_context(context, cx));
         self.home.chat = true;
         self.home.recent_view = false;
         self.show_view(View::Chat, cx);
@@ -927,6 +1155,94 @@ impl Workspace {
     pub fn show_chat_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_chat(cx);
         self.chat.update(cx, |chat, cx| chat.focus(window, cx));
+    }
+
+    pub fn show_intelligence(&mut self, cx: &mut Context<Self>) {
+        self.home.chat = false;
+        self.home.recent_view = false;
+        self.show_view(View::Intelligence, cx);
+    }
+
+    pub fn select_intelligence_module(&mut self, module: crate::intelligence::ModuleId, cx: &mut Context<Self>) {
+        self.intelligence.dispatch(crate::intelligence::Command::Select(module));
+        if let Err(error) = self.intelligence.save(&intelligence_state_path()) {
+            self.show_toast_kind(ToastKind::Error, &format!("Could not save workspace view: {error}"), cx);
+        }
+        cx.notify();
+    }
+
+    fn render_intelligence(&self, cx: &mut Context<Self>) -> AnyElement {
+        let selected = self.intelligence.selected();
+        let (status_label, description) = match selected.status() {
+            crate::intelligence::ModuleStatus::Available(message) => ("Available", message),
+            crate::intelligence::ModuleStatus::Partial(message) => ("Partially available", message),
+            crate::intelligence::ModuleStatus::Unavailable(message) => ("Unavailable", message),
+        };
+        let mut choices = div().flex().flex_col().gap(px(6.));
+        for module in crate::intelligence::ModuleId::ALL {
+            let is_selected = selected == module;
+            choices = choices.child(
+                crate::ui::secondary_button(module.id(), module.title())
+                .when(is_selected, |button| button.border_color(Theme::primary()))
+                .on_click(cx.listener(move |workspace, _, _, cx| workspace.select_intelligence_module(module, cx))),
+            );
+        }
+        let ocr_preview = (!self.ocr_markup.is_empty()).then(|| {
+            self.ocr_markup
+                .iter()
+                .take(3)
+                .map(|node| format!("p{} · {:?} · {}", node.page + 1, node.kind, node.text))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        });
+        let research_summary = self.research.as_ref().map(|research| {
+            let workspace = research.workspace();
+            format!("{} papers · {} cards · {} collections · {} pending proposals", workspace.papers.len(), workspace.cards.len(), workspace.collections.len(), workspace.proposals.iter().filter(|proposal| matches!(proposal.state, pdf_library::research::ProposalState::Pending)).count())
+        }).unwrap_or_else(|| "Research persistence is unavailable.".into());
+        let actions = match selected {
+            crate::intelligence::ModuleId::RagCitations => div().flex().gap(px(8.))
+                .child(crate::ui::secondary_button("open-grounded-chat", crate::i18n::tr3("打开证据聊天", "Open grounded chat", "Mở trò chuyện có căn cứ")).on_click(cx.listener(|workspace, _, _, cx| workspace.show_chat(cx))))
+                .child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(crate::i18n::tr3("缺少本地来源块或引用无效时，问题会明确弃答。", "Questions abstain when local source blocks are missing or citations are invalid.", "Câu hỏi sẽ được bỏ qua rõ ràng khi thiếu khối nguồn cục bộ hoặc trích dẫn không hợp lệ."))),
+            crate::intelligence::ModuleId::ResearchWorkspace => div().flex().flex_col().gap(px(8.))
+                .child(div().text_size(px(13.)).child(research_summary))
+                .child(div().flex().gap(px(8.))
+                    .child(crate::ui::secondary_button("research-add-card", crate::i18n::tr3("保存当前证据", "Save current evidence", "Lưu bằng chứng hiện tại")).on_click(cx.listener(|workspace, _, _, cx| workspace.add_current_to_research(cx))))
+                    .child(crate::ui::secondary_button("research-import-ris", crate::i18n::tr3("导入 RIS", "Import RIS", "Nhập RIS")).on_click(cx.listener(|workspace, _, window, cx| workspace.import_research_ris(window, cx))))
+                    .child(crate::ui::secondary_button("research-export-ris", crate::i18n::tr3("导出 RIS", "Export RIS", "Xuất RIS")).on_click(cx.listener(|workspace, _, window, cx| workspace.export_research_ris(window, cx))))),
+            crate::intelligence::ModuleId::OcrMarkup => div().flex().flex_col().gap(px(8.))
+                .child(crate::ui::secondary_button("run-native-ocr-markup", if self.ocr_busy { crate::i18n::tr3("OCR 运行中…", "OCR running…", "OCR đang chạy…") } else { crate::i18n::tr3("运行本地 OCR 标注", "Run local OCR markup", "Chạy đánh dấu OCR cục bộ") }).when(self.ocr_busy, |button| button.text_color(Theme::text_caption())).on_click(cx.listener(|workspace, _, _, cx| workspace.run_ocr_markup(cx))))
+                .when_some(self.ocr_status.as_ref(), |panel, status| panel.child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(status.clone())))
+                .child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(crate::i18n::tr3("OCR 引擎和置信度保持明确；不可用引擎会安全失败。", "OCR engine and confidence remain explicit; unavailable engines fail closed.", "Công cụ OCR và độ tin cậy luôn được nêu rõ; công cụ không khả dụng sẽ dừng an toàn.")))
+                .when_some(ocr_preview.as_ref(), |panel, preview| panel.child(div().text_size(px(12.)).line_height(px(18.)).child(preview.clone()))),
+            crate::intelligence::ModuleId::TranslatedPdf => div().flex().flex_col().gap(px(8.))
+                .child(crate::ui::secondary_button("export-translated-pdf", crate::i18n::tr3("导出翻译 PDF", "Export translated PDF", "Xuất PDF đã dịch")).on_click(cx.listener(|workspace, _, window, cx| workspace.export_document_as(ExportFormat::TranslatedPdf, window, cx))))
+                .child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(crate::i18n::tr3("每个来源块都必须有译文。输出是新的纯文本 PDF，并提示 Helvetica 未嵌入。", "Requires a translation for every source block. Output is new text-only PDF with a non-embedded Helvetica warning.", "Mỗi khối nguồn phải có bản dịch. Đầu ra là PDF chỉ có văn bản mới và cảnh báo Helvetica chưa được nhúng."))),
+        };
+        div().id("native-intelligence").flex_1().min_w_0().h_full().flex().flex_col()
+            .child(self.top_bar(cx))
+            .child(div().id("intelligence-content").flex_1().min_h_0().overflow_y_scroll().px(px(36.)).py(px(28.)).child(
+                div().max_w(px(760.)).flex().flex_col().gap(px(18.))
+                    .child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child(crate::i18n::tr3("文档智能", "Document intelligence", "Trí tuệ tài liệu")))
+                    .child(div().text_size(px(13.)).text_color(Theme::text_caption()).child(crate::i18n::tr3("原生本地工作流会明确显示来源和不可用状态。", "Native local workflows with explicit provenance and unavailable states.", "Quy trình cục bộ native hiển thị rõ nguồn gốc và trạng thái không khả dụng.")))
+                    .child(choices)
+                    .child(div().mt(px(8.)).text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(selected.title()))
+                    .child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(status_label))
+                    .child(div().text_size(px(13.)).line_height(px(20.)).child(description))
+                    .child(actions)
+                    .when_some(self.research_status.as_ref(), |panel, status| panel.child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(status.clone())))
+                    .when_some(self.current.as_ref(), |panel, id| panel.child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(format!("Current local document: {id}"))))
+                    .when(self.intelligence.active_operation().is_some(), |panel| panel.child(
+                        crate::ui::secondary_button("cancel-intelligence-operation", crate::i18n::tr3("取消操作", "Cancel operation", "Hủy thao tác"))
+                            .on_click(cx.listener(|workspace, _, _, cx| {
+                                if let Some(id) = workspace.intelligence.active_operation().map(str::to_owned) {
+                                    workspace.intelligence.dispatch(crate::intelligence::Command::CancelOperation(id));
+                                    let _ = workspace.intelligence.save(&intelligence_state_path());
+                                    cx.notify();
+                                }
+                            })),
+                    )
+            )))
+            .into_any_element()
     }
 
     pub fn show_view(&mut self, view: View, cx: &mut Context<Self>) {        self.cancel_shortcut_recording(cx);
@@ -1345,6 +1661,7 @@ impl Render for Workspace {
                 .into_any_element(),
             View::Home => self.render_home(window, cx),
             View::Chat => div().flex_1().min_w_0().h_full().child(self.chat.clone()).into_any_element(),
+            View::Intelligence => self.render_intelligence(cx),
             View::Trash => self.render_trash(cx),
             View::Settings => self.render_settings(cx),
         };
@@ -1451,6 +1768,7 @@ impl Render for Workspace {
             .children(trash_menu)
             .children(home_menus)
             .children(theme_menu)
+            .children(export_menu)
             .children(confirm)
             .children(move_dlg)
             .children(search)

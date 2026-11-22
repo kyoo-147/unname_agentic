@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  web:
+  extension:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -35,46 +35,33 @@ jobs:
       - name: Committed imports resolve
         timeout-minutes: 5
         run: node scripts/check-committed-imports.mjs
-      - name: Unit tests
+      - name: Extension tests
         timeout-minutes: 10
-        run: pnpm test
+        run: pnpm test:extension
       - name: Typecheck
         timeout-minutes: 5
         run: pnpm typecheck
-      - name: Build reader and extension
+      - name: Build extension viewer
         timeout-minutes: 10
         run: pnpm build
-      - name: Install Chromium for Playwright
-        timeout-minutes: 15
-        run: pnpm exec playwright install --with-deps chromium
-      - name: End-to-end journeys
-        timeout-minutes: 25
-        # `pnpm test:e2e` would inherit whatever retries playwright.config.ts grows.
-        # A release gate must see the first run, so pin retries to 0 here.
-        run: pnpm exec playwright test --retries=0
       - name: Check shipped artifacts
         timeout-minutes: 5
         run: pwsh -File scripts/verify-release.ps1 -ArtifactsOnly
-      - name: Upload Playwright failures
-        if: failure()
+      - name: Validate native packaging and registration contracts
         timeout-minutes: 5
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-failures
-          path: |
-            playwright-report
-            test-results
-          if-no-files-found: ignore
-      - name: Upload journey screenshots
-        if: success()
-        timeout-minutes: 5
-        uses: actions/upload-artifact@v4
-        with:
-          name: journey-screenshots
-          path: |
-            artifacts/ui-flows
-            artifacts/*.png
-          if-no-files-found: ignore
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @('scripts/package-native.ps1', 'scripts/install-native-host.ps1', 'scripts/verify-release.ps1')
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $file), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) { throw "$file parse errors: $($errors -join '; ')" }
+          }
+          pnpm exec vitest run --config extension/vitest.config.ts extension/tests/release-scripts.test.ts
+          if ($LASTEXITCODE -ne 0) { throw 'Native packaging/registration contract tests failed.' }
+          Write-Output 'Contract validation only. No native artifacts, signing, registration, or Chrome host E2E are claimed.'
 
   native:
     # Manual only, and honest about what it does. The GPUI shell needs tens of GB

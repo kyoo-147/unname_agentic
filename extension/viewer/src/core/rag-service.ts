@@ -1,0 +1,1044 @@
+import {
+  abstainMessage,
+  assessEvidence,
+  DEFAULT_ABSTAIN_LANGUAGE,
+  guardAnswer,
+  type AbstainLanguage,
+  type AnswerGuard,
+  type EvidenceAssessment,
+} from './abstain';
+import {
+  AGENT_TOOL_NAMES,
+  MAX_PLAN_CALLS,
+  validateCall,
+  type AgentToolName,
+  type ToolCallContext,
+  type ToolCallValidation,
+} from './agent-tools';
+import { parseAnswer, formatPrompt, type ContextBlock, type ParsedAnswer, type Workspace } from './multi-document';
+import { rewriteQuery, type QueryFilters, type QueryPlan } from './query';
+import {
+  index,
+  chunkDocument,
+  hybridSearch,
+  type Chunk,
+  type ChunkKind,
+  type EmbeddingAdapter,
+  type EmbeddingStatus,
+  type HybridSearchHit,
+} from './retrieval';
+import { createLocalEmbedder } from './hybrid-retrieval';
+import {
+  resolveCitations,
+  type CitationMarker,
+  type ResolvedCitation,
+} from './citations';
+import type { Block, BlockType, DocumentIR } from './ir';
+import type { Rect } from './types';
+
+/** Why caller-owned semantic retrieval cannot contribute trusted evidence. */
+export type SemanticUnavailableReason = 'offline-mode' | 'no-provider' | 'provider-error' | 'invalid-result' | 'cancelled';
+
+export type SemanticIncompatibleReason = 'invalid-result' | 'duplicate-result' | 'unknown-chunk' | 'invalid-score';
+
+export type SemanticUnknownReason = 'unknown-result';
+
+export interface SemanticHit {
+  chunkId: string;
+  score: number;
+}
+
+export type SemanticRetrieval =
+  | { status: 'available'; hits: SemanticHit[] }
+  | { status: 'unavailable'; reason: SemanticUnavailableReason; detail?: string }
+  | { status: 'incompatible'; reason: SemanticIncompatibleReason; detail?: string }
+  | { status: 'unknown'; reason: SemanticUnknownReason; detail?: string };
+
+export interface SemanticRetrievalRequest {
+  question: string;
+  chunks: readonly Chunk[];
+  limit: number;
+  signal?: AbortSignal;
+}
+
+/** The host owns the provider. This service never downloads models or opens a network. */
+export type RagSemanticRetriever = (request: SemanticRetrievalRequest) => SemanticRetrieval;
+
+export interface RagSelection {
+  page?: number;
+  region?: Rect;
+  blockIds?: readonly string[];
+  kinds?: readonly ChunkKind[];
+  blockTypes?: readonly BlockType[];
+  required?: boolean;
+}
+
+/** Metadata fields available on the existing retrieval chunk shape. */
+export interface RagMetadataFilters {
+  documentIds?: readonly string[];
+  kinds?: readonly ChunkKind[];
+  headingPaths?: readonly string[];
+  languages?: readonly string[];
+}
+
+/** Caller filters applied before lexical ranking, plus filters inferred by `query.ts`. */
+export interface RagFilters {
+  /** Workspace document ids. */
+  documentIds?: readonly string[];
+  /** 1-based source pages. */
+  pages?: readonly number[];
+  /** Source block ids. A chunk matches when it contains at least one requested id. */
+  blockIds?: readonly string[];
+  /** Existing chunk and document metadata filters. */
+  metadata?: RagMetadataFilters;
+  /** Optional year filter for chunks containing the named year. */
+  years?: readonly number[];
+}
+
+/** One tool call supplied by a host for validation and audit only. */
+export interface RagToolCall {
+  name: string;
+  args: unknown;
+}
+
+/** A single auditable tool-policy decision. No tool is executed by this module. */
+export interface RagToolTrace {
+  step: number;
+  name: string;
+  args: unknown;
+  status: 'allowed' | 'rejected' | 'budget-exhausted';
+  reason: 'not-allowlisted' | 'invalid-call' | 'step-budget-exhausted' | null;
+  validation: ToolCallValidation | null;
+}
+
+/** A caller-supplied transport. It may be an adapter around any model or local system. */
+export type RagTransport = (request: RagTransportRequest) => string;
+
+export interface RagTransportRequest {
+  question: string;
+  prompt: string;
+  context: readonly ContextBlock[];
+  queryPlans: readonly RagQueryPlan[];
+  semantic: SemanticRetrieval;
+  selection: RagSelection | null;
+  toolTrace: readonly RagToolTrace[];
+}
+
+/** One query rewrite and its document-language context. */
+export interface RagQueryPlan {
+  documentId: string;
+  plan: QueryPlan;
+}
+
+/** One lexical hit retained for audit, whether or not it entered the bounded context. */
+export interface RagRetrievalHit {
+  documentId: string;
+  chunkId: string;
+  page: number;
+  blockIds: string[];
+  kind: ChunkKind;
+  headingPath: string[];
+  /** Fused score exposed for compatibility with the previous lexical result. */
+  score: number;
+  lexicalScore: number;
+  vectorScore: number | null;
+  fusedScore: number;
+  semanticScore: number | null;
+  retrievalMethod: 'lexical' | 'vector' | 'hybrid' | 'semantic' | 'selection';
+  embeddingStatus: EmbeddingStatus;
+  matchedTerms: string[];
+  selected: boolean;
+}
+
+/** Options for preparing a pure request. */
+export interface RagPrepareOptions {
+  /** Optional local vector adapter; unavailable adapters keep lexical fallback explicit. */
+  embedding?: EmbeddingAdapter;
+  lexicalWeight?: number;
+  vectorWeight?: number;
+  filters?: RagFilters;
+  selection?: RagSelection;
+  offline?: boolean;
+  semanticRetriever?: RagSemanticRetriever;
+  semanticTopK?: number;
+  maxContextChars?: number;
+  maxExcerptChars?: number;
+  minExcerptChars?: number;
+  documentShare?: number;
+  abstainLanguage?: AbstainLanguage;
+  allowedTools?: readonly AgentToolName[];
+  maxToolSteps?: number;
+  toolContext?: ToolCallContext;
+  toolCalls?: readonly RagToolCall[];
+  signal?: AbortSignal;
+}
+
+/** A prepared request. It contains no model output and performs no I/O. */
+export interface RagPrepared {
+  question: string;
+  context: ContextBlock[];
+  prompt: string;
+  assessment: EvidenceAssessment;
+  queryPlans: RagQueryPlan[];
+  retrievalHits: RagRetrievalHit[];
+  semantic: SemanticRetrieval;
+  selection: RagSelection | null;
+  embeddingStatus: EmbeddingStatus;
+  retrievalMethod: 'lexical' | 'hybrid';
+  toolTrace: RagToolTrace[];
+  abstainLanguage: AbstainLanguage;
+}
+
+export type RagStatus =
+  | 'answer'
+  | 'weak'
+  | 'abstain'
+  | 'unsupported-citation'
+  | 'tool-policy-rejected'
+  | 'cancelled';
+
+/** A citation resolved to every source block represented by a context block. */
+export interface RagCitation extends ResolvedCitation {
+  documentId: string;
+  revisionId: string;
+  sourceSha256: string;
+  chunkId: string;
+}
+
+/** A citation that could not be trusted as evidence for the answer. */
+export interface UnsupportedRagCitation {
+  index: number;
+  documentId: string;
+  page: number;
+  raw: string;
+  count: number;
+  reason: 'unknown-document' | 'page-not-in-context' | 'block-not-in-context' | 'region-unresolved';
+}
+
+/** Final pure result after a caller-supplied answer has been checked. */
+export interface RagResult extends RagPrepared {
+  status: RagStatus;
+  rawAnswer: string | null;
+  answer: string | null;
+  citations: RagCitation[];
+  unsupportedCitations: UnsupportedRagCitation[];
+  guard: AnswerGuard | null;
+  abstentionMessage: string;
+}
+
+export interface RagServiceOptions {
+  embedding?: EmbeddingAdapter;
+  lexicalWeight?: number;
+  vectorWeight?: number;
+  offline?: boolean;
+  semanticRetriever?: RagSemanticRetriever;
+  semanticTopK?: number;
+  maxContextChars?: number;
+  maxExcerptChars?: number;
+  minExcerptChars?: number;
+  documentShare?: number;
+  abstainLanguage?: AbstainLanguage;
+  allowedTools?: readonly AgentToolName[];
+  maxToolSteps?: number;
+}
+
+export interface RagService {
+  prepare(question: string, options?: RagPrepareOptions): RagPrepared;
+  complete(prepared: RagPrepared, answer: string): RagResult;
+  run(question: string, transport: RagTransport, options?: RagPrepareOptions): RagResult;
+}
+
+/**
+ * Creates a deterministic, multi-document RAG runtime seam.
+ *
+ * The service owns chunking, lexical retrieval, filtering, context budgeting, prompt
+ * fencing, evidence assessment, citation resolution and tool-policy audit. It never
+ * calls an LLM, network, clock, DOM or tool executor. A host supplies the answer through
+ * `run` or calls `complete` with an already available answer.
+ */
+export function createRagService(workspace: Workspace, defaults: RagServiceOptions = {}): RagService {
+  const documents = usableDocuments(workspace);
+  const defaultOptions = normalizeDefaults(defaults, documents);
+
+  return {
+    prepare(question, options = {}) {
+      return prepareRequest(documents, question, mergeOptions(defaultOptions, options));
+    },
+    complete(prepared, answer) {
+      return completeAnswer(prepared, answer, documents);
+    },
+    run(question, transport, options = {}) {
+      const prepared = prepareRequest(documents, question, mergeOptions(defaultOptions, options));
+      if (isCancelled(prepared)) return resultForCancellation(prepared);
+      if (hasToolPolicyFailure(prepared.toolTrace)) return resultForPolicyFailure(prepared);
+      if (prepared.assessment.verdict === 'abstain') return resultForAbstention(prepared);
+      return completeAnswer(prepared, transport({
+        question: prepared.question,
+        prompt: prepared.prompt,
+        context: prepared.context,
+        queryPlans: prepared.queryPlans,
+        semantic: prepared.semantic,
+        selection: prepared.selection,
+        toolTrace: prepared.toolTrace,
+      }), documents);
+    },
+  };
+}
+
+function prepareRequest(
+  documents: readonly WorkspaceDocumentView[],
+  question: string,
+  options: NormalizedPrepareOptions,
+): RagPrepared {
+  const text = typeof question === 'string' ? question : '';
+  const queryPlans = documents.map(document => ({
+    documentId: document.id,
+    plan: rewriteQuery(text, { documentTitle: document.title, language: document.ir.language }),
+  }));
+  const questionFilters = rewriteQuery(text).filters;
+  const candidates = collectChunks(documents, options.filters, questionFilters, options.selection);
+  const ranked = rankChunks(candidates, queryPlans, text, options);
+  const context = selectContext(ranked.hits, documents, options);
+  const assessment = assessEvidence(text, context);
+  const prompt = formatPrompt(context, text);
+  const toolTrace = auditToolCalls(options.toolCalls, options);
+
+  const selected = new Set(context.map(block => block.chunkId).filter((chunkId): chunkId is string => typeof chunkId === 'string'));
+  const retrievalHits = ranked.hits.map(hit => ({
+    documentId: hit.chunk.documentId,
+    chunkId: hit.chunk.id,
+    page: hit.chunk.page,
+    blockIds: [...hit.chunk.blockIds],
+    kind: hit.chunk.kind,
+    headingPath: [...hit.chunk.headingPath],
+    score: hit.fusedScore,
+    lexicalScore: hit.lexicalScore,
+    vectorScore: hit.vectorScore,
+    fusedScore: hit.fusedScore,
+    semanticScore: hit.semanticScore,
+    retrievalMethod: hit.retrievalMethod,
+    embeddingStatus: hit.embeddingStatus,
+    matchedTerms: [...hit.matchedTerms],
+    selected: selected.has(hit.chunk.id),
+  }));
+
+  const embeddingStatus = ranked.hits.find(hit => hit.embeddingStatus.state !== 'available')?.embeddingStatus ?? options.embedding.status;
+  return {
+    question: text,
+    context,
+    prompt,
+    assessment,
+    queryPlans,
+    retrievalHits,
+    semantic: ranked.semantic,
+    selection: options.selection,
+    toolTrace,
+    abstainLanguage: options.abstainLanguage,
+    embeddingStatus,
+    retrievalMethod: embeddingStatus.state === 'available' ? 'hybrid' : 'lexical',
+  };
+}
+
+function completeAnswer(
+  prepared: RagPrepared,
+  answer: string,
+  documents: readonly WorkspaceDocumentView[],
+): RagResult {
+  if (isCancelled(prepared)) return resultForCancellation(prepared);
+  if (hasToolPolicyFailure(prepared.toolTrace)) return resultForPolicyFailure(prepared);
+  if (prepared.assessment.verdict === 'abstain') return resultForAbstention(prepared, answer);
+
+  const rawAnswer = typeof answer === 'string' ? answer : '';
+  const parsed = parseAnswer(rawAnswer, prepared.context);
+  const resolved = resolveRagCitations(parsed, prepared.context, documents);
+  const guard = guardAnswer(rawAnswer, prepared.assessment);
+
+  if (resolved.unsupported.length > 0) {
+    return {
+      ...prepared,
+      status: 'unsupported-citation',
+      rawAnswer,
+      answer: null,
+      citations: resolved.citations,
+      unsupportedCitations: resolved.unsupported,
+      guard,
+      abstentionMessage: '',
+    };
+  }
+
+  return {
+    ...prepared,
+    status: prepared.assessment.verdict === 'weak' ? 'weak' : 'answer',
+    rawAnswer,
+    answer: guard.ok ? parsed.answer : null,
+    citations: resolved.citations,
+    unsupportedCitations: [],
+    guard,
+    abstentionMessage: guard.ok ? abstainMessage(prepared.assessment.verdict, prepared.abstainLanguage) : abstainMessage('abstain', prepared.abstainLanguage),
+  };
+}
+
+function resultForAbstention(prepared: RagPrepared, rawAnswer: string | null = null): RagResult {
+  return {
+    ...prepared,
+    status: 'abstain',
+    rawAnswer,
+    answer: null,
+    citations: [],
+    unsupportedCitations: [],
+    guard: null,
+    abstentionMessage: abstainMessage('abstain', prepared.abstainLanguage),
+  };
+}
+
+function resultForCancellation(prepared: RagPrepared): RagResult {
+  return {
+    ...prepared,
+    status: 'cancelled',
+    rawAnswer: null,
+    answer: null,
+    citations: [],
+    unsupportedCitations: [],
+    guard: null,
+    abstentionMessage: '',
+  };
+}
+
+function resultForPolicyFailure(prepared: RagPrepared): RagResult {
+  return {
+    ...prepared,
+    status: 'tool-policy-rejected',
+    rawAnswer: null,
+    answer: null,
+    citations: [],
+    unsupportedCitations: [],
+    guard: null,
+    abstentionMessage: '',
+  };
+}
+
+interface WorkspaceDocumentView {
+  id: string;
+  title: string;
+  ir: DocumentIR;
+}
+
+interface NormalizedPrepareOptions {
+  filters: RagFilters;
+  selection: RagSelection | null;
+  offline: boolean;
+  semanticRetriever?: RagSemanticRetriever;
+  semanticTopK: number;
+  maxContextChars: number;
+  maxExcerptChars: number;
+  minExcerptChars: number;
+  documentShare: number;
+  abstainLanguage: AbstainLanguage;
+  allowedTools: readonly AgentToolName[];
+  maxToolSteps: number;
+  embedding: EmbeddingAdapter;
+  lexicalWeight: number;
+  vectorWeight: number;
+  toolContext?: ToolCallContext;
+  toolCalls?: readonly RagToolCall[];
+  signal?: AbortSignal;
+}
+
+function normalizeDefaults(
+  options: RagServiceOptions,
+  documents: readonly WorkspaceDocumentView[],
+): NormalizedPrepareOptions {
+  const localEmbedder = createLocalEmbedder({
+    corpus: documents.flatMap(document => chunkDocument(document.ir).map(chunk => chunk.text)),
+  });
+  const embedding: EmbeddingAdapter = options.embedding ?? {
+    status: { state: 'available', model: localEmbedder.id },
+    embed: text => localEmbedder.embed(text),
+  };
+  return {
+    filters: {},
+    selection: null,
+    offline: options.offline !== false,
+    semanticRetriever: options.semanticRetriever,
+    semanticTopK: budgetOr(options.semanticTopK, 10),
+    maxContextChars: positiveOr(options.maxContextChars, 6000),
+    maxExcerptChars: positiveOr(options.maxExcerptChars, 1200),
+    minExcerptChars: positiveOr(options.minExcerptChars, 120),
+    documentShare: shareOr(options.documentShare, 0.6),
+    abstainLanguage: readLanguage(options.abstainLanguage),
+    allowedTools: options.allowedTools ?? AGENT_TOOL_NAMES,
+    maxToolSteps: budgetOr(options.maxToolSteps, MAX_PLAN_CALLS),
+    embedding,
+    lexicalWeight: nonNegative(options.lexicalWeight, 0.5),
+    vectorWeight: nonNegative(options.vectorWeight, 0.5),
+    toolContext: undefined,
+    toolCalls: undefined,
+    signal: undefined,
+  };
+}
+
+function mergeOptions(
+  defaults: NormalizedPrepareOptions,
+  options: RagPrepareOptions,
+): NormalizedPrepareOptions {
+  return {
+    ...defaults,
+    ...options,
+    filters: options.filters ?? defaults.filters,
+    selection: options.selection ?? defaults.selection,
+    offline: options.offline ?? defaults.offline,
+    semanticRetriever: options.semanticRetriever ?? defaults.semanticRetriever,
+    semanticTopK: budgetOr(options.semanticTopK, defaults.semanticTopK),
+    maxContextChars: positiveOr(options.maxContextChars, defaults.maxContextChars),
+    maxExcerptChars: positiveOr(options.maxExcerptChars, defaults.maxExcerptChars),
+    minExcerptChars: positiveOr(options.minExcerptChars, defaults.minExcerptChars),
+    documentShare: shareOr(options.documentShare, defaults.documentShare),
+    abstainLanguage: readLanguage(options.abstainLanguage ?? defaults.abstainLanguage),
+    allowedTools: options.allowedTools ?? defaults.allowedTools,
+    maxToolSteps: budgetOr(options.maxToolSteps, defaults.maxToolSteps),
+    embedding: options.embedding ?? defaults.embedding,
+    lexicalWeight: nonNegative(options.lexicalWeight, defaults.lexicalWeight),
+    vectorWeight: nonNegative(options.vectorWeight, defaults.vectorWeight),
+    toolContext: options.toolContext ?? defaults.toolContext,
+    toolCalls: options.toolCalls ?? defaults.toolCalls,
+    signal: options.signal ?? defaults.signal,
+  };
+}
+
+function usableDocuments(workspace: Workspace | undefined): WorkspaceDocumentView[] {
+  const documents: WorkspaceDocumentView[] = [];
+  const seen = new Set<string>();
+  for (const document of Array.isArray(workspace?.documents) ? workspace.documents : []) {
+    if (!document || typeof document !== 'object' || !document.ir || typeof document.ir !== 'object') continue;
+    const id = typeof document.id === 'string' ? document.id.trim() : '';
+    if (id.length === 0 || seen.has(id)) continue;
+    seen.add(id);
+    documents.push({
+      id,
+      title: typeof document.title === 'string' && document.title.trim().length > 0 ? document.title.trim() : id,
+      ir: document.ir,
+    });
+  }
+  return documents;
+}
+
+interface CandidateChunk {
+  chunk: Chunk;
+  selected: boolean;
+}
+
+function collectChunks(
+  documents: readonly WorkspaceDocumentView[],
+  filters: RagFilters,
+  questionFilters: QueryFilters,
+  selection: RagSelection | null,
+): CandidateChunk[] {
+  const chunks: CandidateChunk[] = [];
+  for (const document of documents) {
+    for (const sourceChunk of chunkDocument(document.ir)) {
+      const chunk: Chunk = {
+        ...sourceChunk,
+        id: `${document.id}\u0000${sourceChunk.id}`,
+        documentId: document.id,
+      };
+      if (!matchesFilters(chunk, document.ir, filters, questionFilters)) continue;
+      const selected = matchesSelection(chunk, document.ir, selection);
+      if (selection?.required && !selected) continue;
+      chunks.push({ chunk, selected });
+    }
+  }
+  return chunks;
+}
+
+function matchesFilters(chunk: Chunk, ir: DocumentIR, filters: RagFilters, question: QueryFilters): boolean {
+  const documentIds = filters.documentIds ?? filters.metadata?.documentIds;
+  if (documentIds !== undefined && !documentIds.includes(chunk.documentId)) return false;
+  if (filters.metadata?.languages !== undefined && !filters.metadata.languages.includes(ir.language)) return false;
+
+  const chunkPages = pagesForChunk(chunk, ir);
+  const pages = filters.pages;
+  if (pages !== undefined && !chunkPages.some(page => pages.includes(page))) return false;
+  if (question.page !== undefined && !chunkPages.includes(question.page)) return false;
+
+  const blockIds = filters.blockIds;
+  if (blockIds !== undefined && !chunk.blockIds.some(blockId => blockIds.includes(blockId))) return false;
+  if (filters.metadata?.kinds !== undefined && !filters.metadata.kinds.includes(chunk.kind)) return false;
+  if (filters.metadata?.headingPaths !== undefined && !matchesHeading(chunk.headingPath, filters.metadata.headingPaths)) return false;
+  if (question.section !== undefined && !matchesHeading(chunk.headingPath, [question.section])) return false;
+
+  const years = filters.years ?? (question.year === undefined ? undefined : [question.year]);
+  if (years !== undefined && !years.some(year => new RegExp(`(?:^|[^0-9])${year}(?:$|[^0-9])`, 'u').test(chunk.text))) return false;
+  return true;
+}
+
+function blocksForChunk(chunk: Chunk, ir: DocumentIR): Block[] {
+  const ids = new Set(chunk.blockIds);
+  return (Array.isArray(ir.blocks) ? ir.blocks : [])
+    .filter(block => block && ids.has(block.id))
+    .sort((left, right) => left.readingOrder - right.readingOrder);
+}
+
+function pagesForChunk(chunk: Chunk, ir: DocumentIR): number[] {
+  const pages = new Set<number>();
+  const blocks = blocksForChunk(chunk, ir);
+  for (const block of blocks) pages.add(block.page);
+  if (chunk.headingPath.length > 0) {
+    const headings = new Set(chunk.headingPath.map(normalizeMetadata));
+    for (const block of Array.isArray(ir.blocks) ? ir.blocks : []) {
+      if (block.type === 'heading' && headings.has(normalizeMetadata(block.raw))) pages.add(block.page);
+    }
+  }
+  if (pages.size === 0 && Number.isFinite(chunk.page)) pages.add(chunk.page);
+  return [...pages].sort((left, right) => left - right);
+}
+function matchesSelection(chunk: Chunk, ir: DocumentIR, selection: RagSelection | null): boolean {
+  if (!selection) return false;
+  if (selection.page !== undefined && !blocksForChunk(chunk, ir).some(block => block.page === selection.page)) return false;
+  if (selection.kinds !== undefined && !selection.kinds.includes(chunk.kind)) return false;
+  const blocks = blocksForChunk(chunk, ir);
+  if (selection.blockIds !== undefined && !blocks.some(block => selection.blockIds?.includes(block.id))) return false;
+  if (selection.blockTypes !== undefined && !blocks.some(block => selection.blockTypes?.includes(block.type))) return false;
+  const region = selection.region;
+  if (region !== undefined && !blocks.some(block => rectanglesIntersect(polygonRect(block.polygon), region))) return false;
+  return selection.page !== undefined
+    || selection.kinds !== undefined
+    || selection.blockIds !== undefined
+    || selection.blockTypes !== undefined
+    || selection.region !== undefined;
+}
+
+function polygonRect(polygon: readonly { x: number; y: number }[]): Rect {
+  const xs = polygon.map(point => point.x);
+  const ys = polygon.map(point => point.y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  return { x: left, y: top, width: Math.max(...xs) - left, height: Math.max(...ys) - top };
+}
+
+function rectanglesIntersect(left: Rect, right: Rect): boolean {
+  return left.x < right.x + right.width
+    && right.x < left.x + left.width
+    && left.y < right.y + right.height
+    && right.y < left.y + left.height;
+}
+
+function resolveSemanticRetrieval(
+  chunks: readonly Chunk[],
+  question: string,
+  options: NormalizedPrepareOptions,
+): SemanticRetrieval {
+  if (options.signal?.aborted) return { status: 'unavailable', reason: 'cancelled' };
+  if (options.offline) return { status: 'unavailable', reason: 'offline-mode' };
+  if (!options.semanticRetriever) return { status: 'unavailable', reason: 'no-provider' };
+  let result: SemanticRetrieval;
+  try {
+    result = options.semanticRetriever({
+      question,
+      chunks: chunks.map(chunk => ({ ...chunk, blockIds: [...chunk.blockIds], headingPath: [...chunk.headingPath] })),
+      limit: options.semanticTopK,
+      signal: options.signal,
+    });
+  } catch {
+    return { status: 'unavailable', reason: 'provider-error' };
+  }
+  if (options.signal?.aborted) return { status: 'unavailable', reason: 'cancelled' };
+  if (!result || !['available', 'unavailable', 'incompatible', 'unknown'].includes(result.status)) {
+    return { status: 'incompatible', reason: 'invalid-result' };
+  }
+  if (result.status === 'unavailable' || result.status === 'incompatible' || result.status === 'unknown') return result;
+  if (!Array.isArray(result.hits)) return { status: 'incompatible', reason: 'invalid-result' };
+  const chunkIds = new Set(chunks.map(chunk => chunk.id));
+  const seen = new Set<string>();
+  for (const hit of result.hits) {
+    if (!hit || typeof hit.chunkId !== 'string') {
+      return { status: 'incompatible', reason: 'invalid-result' };
+    }
+    if (!chunkIds.has(hit.chunkId)) {
+      return { status: 'incompatible', reason: 'unknown-chunk' };
+    }
+    if (!Number.isFinite(hit.score) || hit.score < 0 || hit.score > 1) {
+      return { status: 'incompatible', reason: 'invalid-score' };
+    }
+    if (seen.has(hit.chunkId)) {
+      return { status: 'incompatible', reason: 'duplicate-result' };
+    }
+    seen.add(hit.chunkId);
+  }
+  return {
+    status: 'available',
+    hits: result.hits.map(hit => ({ chunkId: hit.chunkId, score: hit.score }))
+      .sort((left, right) => right.score - left.score || compareText(left.chunkId, right.chunkId))
+      .slice(0, options.semanticTopK),
+  };
+}
+
+function reciprocalRankScore(lexicalRank: number | undefined, semanticRank: number | undefined): number {
+  const lexical = lexicalRank === undefined ? 0 : 1 / (60 + lexicalRank);
+  const semantic = semanticRank === undefined ? 0 : 1 / (60 + semanticRank);
+  return Number((lexical + semantic).toFixed(6));
+}
+
+type RankedRetrievalMethod = 'lexical' | 'vector' | 'hybrid' | 'semantic' | 'selection';
+
+interface RankedHit extends Omit<HybridSearchHit, 'score' | 'fusedScore' | 'retrievalMethod'> {
+  score: number;
+  fusedScore: number;
+  semanticScore: number | null;
+  retrievalMethod: RankedRetrievalMethod;
+  selected: boolean;
+}
+
+interface RankedRetrieval {
+  hits: RankedHit[];
+  semantic: SemanticRetrieval;
+}
+
+function rankChunks(
+  candidates: readonly CandidateChunk[],
+  queryPlans: readonly RagQueryPlan[],
+  question: string,
+  options: NormalizedPrepareOptions,
+): RankedRetrieval {
+  const chunks = candidates.map(candidate => candidate.chunk);
+  const semantic = resolveSemanticRetrieval(chunks, question, options);
+  if (chunks.length === 0) return { hits: [], semantic };
+  const target = index(chunks);
+  const merged = new Map<string, HybridSearchHit>();
+  const queries = new Set<string>();
+
+  for (const queryPlan of queryPlans) {
+    for (const query of queryPlan.plan.queries) {
+      const key = query.toLowerCase();
+      if (queries.has(key)) continue;
+      queries.add(key);
+      for (const hit of hybridSearch(target, query, {
+        limit: chunks.length,
+        embedding: options.embedding,
+        lexicalWeight: options.lexicalWeight,
+        vectorWeight: options.vectorWeight,
+      })) {
+        // TF-IDF similarity can help order lexically grounded candidates, but a
+        // hashed-vector resemblance alone is not enough evidence to admit a chunk.
+        if (hit.lexicalScore <= 0) continue;
+        const current = merged.get(hit.chunk.id);
+        if (!current) {
+          merged.set(hit.chunk.id, { ...hit, matchedTerms: [...hit.matchedTerms] });
+          continue;
+        }
+        if (hit.fusedScore > current.fusedScore) {
+          current.score = hit.fusedScore;
+          current.fusedScore = hit.fusedScore;
+          current.lexicalScore = hit.lexicalScore;
+          current.vectorScore = hit.vectorScore;
+          current.retrievalMethod = hit.retrievalMethod;
+          current.embeddingStatus = hit.embeddingStatus;
+        }
+        current.matchedTerms = [...new Set([...current.matchedTerms, ...hit.matchedTerms])].sort(compareText);
+      }
+    }
+  }
+
+  const lexical = [...merged.values()].sort((left, right) => right.fusedScore - left.fusedScore
+    || left.chunk.page - right.chunk.page
+    || compareText(left.chunk.documentId, right.chunk.documentId)
+    || compareText(left.chunk.id, right.chunk.id));
+  const lexicalById = new Map(lexical.map(hit => [hit.chunk.id, hit]));
+  const lexicalRank = new Map(lexical.map((hit, index) => [hit.chunk.id, index + 1]));
+  const semanticById = new Map(semantic.status === 'available' ? semantic.hits.map(hit => [hit.chunkId, hit]) : []);
+  const semanticRank = new Map(semantic.status === 'available'
+    ? [...semantic.hits].map((hit, index) => [hit.chunkId, index + 1])
+    : []);
+  const selectedById = new Map(candidates.map(candidate => [candidate.chunk.id, candidate.selected]));
+  const chunkById = new Map(chunks.map(chunk => [chunk.id, chunk]));
+  const ids = new Set<string>([
+    ...lexicalById.keys(),
+    ...semanticById.keys(),
+    ...candidates.filter(candidate => candidate.selected).map(candidate => candidate.chunk.id),
+  ]);
+  const hits: RankedHit[] = [];
+  for (const id of ids) {
+    const lexicalHit = lexicalById.get(id);
+    const semanticHit = semanticById.get(id);
+    const sourceChunk = lexicalHit?.chunk ?? chunkById.get(id);
+    if (!sourceChunk) continue;
+    const selected = selectedById.get(id) === true;
+    const semanticScore = semanticHit?.score ?? null;
+    const base = lexicalHit ?? {
+      chunk: sourceChunk,
+      score: 0,
+      lexicalScore: 0,
+      vectorScore: null,
+      fusedScore: 0,
+      retrievalMethod: 'lexical' as const,
+      embeddingStatus: options.embedding.status,
+      matchedTerms: [],
+    };
+    const fusedScore = semantic.status === 'available' && semantic.hits.length > 0
+      ? reciprocalRankScore(lexicalRank.get(id), semanticRank.get(id))
+      : base.fusedScore;
+    const retrievalMethod: RankedRetrievalMethod = selected
+      ? 'selection'
+      : semanticHit && lexicalHit
+        ? 'hybrid'
+        : semanticHit
+          ? 'semantic'
+          : base.retrievalMethod;
+    hits.push({
+      ...base,
+      score: fusedScore,
+      fusedScore,
+      semanticScore,
+      retrievalMethod,
+      selected,
+    });
+  }
+  hits.sort((left, right) => Number(right.selected) - Number(left.selected)
+    || right.fusedScore - left.fusedScore
+    || left.chunk.page - right.chunk.page
+    || compareText(left.chunk.documentId, right.chunk.documentId)
+    || compareText(left.chunk.id, right.chunk.id));
+  return { hits, semantic };
+}
+
+
+function selectContext(
+  ranked: readonly RankedHit[],
+  documents: readonly WorkspaceDocumentView[],
+  options: NormalizedPrepareOptions,
+): ContextBlock[] {
+  if (ranked.length === 0) return [];
+  const titles = new Map(documents.map(document => [document.id, document.title]));
+  const byDocument = new Map<string, RankedHit[]>();
+  for (const hit of ranked) {
+    const list = byDocument.get(hit.chunk.documentId);
+    if (list) list.push(hit);
+    else byDocument.set(hit.chunk.documentId, [hit]);
+  }
+
+  const matched = documents.map(document => document.id).filter(id => (byDocument.get(id)?.length ?? 0) > 0);
+  const perDocumentCap = matched.length > 1 ? Math.floor(options.maxContextChars * options.documentShare) : options.maxContextChars;
+  const selected: Array<{ hit: RankedHit; excerpt: string }> = [];
+  const allocation = new Map<string, number>();
+  const cursor = new Map<string, number>();
+  let total = 0;
+  let progressed = true;
+
+  while (progressed && total < options.maxContextChars) {
+    progressed = false;
+    for (const documentId of matched) {
+      if (total >= options.maxContextChars) break;
+      const hits = byDocument.get(documentId) ?? [];
+      const used = allocation.get(documentId) ?? 0;
+      const room = Math.min(options.maxContextChars - total, perDocumentCap - used);
+      if (room < options.minExcerptChars) continue;
+      const at = cursor.get(documentId) ?? 0;
+      const hit = hits[at];
+      if (!hit) continue;
+      cursor.set(documentId, at + 1);
+      const excerpt = takeExcerpt(hit.chunk.text, options.maxExcerptChars, room);
+      if (excerpt.length === 0) continue;
+      const cost = charLength(excerpt);
+      selected.push({ hit, excerpt });
+      allocation.set(documentId, used + cost);
+      total += cost;
+      progressed = true;
+    }
+  }
+
+  selected.sort(
+    (left, right) => right.hit.score - left.hit.score
+      || compareText(left.hit.chunk.documentId, right.hit.chunk.documentId)
+      || left.hit.chunk.page - right.hit.chunk.page
+      || compareText(left.hit.chunk.blockIds[0] ?? '', right.hit.chunk.blockIds[0] ?? ''),
+  );
+
+  return selected.map((entry, index) => {
+    const sourceDocument = documents.find(document => document.id === entry.hit.chunk.documentId);
+    return {
+      documentId: entry.hit.chunk.documentId,
+      title: titles.get(entry.hit.chunk.documentId) ?? entry.hit.chunk.documentId,
+      page: entry.hit.chunk.page,
+      sourcePages: sourceDocument
+        ? pagesForChunk(entry.hit.chunk, sourceDocument.ir)
+        : [entry.hit.chunk.page],
+      blockIds: [...entry.hit.chunk.blockIds],
+      excerpt: entry.excerpt,
+      rank: index + 1,
+      chunkId: entry.hit.chunk.id,
+      kind: entry.hit.chunk.kind,
+      headingPath: [...entry.hit.chunk.headingPath],
+      revisionId: sourceDocument?.ir.revisionId,
+      sourceSha256: sourceDocument?.ir.sourceSha256,
+      lexicalScore: entry.hit.lexicalScore,
+      vectorScore: entry.hit.vectorScore,
+      fusedScore: entry.hit.fusedScore,
+      retrievalMethod: entry.hit.retrievalMethod,
+    };
+  });
+}
+
+function resolveRagCitations(
+  parsed: ParsedAnswer,
+  context: readonly ContextBlock[],
+  documents: readonly WorkspaceDocumentView[],
+): {
+  citations: RagCitation[];
+  unsupported: UnsupportedRagCitation[];
+} {
+  const byId = new Map(documents.map(document => [document.id, document]));
+  const citations: RagCitation[] = [];
+  const seenBlocks = new Set<string>();
+  const unsupported: UnsupportedRagCitation[] = parsed.unsupported.map(citation => ({
+    index: citation.index,
+    documentId: citation.documentId,
+    page: citation.page,
+    raw: citation.raw,
+    count: citation.count,
+    reason: citation.reason ?? 'page-not-in-context',
+  }));
+
+  for (const citation of parsed.citations.filter(item => item.supported)) {
+    const document = byId.get(citation.documentId);
+    const blocks = context.filter(
+      block => block.documentId === citation.documentId
+        && (block.sourcePages?.includes(citation.page) ?? block.page === citation.page)
+        && (citation.blockId === undefined || block.blockIds.includes(citation.blockId)),
+    );
+    if (!document || blocks.length === 0) {
+      unsupported.push({
+        index: citation.index,
+        documentId: citation.documentId,
+        page: citation.page,
+        raw: citation.raw,
+        count: citation.count,
+        reason: document ? 'page-not-in-context' : 'unknown-document',
+      });
+      continue;
+    }
+
+    let resolvedAny = false;
+    for (const contextBlock of blocks) {
+      const blockIds = citation.blockId === undefined
+        ? contextBlock.blockIds
+        : contextBlock.blockIds.filter(blockId => blockId === citation.blockId);
+      for (const blockId of blockIds) {
+        const marker: CitationMarker = {
+          page: citation.page,
+          blockId,
+          raw: citation.raw,
+          index: citation.index,
+          count: citation.count,
+        };
+        const key = `${citation.documentId}\u0000${blockId}`;
+        if (seenBlocks.has(key)) continue;
+        const resolved = resolveCitations([marker], document.ir).resolved[0];
+        if (!resolved) continue;
+        resolvedAny = true;
+        seenBlocks.add(key);
+        citations.push({
+          ...resolved,
+          documentId: citation.documentId,
+          revisionId: document.ir.revisionId,
+          sourceSha256: document.ir.sourceSha256,
+          chunkId: contextBlock.chunkId ?? `${citation.documentId}\u0000${blockId}`,
+        });
+      }
+    }
+    if (!resolvedAny) {
+      unsupported.push({
+        index: citation.index,
+        documentId: citation.documentId,
+        page: citation.page,
+        raw: citation.raw,
+        count: citation.count,
+        reason: 'region-unresolved',
+      });
+    }
+  }
+
+  return { citations, unsupported };
+}
+
+function auditToolCalls(calls: readonly RagToolCall[] | undefined, options: NormalizedPrepareOptions): RagToolTrace[] {
+  if (!Array.isArray(calls)) return [];
+  const allowed = new Set(options.allowedTools);
+  const trace: RagToolTrace[] = [];
+  for (let index = 0; index < calls.length; index += 1) {
+    const call = calls[index];
+    const step = index + 1;
+    if (step > options.maxToolSteps) {
+      trace.push({ step, name: call?.name ?? '', args: call?.args, status: 'budget-exhausted', reason: 'step-budget-exhausted', validation: null });
+      continue;
+    }
+    if (!call || typeof call.name !== 'string' || !allowed.has(call.name as AgentToolName)) {
+      trace.push({ step, name: call?.name ?? '', args: call?.args, status: 'rejected', reason: 'not-allowlisted', validation: null });
+      continue;
+    }
+    const validation = validateCall(call.name, call.args, options.toolContext);
+    trace.push({
+      step,
+      name: call.name,
+      args: call.args,
+      status: validation.ok ? 'allowed' : 'rejected',
+      reason: validation.ok ? null : 'invalid-call',
+      validation,
+    });
+  }
+  return trace;
+}
+
+function isCancelled(prepared: RagPrepared): boolean {
+  return prepared.semantic.status === 'unavailable' && prepared.semantic.reason === 'cancelled';
+}
+function hasToolPolicyFailure(trace: readonly RagToolTrace[]): boolean {
+  return trace.some(event => event.status !== 'allowed');
+}
+
+function positiveOr(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function shareOr(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 1 ? value : fallback;
+}
+
+function budgetOr(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : fallback;
+}
+
+function readLanguage(value: AbstainLanguage | undefined): AbstainLanguage {
+  return value === 'en' || value === 'zh' || value === 'vi' ? value : DEFAULT_ABSTAIN_LANGUAGE;
+}
+
+function matchesHeading(headings: readonly string[], wanted: readonly string[]): boolean {
+  return wanted.some(value => {
+    const target = normalizeMetadata(value);
+    return headings.some(heading => normalizeMetadata(heading) === target || normalizeMetadata(heading).includes(target));
+  });
+}
+
+function normalizeMetadata(value: string): string {
+  return typeof value === 'string' ? value.toLowerCase().replace(/\s+/gu, ' ').trim() : '';
+}
+
+function charLength(value: string): number {
+  return [...value].length;
+}
+
+function takeExcerpt(text: string, maxExcerpt: number, room: number): string {
+  const value = typeof text === 'string' ? text.replace(/\s+/gu, ' ').trim() : '';
+  const limit = Math.min(Math.floor(maxExcerpt), Math.floor(room));
+  if (value.length === 0 || limit <= 0) return '';
+  const characters = [...value];
+  if (characters.length <= limit) return value;
+  const clipped = characters.slice(0, Math.max(1, limit - 1)).join('').trimEnd();
+  return `${clipped}…`;
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function nonNegative(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
+}

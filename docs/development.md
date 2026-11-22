@@ -34,11 +34,12 @@ The deterministic endpoint in `scripts/test-provider.mjs` is a test fixture, not
 
 ## Develop and verify
 
-- `pnpm test` runs browser-core, reader, OCR, export and extension behavior tests (324 tests in 29 files at the 2026-11-20 audit).
+- `pnpm test:extension` runs the extension-owned viewer, OCR, export and bridge behavior tests.
+- `pnpm build` then `CHROME_PATH=<Chrome-or-Chromium-executable> pnpm test:e2e:extension` runs `extension/playwright.config.ts` against the built, unpacked `dist/extension` MV3 artifact. It fails closed when the build, executable, or Playwright package is missing. Every spec launches a fresh temporary Chrome profile, closes it, and removes that profile. No standalone Vite server or `dist/web` is used.
+- The extension lane discovers 42 real Playwright cases against the built, unpacked MV3 artifact: manifest/service-worker startup, local PDF import and page navigation, persisted UI locale, all popup target-language options and invalid-value fallback, reading-mode and panel controls, keyboard/accessibility semantics, empty-export warnings, and synthetic capture-reader handoff. Synthetic capture does not prove screenshot permission or native-host roundtrip. Native Save As chrome, reconnect/checksum/duplicate-message behavior, packaged-host registration, and Chrome-to-native transfer remain unsupported by this lane and require the real packaged host and browser environment. Record `RELEASE_BROWSER_E2E_TESTS` only after a real clean-profile Chrome run against the packaged native host, with the run output and revision captured; it is not set by this local command.
 - `pnpm typecheck` checks the TypeScript sources.
-- `pnpm build` creates the web and unpacked extension artifacts. It empties `dist/extension` first, so a stale bundle can never ship beside a fresh one.
-- `pnpm test:e2e` runs 49 Chromium tests in 15 files against the real app and, for the extension specs, the real MV3 extension: PDF opening, translation, pixel-level source-glyph removal, preserved chart pixels, provider errors and recovery, outline/search/page/thumbnail navigation, reload persistence, print-to-PDF, bilingual export, screenshot OCR, scanned-PDF OCR, accessibility, RTL/CJK rendering, batch translation, the 13 user journeys, and the capture plus linked-view chain.
-- `pwsh -File scripts/verify-web.ps1` runs the web gate as one table; `pwsh -File scripts/verify-release.ps1` is the release gate (unit, typecheck, build, e2e, then the built artifacts themselves).
+- `pnpm build` creates the unpacked MV3 extension artifact with its extension-owned viewer. It empties `dist/extension` first, so a stale bundle cannot ship beside a fresh one.
+- `pwsh -File scripts/verify-release.ps1` is the extension/native artifact gate (extension tests, typecheck, build, committed imports and built-artifact references).
 - `node scripts/check-committed-imports.mjs [rev]` resolves every relative import against the files committed at that revision. It exists because a local green build cannot catch a committed file importing a module that was never added.
 - `pwsh -File scripts/build-windows.ps1 -Action test` runs native tests with the MSVC environment.
 - `pwsh -File scripts/build-shell.ps1 -Release` builds the current GPUI native release. Native builds need a Developer shell so `rc.exe` exists; plain `cargo build` fails with "Windows SDK rc.exe is required".
@@ -50,7 +51,7 @@ The deterministic endpoint in `scripts/test-provider.mjs` is a test fixture, not
 
 | Path | Real location | Why |
 | --- | --- | --- |
-| `native-shell/target` | `C:\mirror-store\native-target` | a debug GPUI dependency tree is about 4 GB; on `D:` it left 0 bytes free and broke `pnpm test`, `pnpm build` and the native build with ENOSPC |
+| `native-shell/target` | `C:\mirror-store\native-target` | a debug GPUI dependency tree is about 4 GB; on `D:` it left 0 bytes free and broke `pnpm test:extension`, `pnpm build` and the native build with ENOSPC |
 | `artifacts/` | `C:\mirror-store\artifacts` | screenshots, logs and measurement runs (gitignored either way) |
 
 They are junctions, so `git` and the scripts see the normal path. Move them back with `cmd /c rmdir native-shell\target` then a real move when `D:` has space again. Keep one cargo profile: mixing `CARGO_PROFILE_DEV_DEBUG=0` builds with default ones makes every rebuild recompile the whole graph.
@@ -73,7 +74,7 @@ The bridge translates with MyMemory's public API first and Google's public `gtx`
 
 ## Verification status
 
-The web reader and the extension are the verified surface: 318 unit tests, 42 end-to-end tests, clean typecheck and a green release gate. `docs/feature-board.md` carries one row per feature with the evidence behind it and is the honest source of truth; `docs/feature-plan.md` and `docs/roadmap.md` are the older plans.
+The native GPUI shell is the product surface. The extension-owned viewer has a passing local unit suite and build; real Chrome↔native browser E2E, native packaging and signing remain separate evidence gates. `docs/feature-board.md` carries one row per feature with the evidence behind it and is the honest source of truth; `docs/feature-plan.md` and `docs/roadmap.md` are the older plans.
 
 Known limits, stated rather than hidden:
 

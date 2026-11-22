@@ -2,14 +2,15 @@
 /**
  * Locale matrix gate (backlog N03).
  *
- * `pnpm vitest run tests/i18n.test.ts` proves the three dictionaries have the same keys.
+ * `pnpm exec vitest run --config extension/vitest.config.ts extension/tests/i18n.test.ts`
+ * proves the three dictionaries have the same keys.
  * A key count is not a translation: this script prints what the keys *contain* — the same
  * five checks `auditLocales` performs — so a reviewer can see a blank Chinese label or a
  * Vietnamese `{trang}` instead of trusting that equal counts mean equal text.
  *
  * Two deliberate constraints shape it:
  *
- * 1. **The dictionaries are read from the `src/i18n.ts` text, not imported.** Importing
+ * 1. **The dictionaries are read from the `extension/viewer/src/i18n.ts` text, not imported.** Importing
  *    them would mean running TypeScript, and this gate has to work with a plain `node
  *    scripts/i18n-matrix.mjs` in a checkout where only dependencies are installed. So the
  *    three object literals are lifted out of the source with the pattern in
@@ -18,7 +19,7 @@
  *    with exit 2 and says exactly what it saw. A gate that silently compares two empty
  *    dictionaries would pass forever; this one refuses to.
  * 2. **The rules are not copied here.** The audit itself comes from
- *    `src/core/i18n-audit.ts`, which Node executes directly with type stripping (the same
+ *    `extension/viewer/src/core/i18n-audit.ts`, which Node executes directly with type stripping (the same
  *    technique `scripts/perf-budget.mjs` uses, and the reason this needs Node 22.18 or
  *    newer). One implementation means the script and the unit test cannot disagree about
  *    what "untranslated" or "placeholder mismatch" means.
@@ -42,8 +43,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const i18nSource = path.join(root, 'src', 'i18n.ts');
-const auditSourcePath = path.join(root, 'src', 'core', 'i18n-audit.ts');
+const i18nSource = path.join(root, 'extension', 'viewer', 'src', 'i18n.ts');
+const auditSourcePath = path.join(root, 'extension', 'viewer', 'src', 'core', 'i18n-audit.ts');
 
 /**
  * The documented pattern for a dictionary block.
@@ -97,8 +98,9 @@ function relative(file) {
 function usage() {
   console.error(`Usage: node scripts/i18n-matrix.mjs
 
-Reads the three dictionaries out of src/i18n.ts as text (they are never imported), audits
-them with src/core/i18n-audit.ts, and prints the differences as a table.
+Reads the three dictionaries out of extension/viewer/src/i18n.ts as text (they are never
+imported), audits them with extension/viewer/src/core/i18n-audit.ts, and prints the
+differences as a table.
 
 The extraction pattern is the object literal line, exactly:
   const en = {                    the reference, declared "as const"
@@ -331,7 +333,7 @@ const dictionaries = {
 const audit = auditModule.auditLocales(dictionaries);
 const referenceKeys = Object.keys(dictionaries.en).length;
 
-console.log('Locale matrix — three dictionaries read from src/i18n.ts as text');
+console.log('Locale matrix — three dictionaries read from extension/viewer/src/i18n.ts as text');
 console.log('');
 for (const locale of LOCALES) {
   const block = found.get(locale);

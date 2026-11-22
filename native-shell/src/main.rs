@@ -55,6 +55,7 @@ mod tree;
 mod ui;
 mod vision_tools;
 mod voice;
+mod intelligence;
 
 pub(crate) use pdf_library::{store, time};
 mod palette;

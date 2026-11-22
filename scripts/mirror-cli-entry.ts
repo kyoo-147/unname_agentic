@@ -1,11 +1,11 @@
 import { mkdir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { parseArgs, exitCodeFor } from '../src/core/cli-args';
-import { addTranslation, type DocumentIR } from '../src/core/ir';
-import { createTranslationTransport, TranslationService } from '../src/core/translation';
-import { defaultSettings, type ProviderKind } from '../src/core/types';
-import { LocalAutomationRuntime } from '../src/core/automation/runtime';
-import { PersistentFolderWatcher } from '../src/core/automation/folder-state';
+import { parseArgs, exitCodeFor } from '../extension/viewer/src/core/cli-args';
+import { addTranslation, type DocumentIR } from '../extension/viewer/src/core/ir';
+import { createTranslationTransport, TranslationService } from '../extension/viewer/src/core/translation';
+import { defaultSettings, type ProviderKind } from '../extension/viewer/src/core/types';
+import { LocalAutomationRuntime } from '../extension/viewer/src/core/automation/runtime';
+import { PersistentFolderWatcher } from '../extension/viewer/src/core/automation/folder-state';
 
 const MAX_BATCH_FILES = 5_000;
 const MAX_PDF_BYTES = 256 * 1024 * 1024;
@@ -47,7 +47,8 @@ async function run(command: string, input: string, requestedOutput: string | nul
     sourceDir,
     { authorizedRoots: [sourceDir, outputDir], recursive: true, maxFiles: MAX_BATCH_FILES, maxFileBytes: MAX_PDF_BYTES, stableForMs: 100 },
   );
-  const poll = await watcher.poll();
+  const poll = await watcher.poll({ persist: false });
+  if (!poll.complete) throw new Error('folder scan was incomplete; the persisted snapshot was not advanced.');
   if (poll.rejected.length > 0) {
     throw new Error(`${poll.rejected.length} input file(s) were rejected by the local safety limits or could not be read.`);
   }
@@ -60,6 +61,7 @@ async function run(command: string, input: string, requestedOutput: string | nul
     if (totalBytes > MAX_BATCH_BYTES) throw new Error(`batch exceeds the ${MAX_BATCH_BYTES} byte local safety cap.`);
     await runtime.enqueue({ sourcePath, outputDir, translate: command === 'translate' });
   }
+  await watcher.commit(poll);
   await runtime.retry();
   const status = await runtime.run();
   const unresolved = status.jobs.filter(job => job.state !== 'done');

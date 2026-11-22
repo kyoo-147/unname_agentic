@@ -2,6 +2,8 @@ use crate::i18n::tr3;
 use crate::input::{TextField, TextFieldEvent};
 use crate::theme::{self, Theme};
 use crate::ui;
+pub mod rag;
+use crate::pdf_reader::ReaderPage;
 use gpui::{prelude::FluentBuilder, *};
 use mirror_pdf_desktop::{model, provider};
 use regex::Regex;
@@ -11,6 +13,9 @@ use std::sync::LazyLock;
 use std::sync::mpsc::{self, TryRecvError};
 
 enum StreamEvent { Delta(String), Done(String), Failed(String) }
+
+pub enum ChatEvent { Navigate(rag::CitationNavigation) }
+impl EventEmitter<ChatEvent> for Chat {}
 
 /// One source citation an answer carries (I01): a page, a block, or both.
 ///
@@ -250,7 +255,7 @@ pub struct Chat {
     messages: Vec<ChatMessage>,
     busy: bool,
     error: Option<String>,
-    context: Option<(String, String)>,
+    context: Option<(String, Vec<ReaderPage>)>,
     model: String,
     endpoint_input: Entity<TextField>,
     model_input: Entity<TextField>,
@@ -347,7 +352,7 @@ impl Chat {
         citations_in(&self.messages, message_index)
     }
 
-    pub fn set_context(&mut self, context: Option<(String, String)>, cx: &mut Context<Self>) {
+    pub fn set_document_context(&mut self, context: Option<(String, Vec<ReaderPage>)>, cx: &mut Context<Self>) {
         if self.context != context {
             self.messages.clear();
             self.error = None;
@@ -385,22 +390,35 @@ impl Chat {
     fn send(&mut self, cx: &mut Context<Self>) {
         let question = self.input.read(cx).text.trim().to_string();
         if question.is_empty() || self.busy { return; }
-        self.messages.push(ChatMessage { user: true, text: question, citations: Vec::new() });
+        self.messages.push(ChatMessage { user: true, text: question.clone(), citations: Vec::new() });
         self.persist();
         self.input.update(cx, |field, cx| field.set_text("", cx));
-        self.busy = true;
         self.error = None;
+        let grounded = self.context.as_ref().map(|(_, pages)| rag::source_blocks(pages));
+        let hits = if let Some(sources) = grounded.as_ref() {
+            match rag::retrieve(sources, &question, 5) {
+                rag::GroundedResult::Evidence(hits) => Some(hits),
+                rag::GroundedResult::Abstain(reason) => {
+                    self.messages.push(ChatMessage { user: false, text: format!("{} ({reason})", tr3("Không đủ bằng chứng trong các khối nguồn hiện có.", "There is insufficient evidence in the available source blocks.", "Không đủ bằng chứng trong các khối nguồn hiện có.")), citations: Vec::new() });
+                    self.persist(); cx.notify(); return;
+                }
+            }
+        } else { None };
+        self.busy = true;
         cx.notify();
 
-        let history = request_history(&self.messages, self.context.is_some());
+        let mut history = request_history(&self.messages, hits.is_some());
+        if let Some(hits) = &hits { history.push((true, rag::evidence_prompt(&question, hits))); }
         self.messages.push(ChatMessage { user: false, text: String::new(), citations: Vec::new() });
-        let context = self.context.clone();
         let (sender, receiver) = mpsc::channel();
+        let citation_hits = hits.clone();
+        let stream_unverified = citation_hits.is_none();
         std::thread::spawn(move || {
             let mut settings = model::load_settings();
             settings.provider.api_key = provider::load_key(settings.provider.kind).unwrap_or_default();
-            let context = context.as_ref().map(|(title, text)| (title.as_str(), text.as_str()));
-            let result = provider::chat_stream(&settings.provider, &history, context, |delta| { let _ = sender.send(StreamEvent::Delta(delta.to_string())); });
+            let result = provider::chat_stream(&settings.provider, &history, None, |delta| {
+                if stream_unverified { let _ = sender.send(StreamEvent::Delta(delta.to_string())); }
+            });
             let _ = match result {
                 Ok(full) => sender.send(StreamEvent::Done(full)),
                 Err(error) => sender.send(StreamEvent::Failed(format!("{error:#}"))),
@@ -420,6 +438,15 @@ impl Chat {
                             if let Some(message) = chat.messages.last_mut() {
                                 message.text = full.clone();
                                 message.refresh_citations();
+                                if let Some(hits) = &citation_hits {
+                                    let verified = rag::verified_citations(&message.citations, hits);
+                                    if verified.is_empty() || verified.len() != message.citations.len() {
+                                        message.text = tr3("Không đủ bằng chứng được trích dẫn để trả lời.", "The response did not cite only retrieved evidence, so I cannot provide it as a grounded answer.", "Không đủ bằng chứng được trích dẫn để trả lời.").to_string();
+                                        message.citations.clear();
+                                    } else {
+                                        message.citations = verified;
+                                    }
+                                }
                             }
                             chat.busy = false;
                             chat.persist();
@@ -467,7 +494,7 @@ impl Chat {
         }).collect()
     }
 
-    fn message_bubble(&self, message: &ChatMessage) -> AnyElement {
+    fn message_bubble(&self, message: &ChatMessage, cx: &mut Context<Self>) -> AnyElement {
         let (background, text_color) = if message.user {
             (Theme::fill_hover_strong(), Theme::text())
         } else {
@@ -484,7 +511,13 @@ impl Chat {
             .child(message.text.clone())
             .when(!message.citations.is_empty(), |element| element.child(
                 div().mt(px(8.)).flex().flex_wrap().gap(px(5.)).children(message.citations.iter().enumerate().map(|(index, citation)| {
-                    div().id(("chat-citation", index)).px(px(6.)).py(px(2.)).rounded(px(5.)).bg(Theme::primary_fill_1()).text_size(px(11.)).text_color(Theme::primary()).child(citation.raw.clone())
+                    let citation = citation.clone();
+                    div().id(("chat-citation", index)).px(px(6.)).py(px(2.)).rounded(px(5.)).bg(Theme::primary_fill_1()).text_size(px(11.)).text_color(Theme::primary()).cursor_pointer().child(citation.raw.clone())
+                        .on_click(cx.listener(move |chat, _, _, cx| {
+                            let Some((_, pages)) = &chat.context else { return; };
+                            let sources = rag::source_blocks(pages);
+                            if let Some(target) = rag::navigation(&citation, &sources) { cx.emit(ChatEvent::Navigate(target)); }
+                        }))
                 }).collect::<Vec<_>>())
             ))
             .into_any_element()
@@ -493,7 +526,7 @@ impl Chat {
 
 impl Render for Chat {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let messages = self.messages.iter().map(|message| self.message_bubble(message)).collect::<Vec<_>>();
+        let messages = self.messages.iter().map(|message| self.message_bubble(message, cx)).collect::<Vec<_>>();
         let model_choices = model::ModelCatalogue::default().models.into_iter().filter(|descriptor| descriptor.capabilities.chat).enumerate().map(|(index, descriptor)| {
             let kind = descriptor.provider;
             let endpoint = descriptor.endpoint.clone();
@@ -526,7 +559,7 @@ impl Render for Chat {
                     div().mt(px(8.)).flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(Theme::text_caption())
                         .child(format!("{} {title}", tr3("Đang hỏi về:", "Asking about:", "Đang hỏi về:")))
                         .child(div().id("chat-clear-context").size(px(18.)).flex().items_center().justify_center().rounded(px(4.)).cursor_pointer().hover(|s| s.bg(Theme::fill_hover())).child("×")
-                            .on_click(cx.listener(|chat, _, _, cx| chat.set_context(None, cx))))))
+                            .on_click(cx.listener(|chat, _, _, cx| chat.set_document_context(None, cx))))))
             .when(self.show_config, |element| element.child(div().flex_none().px(px(24.)).py(px(10.)).border_b_1().border_color(Theme::line_border()).flex().flex_col().gap(px(6.))
                 .child(div().text_size(px(11.)).text_color(Theme::text_caption()).child(tr3("模型目录 · 仅本地元数据，不会探测网络", "Model catalogue · local metadata only; no network probe", "Danh mục mô hình · chỉ siêu dữ liệu cục bộ; không dò mạng")))
                 .child(div().flex().flex_wrap().gap(px(5.)).children(model_choices))

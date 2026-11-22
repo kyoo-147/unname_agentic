@@ -1,8 +1,8 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { mkdir, writeFile } from 'node:fs/promises';
 
-await mkdir('tests/fixtures', { recursive: true });
-await mkdir('public', { recursive: true });
+await mkdir('extension/tests/fixtures', { recursive: true });
+await mkdir('extension/viewer/public', { recursive: true });
 const pdf = await PDFDocument.create();
 const regular = await pdf.embedFont(StandardFonts.Helvetica);
 const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
@@ -36,6 +36,6 @@ for (let index = 0; index < 4; index++) {
   page.drawText('Generated locally for Mirror PDF verification. No third-party document content.', { x: 44, y: 30, size: 8, font: regular });
 }
 const bytes = await pdf.save();
-await writeFile('tests/fixtures/mirror-field-notes.pdf', bytes);
-await writeFile('public/sample.pdf', bytes);
+await writeFile('extension/tests/fixtures/mirror-field-notes.pdf', bytes);
+await writeFile('extension/viewer/public/sample.pdf', bytes);
 console.log('Generated 4-page digital PDF with columns, colored regions and vector chart.');

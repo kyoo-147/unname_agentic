@@ -23,6 +23,9 @@ pub struct DocumentPage {
     pub page: usize,
     pub page_number: usize,
     pub page_count: usize,
+    /// Raster/page-space dimensions used when a derived export maps normalized geometry.
+    pub width: f32,
+    pub height: f32,
     pub blocks: Vec<DocumentBlock>,
 }
 
@@ -88,6 +91,16 @@ impl DocumentPages {
     pub fn snapshot(&self) -> Vec<DocumentPage> {
         self.pages.clone()
     }
+
+    /// Resolves a citation only when the named page was loaded and contains the exact block id.
+    /// Page numbers use the reader's 1-based citation form; no nearby block is substituted.
+    pub fn resolve_block(&self, page_number: usize, block_id: &str) -> Option<&DocumentBlock> {
+        let page = page_number.checked_sub(1)?;
+        if !self.is_loaded(page) {
+            return None;
+        }
+        self.pages.get(page)?.blocks.iter().find(|block| block.id == block_id)
+    }
 }
 
 pub fn page_from_blocks(
@@ -97,12 +110,24 @@ pub fn page_from_blocks(
     page_count: usize,
     blocks: &[TextBlock],
 ) -> DocumentPage {
+    page_from_blocks_with_size(source_id, generation, page, page_count, 612.0, 792.0, blocks)
+}
+
+pub fn page_from_blocks_with_size(
+    source_id: impl Into<String>,
+    generation: u64,
+    page: usize,
+    page_count: usize,
+    width: f32,
+    height: f32,
+    blocks: &[TextBlock],
+) -> DocumentPage {
     let source_id = source_id.into();
     let blocks = blocks
         .iter()
         .enumerate()
         .map(|(index, block)| DocumentBlock {
-            id: format!("p{}-r{}", page + 1, index + 1),
+            id: format!("p{}-r{}", page + 1, index),
             source: block.source.clone(),
             translation: block.translated.clone(),
             polygon: polygon(
@@ -119,6 +144,8 @@ pub fn page_from_blocks(
         page,
         page_number: page + 1,
         page_count,
+        width: if width.is_finite() && width > 0.0 { width } else { 612.0 },
+        height: if height.is_finite() && height > 0.0 { height } else { 792.0 },
         blocks,
     }
 }
@@ -130,6 +157,8 @@ fn empty_page(source_id: String, generation: u64, page: usize, page_count: usize
         page,
         page_number: page + 1,
         page_count,
+        width: 612.0,
+        height: 792.0,
         blocks: Vec::new(),
     }
 }
@@ -180,9 +209,12 @@ mod tests {
             pages[0].blocks[0].polygon,
             [[0.1, 0.2], [0.4, 0.2], [0.4, 0.6], [0.1, 0.6]]
         );
-        assert_eq!(pages[2].blocks[0].id, "p3-r1");
+        assert_eq!(pages[2].blocks[0].id, "p3-r0");
         assert_eq!(pages[0].source_id, "sha256:doc");
         assert!(!document.is_complete());
+        assert_eq!(document.resolve_block(1, "p1-r0").map(|block| block.source.as_str()), Some("first"));
+        assert!(document.resolve_block(1, "p1-r1").is_none(), "unknown ids must not snap to the only block");
+        assert!(document.resolve_block(2, "p2-r0").is_none(), "unloaded pages cannot resolve citations");
     }
 
     #[test]
@@ -224,5 +256,6 @@ mod tests {
         )));
         assert!(document.insert(page_from_blocks("new-source", 8, 0, 2, &[block("current")])));
         assert_eq!(document.snapshot()[0].blocks[0].source, "current");
+        assert_eq!(document.snapshot()[0].blocks[0].id, "p1-r0");
     }
 }

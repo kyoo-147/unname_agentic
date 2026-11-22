@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Guard against committing a module that is referenced but never added to git.
 //
-// This happened for real: src/main.ts shipped `await import('./ocr/scan')` while
-// src/ocr/scan.ts was still untracked, so `main` built locally and broke for
+// This happened for real: extension/viewer/src/main.ts shipped `await import('./ocr/scan')` while
+// extension/viewer/src/ocr/scan.ts was still untracked, so `main` built locally and broke for
 // everyone else. A local green build cannot catch that: the file exists on disk.
 // This script resolves every relative import of every file *at a git revision*
 // against the file list of that same revision, so the check is about the commit,

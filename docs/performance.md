@@ -10,16 +10,15 @@ produced by an actual run on the machine named in that section. Nothing here is 
 product claim: the workload is a synthetic corpus, chosen because it is deterministic (see
 [Limits](#limits-and-what-this-does-not-prove)).
 
-Files:
+Files (historical source layout):
 
-- `src/core/perf.ts`: `span`, `measure`, `percentiles`, `assertBudget`, and a recorder with an
-  injectable clock. No dependencies, no DOM, no I/O.
-- `tests/perf.test.ts`: the percentile rule, budget pass and fail, the throwing `measure`, and the
-  deterministic clock.
-- `scripts/perf-budget.mjs`: the runner. Synthetic workload plus bundle-size check, prints the
-  table, exits non-zero when a budget is missed.
-- This document: the method, the budgets and why each number is what it is, how to run, the
-  measured baseline, and the limits.
+- The performance primitives and tests described below belonged to the former web-reader source
+  tree. The product surface is now `native-shell`; the browser extension viewer lives under
+  `extension/viewer`.
+- `scripts/perf-budget.mjs`: the historical runner described in the baseline. It is not evidence
+  about native-shell runtime performance or a native package.
+- This document preserves the method and historical measurement for traceability. It is not a
+  current native performance baseline or release claim.
 
 ## Method
 
@@ -96,9 +95,9 @@ The revised copy is built deterministically too: every twentieth block edited (s
 change threshold, so the word-level diff runs), one block deleted, one moved to the last page. That
 covers all four change kinds, which is the path that costs something.
 
-The **bundle** check is separate: every `.js`, `.mjs` and `.css` file under `dist/web/assets`,
-recursively, counted in raw bytes with gzip reported beside it. It is the output of the last
-`pnpm build`, not of this script (see [How to run](#how-to-run)).
+The **historical bundle** check counted every `.js`, `.mjs` and `.css` file under the former
+`dist/web/assets` output. The current extension build writes `dist/extension`; that artifact is
+separate from the native-shell product and is not native package or release evidence.
 
 ## Budgets and their rationale
 
@@ -114,7 +113,7 @@ number matters more than the ratio.
 | `search 3 queries` | 0.9 ms | 10 ms | ~11× (floor) | The keystroke path. Below ~10 ms the measurement is mostly noise, so the floor is absolute rather than relative. |
 | `diff 2 revisions` | 9.7 ms (worst 13.9 across runs) | 40 ms | ~3.7× worst | Runs on a document pair, not per keystroke. Its slow path is document-wide similarity scoring, which would be seconds, not milliseconds. |
 | `cer 100 words` | 9.0 ms (p50 2.0) | 20 ms | 2.2× | The p50/p95 gap is an allocator pause (two DP rows per call), not the algorithm. 20 ms clears the pause; a full matrix instead of two rows is ~100× slower and would fail. |
-| `web js+css` | 2,951.3 KiB raw (1,050.9 gzip) | 3,200 KiB | +8% | The pdf.js worker (1,203 KiB) and fontkit (700 KiB) dominate. +8% fits a small feature; it does not fit another bundle-sized dependency. |
+| `legacy web js+css` | 2,951.3 KiB raw (1,050.9 gzip) | 3,200 KiB | +8% | Historical Vite output only. This is not a budget or measurement for current `dist/extension` or native-shell. |
 
 Every baseline number above was measured on the machine and at the commit state described in
 [Measured baseline](#measured-baseline). If you change the corpus, the baseline is void and the
@@ -143,11 +142,9 @@ hook that adds the extension Node's ESM resolver insists on; the repository's im
 extensionless by convention. This is the same path `scripts/ocr-benchmark.mjs` takes when it loads
 `src/core/ocr-metrics.ts`, which needs no hook only because that module imports nothing.
 
-The script **does not run `pnpm build`**: a hook runs the build first, and a build inside the gate
-would blow the time budget for no new information. The consequence is explicit in the output: with
-no `dist/web/assets` the size row prints `not built`, and the verdict says
-`bundle size not checked (no build)` rather than inventing a pass. Run `pnpm build` yourself before
-the script whenever you want the size row to mean something.
+The historical script **did not run `pnpm build`**. Its former `dist/web/assets` check is tied to
+that old web build and must not be interpreted as checking the current `dist/extension` output or
+the native-shell executable/package.
 
 Runtime, measured: **0.65 s total** (654 ms in the baseline run, of which the bundle's gzip is a
 visible share). That is well inside the 30 s a pre-push hook can afford.
@@ -178,7 +175,7 @@ cer 100 words       25    2.03    8.96    8.97   20.00      ok
 
 artifact                files  raw KiB  gzip KiB    budget  result
 ----------------------  -----  -------  --------  --------  ------
-dist/web/assets js+css      7   2951.3    1050.9  3200 KiB      ok
+legacy dist/web/assets js+css      7   2951.3    1050.9  3200 KiB      ok
 
 Bundle built 2026-11-20T16:18:59.469Z (newest asset mtime).
 
@@ -192,7 +189,7 @@ Context for that run:
 | Run at | 2026-11-20 23:36 Asia/Saigon (16:36Z) |
 | Node | v24.15.0 |
 | Machine | Intel Core i7-11800H @ 2.30 GHz, 16 GB RAM, Windows 11 build 22621 |
-| Bundle | the `dist/web` from `pnpm build` at 23:18 Asia/Saigon, 7 JS/CSS files |
+| Bundle | historical Vite `dist/web` output from 23:18 Asia/Saigon, 7 JS/CSS files; not current extension or native evidence |
 | Package manager | pnpm 10.33.2 |
 
 The table is a measurement of *this* combination. A slower machine, a loaded machine or a cold
@@ -207,8 +204,8 @@ the same as no budget.
 | --- | --- |
 | A p95 above its budget | Exit 1, one `OVER {scenario}: p95 X ms > Y ms budget` line per miss, `FAILED: n/m timing budgets met`. |
 | A scenario stops recording (renamed key, thrown import) | Exit 1, `No samples for: ...`. `assertBudget` alone would pass, which is why the runner checks coverage itself. |
-| The bundle grows past 3,200 KiB | Exit 1, `OVER dist/web/assets: X KiB > 3200 KiB budget`. Verified by forcing the ceiling to 1,000 KiB for one run: the runner printed the `OVER` line and exited 1. |
-| No `dist/web` at all | Size row `not built`, verdict `PASS: n/n timing budgets met; bundle size not checked (no build)`. Not a failure: the hook builds first. |
+| The historical bundle grows past 3,200 KiB | The old runner reported `OVER dist/web/assets: X KiB > 3200 KiB budget`. This result applies only to the historical Vite bundle. |
+| No historical `dist/web` at all | The old runner printed `not built`; this says nothing about the current extension artifact or native-shell. |
 | A GC pause inside `cer` | p95 can rise from ~2 ms to ~9 ms; the 20 ms budget holds. A real 2× regression (~18 ms p50) would fail. |
 | A single pathological run among 20 | Does not fail on its own: p95 excludes the top 5%. It is visible as `max` in the table, and two slow runs in twenty do fail. |
 
@@ -225,9 +222,9 @@ the same as no budget.
   budgets are tripwires, not service-level objectives.
 - **The bundle check is a size tripwire, not a performance measurement.** A 2.9 MB bundle can still
   be slow, and a smaller one can be slower.
-- **`dist/web/assets` only.** The check excludes `dist/web/ocr` (tesseract wasm loaders and
-  language data, tens of MB, lazily fetched), the bundled fonts, `sample.pdf`, and the packaged
-  native release under `dist/pdf-workspace-*`. Those are assets, not the app's JavaScript.
+- **Historical Vite bundle only.** The old `dist/web/assets` check excluded that build's OCR
+  assets, fonts and sample PDF. The current extension artifact is `dist/extension`; it is not
+  native-shell runtime evidence, and no native package or release readiness is established here.
 - **Measurement overhead is real but small.** A span reads the clock twice; per-call overhead is
   well below the scenarios measured here (the fastest scenario, `search 3 queries`, is ~0.9 ms for
   three queries). Do not use `span` to time sub-microsecond work.

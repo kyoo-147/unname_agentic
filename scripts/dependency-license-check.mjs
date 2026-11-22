@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const packagePath = path.join(root, 'package.json');
-const sbomPath = path.join(root, 'public', 'third-party', 'SBOM.json');
+const sbomPath = path.join(root, 'extension', 'viewer', 'public', 'third-party', 'SBOM.json');
 
 function fail(message) {
   console.log(JSON.stringify({ ok: false, error: message }));

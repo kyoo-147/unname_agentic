@@ -4,11 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
-    "build": "tsc --noEmit && vite build && node scripts/build-extension.mjs",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:e2e": "playwright test",
+    "build": "pnpm typecheck && node scripts/build-extension.mjs",
+    "test:extension": "vitest run --config extension/vitest.config.ts",
+    "test:e2e:extension": "node extension/tests/e2e/run.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -19,12 +17,12 @@
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.58.0",
+    "@playwright/test": "1.65.0",
     "@types/chrome": "^0.1.32",
     "@types/node": "^24.0.0",
+    "esbuild": "0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
-    "vite": "^7.3.0",
     "vitest": "^4.0.0"
   }
 }

@@ -25,6 +25,7 @@
 use crate::i18n::{tr3, tr3_fill};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 /// The plain-text page break: `\f`, the marker text tools have used for pages
@@ -36,6 +37,8 @@ pub const PAGE_BREAK: char = '\u{c}';
 pub enum ExportFormat {
     /// The retained source PDF, copied byte-for-byte by the Save As action.
     Pdf,
+    /// A new text-only PDF built from explicit translated block input.
+    TranslatedPdf,
     /// Both languages, page by page: the form that loses nothing.
     Markdown,
     /// The translation alone.
@@ -53,6 +56,7 @@ impl ExportFormat {
     pub fn extension(self) -> &'static str {
         match self {
             Self::Pdf => "pdf",
+            Self::TranslatedPdf => "translated.pdf",
             Self::Markdown => "md",
             Self::Text => "txt",
             Self::Html => "html",
@@ -64,6 +68,10 @@ impl ExportFormat {
     /// The form a chosen path asks for: its extension decides, so the user does
     /// not have to choose a format in a dialog as well as a name.
     pub fn from_path(path: &Path) -> Self {
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_ascii_lowercase();
+        if name.ends_with(".translated.pdf") {
+            return Self::TranslatedPdf;
+        }
         path.extension().and_then(|extension| extension.to_str()).map_or(Self::Markdown, Self::from_extension)
     }
 
@@ -72,6 +80,7 @@ impl ExportFormat {
     pub fn label(self) -> &'static str {
         match self {
             Self::Pdf => tr3("原始 PDF", "Original PDF", "PDF gốc"),
+            Self::TranslatedPdf => tr3("翻译 PDF", "Translated PDF", "PDF đã dịch"),
             Self::Markdown => "Markdown",
             Self::Text => tr3("纯文本", "Plain text", "Văn bản thuần"),
             Self::Html => "HTML",
@@ -87,6 +96,7 @@ impl ExportFormat {
     pub fn from_extension(extension: &str) -> Self {
         match extension.trim().trim_start_matches('.').to_ascii_lowercase().as_str() {
             "pdf" => Self::Pdf,
+            "translated-pdf" | "translatedpdf" => Self::TranslatedPdf,
             "txt" | "text" => Self::Text,
             "html" | "htm" => Self::Html,
             "docx" => Self::Docx,
@@ -97,12 +107,13 @@ impl ExportFormat {
 
     /// Whether this format can be generated from the native snapshot without
     /// pretending to be a translated-PDF writer.
-    pub fn can_generate(self) -> bool { !matches!(self, Self::Pdf) }
+    pub fn can_generate(self) -> bool { !matches!(self, Self::Pdf | Self::TranslatedPdf) }
 
     /// The preservation promise shown by provider/export UX and reports.
     pub fn preservation(self) -> &'static str {
         match self {
             Self::Pdf => "source bytes, fonts, images, vectors, bookmarks and hyperlinks preserved exactly",
+            Self::TranslatedPdf => "new text-only PDF; source artwork and annotations are not preserved; standard Helvetica is not embedded",
             Self::Markdown | Self::Text | Self::Html | Self::Docx => "text, formulas, tables and native coordinates only; PDF objects are not preserved",
             Self::Json => "IR metadata, polygons, formulas and tables preserved; PDF objects are not embedded",
         }
@@ -293,7 +304,7 @@ pub fn export_document(document: &ExportDocument, format: ExportFormat) -> Strin
     match format {
         // PDF is handled by `write_export_bytes_path`: a text snapshot cannot
         // preserve the original PDF's objects, fonts or source hash.
-        ExportFormat::Pdf | ExportFormat::Docx => String::new(),
+        ExportFormat::Pdf | ExportFormat::TranslatedPdf | ExportFormat::Docx => String::new(),
         ExportFormat::Markdown => markdown(document),
         ExportFormat::Text => plain_text(document),
         ExportFormat::Html => html(document),
@@ -387,12 +398,11 @@ fn json(document: &ExportDocument) -> String {
     serde_json::to_string_pretty(&export).unwrap_or_default()
 }
 
-/// Return bytes for every genuinely supported export. PDF is intentionally
-/// rejected here: the only native PDF path is an exact copy of retained source
-/// bytes, never a translated-PDF writer.
+/// Return bytes for every export that can be generated from a text snapshot.
+/// PDF generation requires the source-byte and page-geometry contract in [`build_translated_pdf`].
 pub fn export_document_bytes(document: &ExportDocument, format: ExportFormat) -> Result<Vec<u8>> {
     match format {
-        ExportFormat::Pdf => anyhow::bail!("Translated PDF writing is not implemented; use Save As on the retained source PDF."),
+        ExportFormat::Pdf | ExportFormat::TranslatedPdf => anyhow::bail!("PDF output requires an explicit source or translated-PDF writer path."),
         ExportFormat::Docx => Ok(docx(document)),
         ExportFormat::Html => Ok(html(document).into_bytes()),
         ExportFormat::Markdown | ExportFormat::Text | ExportFormat::Json => Ok(export_document(document, format).into_bytes()),
@@ -499,13 +509,8 @@ pub fn write_export(dir: &Path, name: &str, content: &str, overwrite: bool) -> R
     let target = dir.join(name);
     anyhow::ensure!(overwrite || !target.exists(), "{}", tr3_fill("已存在同名文件，未覆盖：{}", "A file with this name already exists and was not replaced: {}", "Đã có tệp cùng tên, không ghi đè: {}", target.display()));
     let temp = Temp::new(dir, name);
-    std::fs::write(&temp.path, content).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", temp.path.display()))?;
-    // Windows refuses to rename onto an existing file, and an overwriting caller
-    // is the one a save panel has already confirmed the replacement with.
-    if overwrite && target.exists() {
-        std::fs::remove_file(&target).with_context(|| tr3_fill("无法替换 {}", "Cannot replace {}", "Không thay được {}", target.display()))?;
-    }
-    std::fs::rename(&temp.path, &target).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", target.display()))?;
+    write_temp(&temp.path, content.as_bytes())?;
+    publish_temp(&temp.path, &target, overwrite)?;
     Ok(target)
 }
 
@@ -528,13 +533,31 @@ pub fn write_export_bytes_path(path: &Path, bytes: &[u8], overwrite: bool) -> Re
     anyhow::ensure!(overwrite || !target.exists(), "{}", tr3_fill("已存在同名文件，未覆盖：{}", "A file with this name already exists and was not replaced: {}", "Đã có tệp cùng tên, không ghi đè: {}", target.display()));
     let temporary = dir.join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| -> Result<PathBuf> {
-        std::fs::write(&temporary, bytes).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", temporary.display()))?;
-        if overwrite && target.exists() { std::fs::remove_file(&target).with_context(|| tr3_fill("无法替换 {}", "Cannot replace {}", "Không thay được {}", target.display()))?; }
-        std::fs::rename(&temporary, &target).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", target.display()))?;
+        write_temp(&temporary, bytes)?;
+        publish_temp(&temporary, &target, overwrite)?;
         Ok(target)
     })();
     if result.is_err() { let _ = std::fs::remove_file(&temporary); }
     result
+}
+
+fn write_temp(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(path)
+        .with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", path.display()))?;
+    file.write_all(bytes).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", path.display()))
+}
+
+fn publish_temp(temporary: &Path, target: &Path, overwrite: bool) -> Result<()> {
+    if overwrite {
+        if target.exists() { std::fs::remove_file(target).with_context(|| tr3_fill("无法替换 {}", "Cannot replace {}", "Không thay được {}", target.display()))?; }
+        std::fs::rename(temporary, target).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", target.display()))
+    } else {
+        // A same-directory hard link publishes atomically and fails if another
+        // writer created the destination after the initial existence check.
+        std::fs::hard_link(temporary, target).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", target.display()))?;
+        std::fs::remove_file(temporary).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", temporary.display()))
+    }
 }
 
 /// The name the save panel starts with: the title as a file name, plus the
@@ -552,6 +575,427 @@ pub fn file_stem(title: &str) -> String {
     let collapsed = replaced.split_whitespace().collect::<Vec<_>>().join(" ");
     let stem: String = collapsed.trim_matches([' ', '.']).chars().take(120).collect();
     if stem.trim().is_empty() { tr3("文档", "document", "tài liệu").to_string() } else { stem }
+}
+
+/// Explicit source mapping and page geometry for an independently generated
+/// translated PDF. Coordinates are PDF points with a top-left origin, matching
+/// the native reader's page-space boxes. This output is a text-only document;
+/// it does not preserve source page artwork or annotations.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TranslatedPdfBlock {
+    pub id: String,
+    pub source: String,
+    pub translation: Option<String>,
+    pub rect: [[f32; 2]; 4],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TranslatedPdfPage {
+    pub source_id: String,
+    pub page_number: usize,
+    pub width: f32,
+    pub height: f32,
+    pub blocks: Vec<TranslatedPdfBlock>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TranslatedPdfInput {
+    pub title: String,
+    pub source_id: String,
+    pub source_sha256: [u8; 32],
+    pub source_path: Option<PathBuf>,
+    pub pages: Vec<TranslatedPdfPage>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TranslatedPdfOutput {
+    pub bytes: Vec<u8>,
+    pub warnings: Vec<String>,
+    pub missing_translation_blocks: Vec<String>,
+}
+
+/// Build a new bilingual text-only PDF from an explicit source snapshot.
+///
+/// The source bytes are only read to verify identity and are never changed or
+/// copied into this new artifact. The writer uses PDF's built-in Helvetica
+/// (not embedded), supports Windows-1252 text only, and refuses overflow rather
+/// than silently dropping text. Callers must surface returned warnings.
+pub fn build_translated_pdf(
+    source_pdf: &[u8],
+    input: &TranslatedPdfInput,
+) -> Result<TranslatedPdfOutput> {
+    anyhow::ensure!(
+        source_pdf.starts_with(b"%PDF-"),
+        "source identity is not a PDF"
+    );
+    let source_digest: [u8; 32] = Sha256::digest(source_pdf).into();
+    anyhow::ensure!(
+        source_digest == input.source_sha256,
+        "source PDF hash does not match the translated snapshot"
+    );
+    anyhow::ensure!(
+        !input.source_id.trim().is_empty(),
+        "source identity is required"
+    );
+    anyhow::ensure!(
+        input.title.chars().all(|ch| win_1252_byte(ch).is_some()),
+        "PDF title contains characters not supported by standard Helvetica/Windows-1252"
+    );
+    anyhow::ensure!(
+        !input.pages.is_empty(),
+        "translated PDF needs at least one mapped source page"
+    );
+
+    let mut seen = std::collections::HashSet::new();
+    let mut streams = Vec::with_capacity(input.pages.len());
+    let mut missing = Vec::new();
+    for (page_index, page) in input.pages.iter().enumerate() {
+        anyhow::ensure!(
+            page.source_id == input.source_id,
+            "page {} maps to a different source identity",
+            page_index + 1
+        );
+        anyhow::ensure!(
+            page.page_number == page_index + 1,
+            "page mapping must be complete, ordered, and 1-based (expected {}, got {})",
+            page_index + 1,
+            page.page_number
+        );
+        anyhow::ensure!(
+            page.width.is_finite()
+                && page.height.is_finite()
+                && page.width > 0.0
+                && page.height > 0.0,
+            "page {} has invalid dimensions",
+            page.page_number
+        );
+        let mut content = String::new();
+        for block in &page.blocks {
+            anyhow::ensure!(
+                !block.id.trim().is_empty() && seen.insert(block.id.as_str()),
+                "block ids must be non-empty and unique across the document"
+            );
+            let rect = validate_block_rect(block, page)?;
+            let translated = block
+                .translation
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty());
+            if translated.is_none() {
+                missing.push(block.id.clone());
+            }
+            let target = translated.unwrap_or("[Translation unavailable]");
+            let source_lines = wrap_pdf_text(&block.source, rect.2, 9.0)?;
+            let target_lines = wrap_pdf_text(target, rect.2, 9.0)?;
+            let line_count = source_lines.len() + target_lines.len();
+            anyhow::ensure!(
+                line_count > 0,
+                "block {} has no source or translation text",
+                block.id
+            );
+            let line_height = 11.0_f32;
+            let required_lines = line_count + 2;
+            anyhow::ensure!(
+                required_lines as f32 * line_height <= rect.3,
+                "layout overflow in block {}: {} lines need {:.1}pt but box is {:.1}pt",
+                block.id,
+                required_lines,
+                required_lines as f32 * line_height,
+                rect.3
+            );
+            let mut y = page.height - rect.1 - 10.0;
+            push_pdf_text(&mut content, rect.0, y, "Source:", 8.0)?;
+            y -= line_height;
+            for line in source_lines {
+                push_pdf_text(&mut content, rect.0, y, &line, 9.0)?;
+                y -= line_height;
+            }
+            push_pdf_text(&mut content, rect.0, y, "Translation:", 8.0)?;
+            y -= line_height;
+            for line in target_lines {
+                push_pdf_text(&mut content, rect.0, y, &line, 9.0)?;
+                y -= line_height;
+            }
+        }
+        streams.push(content.into_bytes());
+    }
+    let bytes = serialize_text_pdf(&input.title, &input.pages, &streams)?;
+    Ok(TranslatedPdfOutput {
+        bytes,
+        warnings: vec!["font-not-embedded: output uses the PDF standard Helvetica font; portability is limited to Windows-1252 glyphs".into()],
+        missing_translation_blocks: missing,
+    })
+}
+
+fn validate_block_rect(
+    block: &TranslatedPdfBlock,
+    page: &TranslatedPdfPage,
+) -> Result<(f32, f32, f32, f32)> {
+    let points = block.rect;
+    anyhow::ensure!(
+        points.iter().flatten().all(|value| value.is_finite()),
+        "block {} has non-finite geometry",
+        block.id
+    );
+    let left = points
+        .iter()
+        .map(|point| point[0])
+        .fold(f32::INFINITY, f32::min);
+    let right = points
+        .iter()
+        .map(|point| point[0])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let top = points
+        .iter()
+        .map(|point| point[1])
+        .fold(f32::INFINITY, f32::min);
+    let bottom = points
+        .iter()
+        .map(|point| point[1])
+        .fold(f32::NEG_INFINITY, f32::max);
+    anyhow::ensure!(
+        right > left
+            && bottom > top
+            && left >= 0.0
+            && top >= 0.0
+            && right <= page.width
+            && bottom <= page.height,
+        "block {} geometry is empty or outside page {}",
+        block.id,
+        page.page_number
+    );
+    let expected = [[left, top], [right, top], [right, bottom], [left, bottom]];
+    anyhow::ensure!(
+        points == expected,
+        "block {} geometry must be an ordered axis-aligned rectangle",
+        block.id
+    );
+    Ok((left, top, right - left, bottom - top))
+}
+
+fn wrap_pdf_text(text: &str, width: f32, font_size: f32) -> Result<Vec<String>> {
+    anyhow::ensure!(
+        text.chars().all(|ch| win_1252_byte(ch).is_some()),
+        "translated PDF text contains characters not supported by standard Helvetica/Windows-1252"
+    );
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut line_width = 0.0_f32;
+    let max_width = width.max(1.0);
+    for word in text.split_whitespace() {
+        let word_width = word.chars().count() as f32 * font_size * 0.52;
+        anyhow::ensure!(
+            word_width <= max_width,
+            "layout failure: unbreakable word is wider than its block"
+        );
+        let next_width = if line.is_empty() {
+            word_width
+        } else {
+            line_width + font_size * 0.52 + word_width
+        };
+        if !line.is_empty() && next_width > max_width {
+            lines.push(std::mem::take(&mut line));
+            line_width = 0.0;
+        }
+        if !line.is_empty() {
+            line.push(' ');
+            line_width += font_size * 0.52;
+        }
+        line.push_str(word);
+        line_width += word_width;
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    Ok(lines)
+}
+
+fn win_1252_byte(ch: char) -> Option<u8> {
+    let code = ch as u32;
+    if (0x20..=0x7e).contains(&code) || (0xa0..=0xff).contains(&code) {
+        return Some(code as u8);
+    }
+    Some(match ch {
+        '€' => 0x80,
+        '‚' => 0x82,
+        'ƒ' => 0x83,
+        '„' => 0x84,
+        '…' => 0x85,
+        '†' => 0x86,
+        '‡' => 0x87,
+        'ˆ' => 0x88,
+        '‰' => 0x89,
+        'Š' => 0x8a,
+        '‹' => 0x8b,
+        'Œ' => 0x8c,
+        'Ž' => 0x8e,
+        '‘' => 0x91,
+        '’' => 0x92,
+        '“' => 0x93,
+        '”' => 0x94,
+        '•' => 0x95,
+        '–' => 0x96,
+        '—' => 0x97,
+        '˜' => 0x98,
+        '™' => 0x99,
+        'š' => 0x9a,
+        '›' => 0x9b,
+        'œ' => 0x9c,
+        'ž' => 0x9e,
+        'Ÿ' => 0x9f,
+        _ => return None,
+    })
+}
+
+fn push_pdf_text(content: &mut String, x: f32, y: f32, text: &str, size: f32) -> Result<()> {
+    let mut encoded = String::new();
+    for ch in text.chars() {
+        let byte = win_1252_byte(ch)
+            .context("font encoding failure: text is not representable in Windows-1252")?;
+        if matches!(byte, b'(' | b')' | b'\\') {
+            encoded.push('\\');
+        }
+        if byte < 0x20 || byte > 0x7e {
+            encoded.push_str(&format!("\\{:03o}", byte));
+        } else {
+            encoded.push(byte as char);
+        }
+    }
+    content.push_str(&format!(
+        "BT /F1 {size:.2} Tf 1 0 0 1 {x:.2} {y:.2} Tm ({encoded}) Tj ET\n"
+    ));
+    Ok(())
+}
+
+fn pdf_literal(text: &str) -> String {
+    text.chars()
+        .filter_map(win_1252_byte)
+        .map(|byte| {
+            if matches!(byte, b'(' | b')' | b'\\') {
+                format!("\\{}", byte as char)
+            } else if byte < 0x20 || byte > 0x7e {
+                format!("\\{:03o}", byte)
+            } else {
+                (byte as char).to_string()
+            }
+        })
+        .collect()
+}
+
+fn serialize_text_pdf(
+    title: &str,
+    pages: &[TranslatedPdfPage],
+    streams: &[Vec<u8>],
+) -> Result<Vec<u8>> {
+    let mut objects = vec![Vec::new(); 4 + pages.len() * 2];
+    objects[1] = b"<< /Type /Catalog /Pages 2 0 R >>".to_vec();
+    let kids = (0..pages.len())
+        .map(|index| format!("{} 0 R", 4 + index * 2))
+        .collect::<Vec<_>>()
+        .join(" ");
+    objects[2] = format!("<< /Type /Pages /Count {} /Kids [{}] >>", pages.len(), kids).into_bytes();
+    objects[3] =
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"
+            .to_vec();
+    for (index, (page, stream)) in pages.iter().zip(streams).enumerate() {
+        let page_object = 4 + index * 2;
+        let stream_object = page_object + 1;
+        objects[page_object] = format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {:.2} {:.2}] /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R >>", page.width, page.height, stream_object).into_bytes();
+        let mut value = format!("<< /Length {} >>\nstream\n", stream.len()).into_bytes();
+        value.extend_from_slice(stream);
+        value.extend_from_slice(b"endstream");
+        objects[stream_object] = value;
+    }
+    let mut bytes = b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n".to_vec();
+    let mut offsets = vec![0usize; objects.len()];
+    for index in 1..objects.len() {
+        offsets[index] = bytes.len();
+        bytes.extend_from_slice(format!("{index} 0 obj\n").as_bytes());
+        bytes.extend_from_slice(&objects[index]);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len()).as_bytes());
+    for offset in offsets.iter().skip(1) {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R /Info << /Title ({}) >> >>\nstartxref\n{xref}\n%%EOF\n", objects.len(), pdf_literal(title)).as_bytes());
+    Ok(bytes)
+}
+
+/// Atomically write a translated PDF artifact, checking cancellation both before
+/// and after staging. Cancellation removes the staged file and never publishes.
+pub fn write_translated_pdf_path(
+    source_pdf: &[u8],
+    input: &TranslatedPdfInput,
+    path: &Path,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<TranslatedPdfOutput> {
+    use std::sync::atomic::Ordering;
+    if let Some(source_path) = input.source_path.as_ref() {
+        if let (Ok(target), Ok(source)) = (path.canonicalize(), source_path.canonicalize()) {
+            anyhow::ensure!(
+                target != source,
+                "translated output must not overwrite the retained source PDF"
+            );
+        }
+    }
+    anyhow::ensure!(
+        !cancelled.load(Ordering::Acquire),
+        "translated PDF export cancelled"
+    );
+    let output = build_translated_pdf(source_pdf, input)?;
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .context("choose an output file name")?;
+    let dir = path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    anyhow::ensure!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf")),
+        "translated PDF output path must end in .pdf"
+    );
+    let target = dir.join(&name);
+    anyhow::ensure!(
+        !target.exists(),
+        "translated PDF destination already exists and overwrite is not supported safely: {}",
+        target.display()
+    );
+    let temporary = dir.join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<()> {
+        write_temp(&temporary, &output.bytes)?;
+        publish_translated_temp(&temporary, &target, cancelled)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result?;
+    Ok(output)
+}
+
+fn publish_translated_temp(
+    temporary: &Path,
+    target: &Path,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<()> {
+    use std::sync::atomic::Ordering;
+    anyhow::ensure!(
+        !cancelled.load(Ordering::Acquire),
+        "translated PDF export cancelled"
+    );
+    std::fs::hard_link(temporary, target)
+        .with_context(|| format!("cannot publish translated PDF {}", target.display()))?;
+    std::fs::remove_file(temporary).with_context(|| {
+        format!(
+            "cannot remove staged translated PDF {}",
+            temporary.display()
+        )
+    })
 }
 
 /// The half-written file: removed when this drops, so a failure never leaves a
@@ -662,6 +1106,7 @@ mod tests {
     #[test]
     fn format_capabilities_and_binary_exports_are_truthful() {
         assert!(!ExportFormat::Pdf.can_generate());
+        assert!(!ExportFormat::TranslatedPdf.can_generate(), "translated PDF requires the explicit source-mapped writer");
         assert!(ExportFormat::Docx.can_generate() && ExportFormat::Html.can_generate());
         assert!(ExportFormat::Pdf.preservation().contains("preserved exactly"));
         assert!(ExportFormat::Docx.preservation().contains("not preserved"));
@@ -767,6 +1212,7 @@ mod tests {
         assert_eq!(ExportFormat::Json.label(), "JSON");
         assert_eq!(ExportFormat::Html.label(), "HTML");
         assert_eq!(ExportFormat::Docx.label(), "DOCX");
+        assert_eq!(ExportFormat::TranslatedPdf.label(), tr3("翻译 PDF", "Translated PDF", "PDF đã dịch"));
     }
 
     #[test]
@@ -785,6 +1231,20 @@ mod tests {
         let nested = dir.join("exports").join("2026");
         let path = write_export(&nested, "report.json", "{}", false).expect("write into a folder that did not exist");
         assert!(path.is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_no_overwrite_publish_rejects_a_destination_created_after_the_check() {
+        let dir = temp_dir();
+        let temporary = dir.join(".notes.txt.tmp");
+        let target = dir.join("notes.txt");
+        write_temp(&temporary, b"new").expect("write the temporary export");
+        std::fs::write(&target, b"racing writer").expect("simulate a destination created after preflight");
+
+        assert!(publish_temp(&temporary, &target, false).is_err(), "exclusive publication must refuse the racing destination");
+        assert_eq!(std::fs::read(&target).expect("read the winner"), b"racing writer");
+        assert_eq!(std::fs::read(&temporary).expect("the failed publish keeps its temporary for cleanup"), b"new");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -813,6 +1273,8 @@ mod tests {
     #[test]
     fn the_chosen_extension_decides_the_format() {
         assert_eq!(ExportFormat::from_path(Path::new("notes.pdf")), ExportFormat::Pdf);
+        assert_eq!(ExportFormat::from_path(Path::new("notes.translated.pdf")), ExportFormat::TranslatedPdf);
+        assert_eq!(ExportFormat::from_path(Path::new("C:/docs/NOTES.TRANSLATED.PDF")), ExportFormat::TranslatedPdf);
         assert_eq!(ExportFormat::from_path(Path::new("notes.md")), ExportFormat::Markdown);
         assert_eq!(ExportFormat::from_path(Path::new("notes.txt")), ExportFormat::Text);
         assert_eq!(ExportFormat::from_path(Path::new("notes.json")), ExportFormat::Json);
@@ -842,7 +1304,7 @@ mod tests {
                 }
                 ExportFormat::Markdown => assert!(written.starts_with("# Empty report")),
                 ExportFormat::Text => assert!(written.starts_with("Empty report")),
-                ExportFormat::Pdf | ExportFormat::Html | ExportFormat::Docx => unreachable!("binary formats use export_document_bytes or retained PDF Save As"),
+                ExportFormat::Pdf | ExportFormat::TranslatedPdf | ExportFormat::Html | ExportFormat::Docx => unreachable!("binary formats use export_document_bytes or an explicit PDF writer"),
             }
         }
         assert_eq!(files(&dir).len(), 3, "each format is its own file, and no temporary survives: {:?}", files(&dir));
@@ -898,6 +1360,211 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), source);
         assert!(write_export_bytes_path(&path, b"replacement", false).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    fn translated_pdf_input(source: &[u8]) -> TranslatedPdfInput {
+        let digest: [u8; 32] = Sha256::digest(source).into();
+        TranslatedPdfInput {
+            title: "Quarterly report".into(),
+            source_id: "source-1".into(),
+            source_sha256: digest,
+            source_path: None,
+            pages: vec![TranslatedPdfPage {
+                source_id: "source-1".into(),
+                page_number: 1,
+                width: 300.0,
+                height: 200.0,
+                blocks: vec![TranslatedPdfBlock {
+                    id: "p1-b1".into(),
+                    source: "Revenue rose".into(),
+                    translation: Some("Doanh thu tang".into()),
+                    rect: [[20.0, 20.0], [280.0, 20.0], [280.0, 100.0], [20.0, 100.0]],
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn translated_pdf_bytes_are_deterministic_bilingual_and_have_explicit_font_warning() {
+        let source = b"%PDF-1.4\nretained source";
+        let input = translated_pdf_input(source);
+        let first = build_translated_pdf(source, &input).unwrap();
+        let second = build_translated_pdf(source, &input).unwrap();
+        assert_eq!(first.bytes, second.bytes);
+        assert!(first.bytes.starts_with(b"%PDF-1.4"));
+        assert!(String::from_utf8_lossy(&first.bytes).contains("/BaseFont /Helvetica"));
+        assert_eq!(
+            first.warnings,
+            vec![
+                "font-not-embedded: output uses the PDF standard Helvetica font; portability is limited to Windows-1252 glyphs"
+            ]
+        );
+        let text = String::from_utf8_lossy(&first.bytes);
+        assert!(
+            text.contains("Revenue rose") && text.contains("Doanh thu tang"),
+            "source and supplied translation appear in the PDF content stream: {text}"
+        );
+        let mut two_pages = input.clone();
+        let mut second = two_pages.pages[0].clone();
+        second.page_number = 2;
+        second.blocks[0].id = "p2-b1".into();
+        second.blocks[0].source = "Second page source".into();
+        second.blocks[0].translation = Some("Second page translation".into());
+        two_pages.pages.push(second);
+        let mapped = build_translated_pdf(source, &two_pages).unwrap();
+        let mapped = String::from_utf8_lossy(&mapped.bytes);
+        assert!(mapped.contains("/Count 2") && mapped.contains("/MediaBox [0 0 300.00 200.00]"));
+        assert!(mapped.contains("Second page source") && mapped.contains("Second page translation"));
+    }
+
+    #[test]
+    fn translated_pdf_requires_source_identity_and_exact_page_block_geometry() {
+        let source = b"%PDF-1.4\nsource";
+        let mut input = translated_pdf_input(source);
+        input.pages[0].source_id = "other-source".into();
+        assert!(
+            build_translated_pdf(source, &input)
+                .unwrap_err()
+                .to_string()
+                .contains("different source identity")
+        );
+        let mut input = translated_pdf_input(source);
+        input.pages[0].blocks[0].rect[2][0] = f32::NAN;
+        assert!(
+            build_translated_pdf(source, &input)
+                .unwrap_err()
+                .to_string()
+                .contains("non-finite geometry")
+        );
+        let mut input = translated_pdf_input(source);
+        input.pages[0].page_number = 2;
+        assert!(
+            build_translated_pdf(source, &input)
+                .unwrap_err()
+                .to_string()
+                .contains("page mapping")
+        );
+        let mut input = translated_pdf_input(source);
+        let duplicate = input.pages[0].blocks[0].clone();
+        input.pages[0].blocks.push(duplicate);
+        assert!(
+            build_translated_pdf(source, &input)
+                .unwrap_err()
+                .to_string()
+                .contains("unique")
+        );
+    }
+
+    #[test]
+    fn untranslated_blocks_abstain_and_layout_or_font_limitations_fail_explicitly() {
+        let source = b"%PDF-1.4\nsource";
+        let mut input = translated_pdf_input(source);
+        input.pages[0].blocks[0].translation = None;
+        let output = build_translated_pdf(source, &input).unwrap();
+        assert_eq!(output.missing_translation_blocks, vec!["p1-b1"]);
+        assert!(String::from_utf8_lossy(&output.bytes).contains("[Translation unavailable]"));
+        let mut input = translated_pdf_input(source);
+        input.pages[0].blocks[0].translation = Some("中文".into());
+        assert!(
+            build_translated_pdf(source, &input)
+                .unwrap_err()
+                .to_string()
+                .contains("Windows-1252")
+        );
+        let mut input = translated_pdf_input(source);
+        input.pages[0].blocks[0].rect = [[20.0, 20.0], [280.0, 20.0], [280.0, 35.0], [20.0, 35.0]];
+        assert!(
+            build_translated_pdf(source, &input)
+                .unwrap_err()
+                .to_string()
+                .contains("layout overflow")
+        );
+    }
+
+    #[test]
+    fn translated_pdf_does_not_mutate_the_retained_source_and_rejects_hash_mismatch() {
+        let source = b"%PDF-1.4\nimmutable source bytes".to_vec();
+        let before = source.clone();
+        let input = translated_pdf_input(&source);
+        let output = build_translated_pdf(&source, &input).unwrap();
+        assert_ne!(output.bytes, source);
+        assert_eq!(source, before);
+        let mut wrong = input;
+        wrong.source_sha256[0] ^= 1;
+        assert!(
+            build_translated_pdf(&source, &wrong)
+                .unwrap_err()
+                .to_string()
+                .contains("hash does not match")
+        );
+        assert_eq!(source, before);
+    }
+
+    #[test]
+    fn translated_pdf_writer_refuses_conflicts_source_overwrite_and_cancelled_publish() {
+        use std::sync::atomic::AtomicBool;
+        let dir = temp_dir();
+        let source_path = dir.join("source.pdf");
+        let source = b"%PDF-1.4\nsource bytes";
+        std::fs::write(&source_path, source).unwrap();
+        let mut input = translated_pdf_input(source);
+        input.source_path = Some(source_path.clone());
+        let cancelled = AtomicBool::new(false);
+        assert!(write_translated_pdf_path(source, &input, &source_path, &cancelled).is_err());
+        let target = dir.join("translated.pdf");
+        std::fs::write(&target, b"keep existing").unwrap();
+        assert!(write_translated_pdf_path(source, &input, &target, &cancelled).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep existing");
+        std::fs::remove_file(&target).unwrap();
+        cancelled.store(true, std::sync::atomic::Ordering::Release);
+        assert!(write_translated_pdf_path(source, &input, &target, &cancelled).is_err());
+        assert!(!target.exists());
+        cancelled.store(false, std::sync::atomic::Ordering::Release);
+        let staged = dir.join(".cancelled.pdf.tmp");
+        write_temp(&staged, b"staged output").unwrap();
+        cancelled.store(true, std::sync::atomic::Ordering::Release);
+        let publish = publish_translated_temp(&staged, &target, &cancelled);
+        if publish.is_err() {
+            let _ = std::fs::remove_file(&staged);
+        }
+        assert!(publish.is_err());
+        assert!(
+            !target.exists() && !staged.exists(),
+            "cancellation rolls back the staged output"
+        );
+        assert_eq!(files(&dir), vec!["source.pdf".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn translated_pdf_reopens_with_pdfinfo_and_text_extracts() {
+        let source = b"%PDF-1.4\nsource";
+        let output = build_translated_pdf(source, &translated_pdf_input(source)).unwrap();
+        let dir = temp_dir();
+        let path = dir.join("translated.pdf");
+        std::fs::write(&path, output.bytes).unwrap();
+        if std::process::Command::new("pdfinfo")
+            .arg(&path)
+            .output()
+            .is_ok_and(|result| result.status.success())
+        {
+            let info = std::process::Command::new("pdfinfo")
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(String::from_utf8_lossy(&info.stdout).contains("Pages:           1"));
+            let text = std::process::Command::new("pdftotext")
+                .arg(&path)
+                .arg("-")
+                .output()
+                .unwrap();
+            assert!(text.status.success());
+            let text = String::from_utf8_lossy(&text.stdout);
+            assert!(
+                text.contains("Revenue rose") && text.contains("Doanh thu tang"),
+                "extracted PDF text: {text}"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

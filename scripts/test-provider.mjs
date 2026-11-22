@@ -23,7 +23,7 @@ const server = createServer(async (request, response) => {
   if (request.url === '/metrics') { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ requests })); return; }
   if (request.url === '/sample.pdf' || request.url === '/document-without-suffix') {
     response.setHeader('Content-Type', 'application/pdf');
-    response.end(await readFile(new URL('../tests/fixtures/mirror-field-notes.pdf', import.meta.url)));
+    response.end(await readFile(new URL('../extension/tests/fixtures/mirror-field-notes.pdf', import.meta.url)));
     return;
   }
   if (request.url === '/v1/chat/completions' && request.method === 'POST') {

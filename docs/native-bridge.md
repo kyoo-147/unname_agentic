@@ -25,7 +25,7 @@ cargo build --manifest-path desktop/Cargo.toml --release --bin pdf-workspace-hos
   -HostPath 'D:\work\mirror_trans_pdf\desktop\target\release\pdf-workspace-host.exe'
 ```
 
-The installer validates both arguments before writing. It rejects UNC paths, symlinks, and junctions in installation paths. It registers only this exact current-user key.
+The installer validates both arguments before writing. It rejects UNC paths, symlinks, and junctions in installation paths. `-DryRun` and PowerShell `-WhatIf` do not write; `-Action Verify -Diagnostics` validates the exact registration and performs a framed `hello` readiness check. `-Action Unregister` removes only this exact current-user key when it points to this install's manifest, and deliberately retains the manifest file. A conflicting registration is reported and never overwritten or removed. Registration remains a human-only action.
 
 ```text
 HKCU\Software\Google\Chrome\NativeMessagingHosts\com.pdfworkspace.bridge
@@ -33,7 +33,7 @@ HKCU\Software\Google\Chrome\NativeMessagingHosts\com.pdfworkspace.bridge
 
 The key points to `%LOCALAPPDATA%\PdfWorkspace\native-messaging\com.pdfworkspace.bridge.json`. Its `allowed_origins` contains only `chrome-extension://<your-extension-id>/`. There are no wildcard IDs or machine-wide registry writes. Installing again replaces this host's current-user registration and allowlist with the supplied ID and executable. Do not move or replace the executable with an untrusted program.
 
-No installer runs during builds, tests, browser detection, or desktop startup. No PDFs are opened during installation.
+No installer runs during builds, tests, browser detection, or desktop startup. No PDFs are opened during installation. Package manifests record host readiness, Chrome host E2E, and code signing as not-run/not-configured unless separate evidence is supplied. A successful package assembly is not evidence of a signed binary or a real Chrome handshake.
 
 ## Send a PDF
 

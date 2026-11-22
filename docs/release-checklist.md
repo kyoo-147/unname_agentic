@@ -1,177 +1,107 @@
 # Release checklist
 
-The release ritual, written down as a gate a script runs: **`node scripts/release-check.mjs`**.
-Nothing ships on memory — every row below is either observed by that script or recorded in it,
-and every row it cannot observe is named as a limit at the bottom of this page.
+A full release is gated by observable evidence from the current revision, not by inherited notes or helper-module tests.
+The extension artifact directory is `dist/extension`.
+A passing extension-only artifact check is not a native desktop release.
 
-- Rules and codes: `src/core/release-gate.ts`
+- Policy: `extension/viewer/src/core/release-gate.ts`
 - Runner: `scripts/release-check.mjs`
-- Tests for both: `tests/release-gate.test.ts` — `pnpm vitest run tests/release-gate.test.ts`
+- PowerShell verifier: `scripts/verify-release.ps1`
+- Relevant tests: `extension/tests/release-gate.test.ts`, `extension/tests/release-scripts.test.ts`, and `extension/tests/quality-gate-scripts.test.ts`
+- Backlog plan and evidence ledger: `docs/backlog-implementation-plan.md`
 
-## Run the gate
+## Run the checks
 
 ```powershell
-node scripts/release-check.mjs --json                         # web/package/license/native/CI status report
-node scripts/release-check.mjs --build --e2e                  # local release run; native remains separate
-node scripts/release-check.mjs --build --e2e --require-native # fail closed unless native evidence exists
-pwsh -File scripts/package-native.ps1 -DryRun -AllowDirty     # safe package preflight
-pwsh -File scripts/verify-release.ps1 -ArtifactsOnly         # web/extension artifact checks
-pwsh -File scripts/verify-release.ps1 -RequireNativePackage  # full native package structure/checksum gate
+node scripts/release-check.mjs --json
+node scripts/release-check.mjs --build --require-native --require-ci
+pwsh -File scripts/verify-release.ps1
+pwsh -File scripts/verify-release.ps1 -ArtifactsOnly
+pwsh -File scripts/verify-release.ps1 -RequireNativePackage -PackagePath <path>
 ```
 
-Flags: `--build` runs `pnpm build` before reading the build output, `--e2e` runs the Playwright
-suite instead of listing it, `--require-native` and `--require-ci` fail closed when those
-independent evidence records are not passes, `--json` prints the same report as JSON, and
-`--help` prints usage.
+`release-check.mjs` runs the unit, typecheck, committed-import, build-output, quality, notice, changelog and package checks.
+It does not run Chrome/native E2E or the Rust suite.
+Real browser E2E count and CI/native statuses must be supplied from actual runs; an environment variable is a record, not proof by itself.
 
-Exit codes: `0` every required check passed, `1` at least one blocker or required evidence gap,
-and `2` the runner itself could not run (a missing module or unreadable `package.json`). A
-blocked or unknown native/CI record is never printed as a pass.
+`--require-native` remains accepted for compatibility, but native pass evidence is mandatory for every invocation.
+`--require-ci` also makes a missing or blocked CI record fail the command.
+`--build` runs the extension build before checking the output.
 
-## Items
+`verify-release.ps1` performs tests, typecheck, build, import and extension-artifact checks, then requires a native package for full verification.
+`-ArtifactsOnly` deliberately checks only existing extension output and does not represent a full release verification.
+`-DryRun` prints the selected mode without running checks or changing files.
 
-| # | Item | What satisfies it | Exact command |
-| --- | --- | --- | --- |
-| 1 | Version | `version` in `package.json`, the same string the package name and the checksum are filed under | `node -p "JSON.parse(require('node:fs').readFileSync('package.json','utf8')).version"` |
-| 2 | Changelog entry | a heading for that version in `CHANGELOG.md` (e.g. `## 0.1.0`) | `Select-String -Path CHANGELOG.md -Pattern '^## '` |
-| 3 | Unit suite | `pnpm test` green; at least one passing unit test is recorded | `pnpm test` |
-| 4 | End-to-end suite | at least `E2E_TEST_FLOOR` (40) declared or passing tests | `pnpm exec playwright test --retries=0` |
-| 5 | Native suite (separate evidence) | a positive count from a real Rust run, with `RELEASE_NATIVE_STATUS=pass` | `pwsh -File scripts/build-windows.ps1 -Action test` |
-| 6 | Typecheck | `pnpm typecheck` exits 0 | `pnpm typecheck` |
-| 7 | Build output | `dist/web/index.html` and its assets exist, produced by the sources being released | `pnpm build` |
-| 8 | Committed imports | every relative import resolves against the files committed at `HEAD` | `node scripts/check-committed-imports.mjs` |
-| 9 | Third-party notices | a notice naming every bundled runtime dependency, plus its licence text, under `public/` | `Get-ChildItem public -Recurse -File -Include NOTICE*,LICENSE*,OFL.txt` |
-| 10 | Release package | commit-bound directory and `.zip` with GPUI exe, PDFium, host, assets, notices and checksums | `pwsh -File scripts/package-native.ps1` |
-| 11 | Feature inventory (warning) | `docs/features.md` updated for this release | edit `docs/features.md` |
-| 12 | The whole gate | items 1–11 in one command, on the tree that is about to ship | `node scripts/release-check.mjs --build --e2e --require-native` |
-| 13 | Trust/quality evidence | privacy, secret boundary, resource limits, consent audit, retention, golden data, OCR, translation, export, performance, i18n, a11y, and SBOM are all measured | `node scripts/release-check.mjs --json` |
+Exit codes are 0 for a passing gate, 1 for a blocker or required evidence gap, and 2 when the runner itself cannot run.
+A missing native status, a positive test count without `RELEASE_NATIVE_STATUS=pass`, or a blocked native run is not a pass.
 
-Items 1–4, 6–10 and 13 are blockers; items 5 and 11 are warnings. Item 12 is the gate itself.
+## Evidence rows
 
-## Blocker codes
+| # | Evidence | Pass condition | Owning check |
+|---|---|---|---|
+| 1 | Version and changelog | `package.json` version has a matching `CHANGELOG.md` entry | `release-check.mjs` |
+| 2 | Extension unit tests | `pnpm test:extension` exits 0 and produces a readable Vitest summary with passing tests | `release-check.mjs`, `pre-push.ps1` |
+| 3 | Typecheck and committed imports | Both current source typecheck and commit-bound import scan exit 0 | All release runners |
+| 4 | Extension artifact | `dist/extension/index.html`, assets, or required MV3 files and local references exist | `release-check.mjs`, `verify-release.ps1` |
+| 5 | Native tests | A positive count and `RELEASE_NATIVE_STATUS=pass` are recorded from a real Rust run | `release-check.mjs` |
+| 6 | Native package | Commit-bound release package, required files, manifest, checksums and archive verify | `release-check.mjs`, `verify-release.ps1` |
+| 7 | Chrome/native E2E | Fresh Chrome plus packaged host completes the native messaging workflow | External run evidence; not executed by these scripts |
+| 8 | CI | A green CI run is recorded for the release revision; blocked/unknown is not green | `release-check.mjs --require-ci` |
+| 9 | Notices and quality evidence | Dependency notices and required local quality gates pass | `release-check.mjs` |
+| 10 | Trusted signature | The shipped binary's signature chain is trusted and verified | Manual/platform verification; not established by packaging alone |
+| 11 | Independent PDF readers | Representative output opens and is reviewed in at least two independent readers | Manual validation record |
+| 12 | Feature inventory | `docs/features.md` is reviewed and updated; timestamp alone is only a warning proxy | `release-check.mjs` |
 
-Each row names the code the report prints, what it means, and the item that clears it. A
-blocker stops the release: the script exits 1 and the table marks the row `BLOCKED`.
+## Gate finding codes
 
-| Code | What it means | Cleared by |
-| --- | --- | --- |
-| `version-missing` | no usable version was recorded; a blank or missing version is not a release | item 1 |
-| `changelog-missing-version` | no changelog entry names this version, so the release note would be written from memory | item 2 |
-| `unit-tests-empty` | the unit suite recorded no passing test — it failed, did not run, or ran nothing | item 3 |
-| `e2e-tests-below-floor` | the end-to-end count is below the documented floor; coverage has been lost | item 4 |
-| `gate-typecheck-failed` | `pnpm typecheck` did not pass | item 6 |
-| `gate-build-failed` | `pnpm build` did not pass, or produced no `dist/web` to ship | item 7 |
-| `gate-imports-failed` | a committed file imports a module that is not committed, so a fresh clone cannot build | item 8 |
-| `license-notice-missing` | a bundled dependency has no third-party notice; one blocker per dependency, named in the sentence | item 9 |
-| `package-artifact-missing` | there is no release package to hand over under a name and a checksum | item 10 |
-| `quality-privacy-failed` | offline/network privacy evidence did not pass | item 13 |
-| `quality-secret-boundary-failed` | secret scanning/redaction evidence did not pass | item 13 |
-| `quality-resource-limits-failed` | parser and crypto resource limits were not verified | item 13 |
-| `quality-consent-audit-failed` | cloud consent and route audit evidence did not pass | item 13 |
-| `quality-retention-failed` | retention/purge confirmation evidence did not pass | item 13 |
-| `quality-golden-dataset-failed` | no executed golden dataset evidence was recorded | item 13 |
-| `quality-ocr-benchmark-failed` | OCR CER/WER benchmark did not produce a passing run | item 13 |
-| `quality-translation-benchmark-failed` | translation benchmark evidence did not pass | item 13 |
-| `quality-export-benchmark-failed` | export benchmark evidence did not pass | item 13 |
-| `quality-performance-benchmark-failed` | performance budget evidence did not pass | item 13 |
-| `quality-i18n-failed` | i18n matrix evidence did not pass | item 13 |
-| `quality-accessibility-failed` | accessibility evidence did not pass | item 13 |
-| `quality-sbom-failed` | SBOM is missing/malformed or contains a forbidden license marker | item 13 |
+The policy emits these blockers; a blocker prevents release:
 
-## Warning codes
+`version-missing`, `changelog-missing-version`, `unit-tests-empty`, `e2e-tests-below-floor`,
+`gate-typecheck-failed`, `gate-build-failed`, `gate-imports-failed`, `license-notice-missing`,
+`package-artifact-missing`, `quality-privacy-failed`, `quality-secret-boundary-failed`,
+`quality-resource-limits-failed`, `quality-consent-audit-failed`, `quality-retention-failed`,
+`quality-golden-dataset-failed`, `quality-ocr-benchmark-failed`, `quality-translation-benchmark-failed`,
+`quality-export-benchmark-failed`, `quality-performance-benchmark-failed`, `quality-i18n-failed`,
+`quality-accessibility-failed`, and `quality-sbom-failed`.
 
-Warnings do not change the exit code. They are facts this gate reports and a person decides.
+The policy's warning codes are `native-tests-unknown` and `features-doc-stale`.
+The runner additionally treats missing/blocked native pass evidence as a required-evidence failure, so the warning does not allow a full release to pass.
+CI is recorded separately; a blocked or unknown native/CI record is never printed as a pass.
 
-| Code | What it means | Cleared by |
-| --- | --- | --- |
-| `native-tests-unknown` | no native test count was recorded, or zero were; the Rust surface is outside this gate | item 5 |
-| `features-doc-stale` | the feature inventory was not updated for this release; it may describe an older product | item 11 |
+## Artifact boundary
 
-## Floors, and where the numbers come from
+`dist/extension` is the extension build output and remains the only accepted extension artifact path.
+`dist/web` is not the product artifact in this migrated repository and must not be used as evidence of a build or release.
+The extension output does not satisfy native package, trusted-signing, Chrome/native E2E, or PDF-reader compatibility gates.
 
-Both live in `src/core/release-gate.ts` as `E2E_TEST_FLOOR` and `MIN_UNIT_TESTS`; changing one
-is a policy change and belongs in the same commit as this page.
+The native package's presence and checksums establish package integrity/provenance as inspected by the verifier.
+They do not establish that the application starts, that the host is registered in Chrome, that signing is trusted, or that translated PDFs are correct.
 
-- **`MIN_UNIT_TESTS` = 1.** Not a coverage target: zero means the suite did not run, failed, or
-  collected nothing, and each of those ships a release with no unit evidence at all.
-- **`E2E_TEST_FLOOR` = 40.** The suite declared 49 tests in 15 files at the 2026-11-20 audit
-  (`docs/features.md`). The floor sits about a fifth below that, so a legitimate merge of a few
-  specs does not fail the gate while losing a whole file of journeys does. It is a floor on the
-  *count*, which is the only thing a runner measures without a browser matrix: a tripwire
-  against coverage disappearing, not proof that what remains is good.
+## Recording separate evidence
 
-## Recording the native test count
-
-This gate does not run the Rust workspace: it needs an MSVC developer environment, and a
-native failure is not a reason to hold a JavaScript release that has nothing to do with it. Run
-the native gate, then pass its count in when you run the script:
+Record native test evidence only after a real native run:
 
 ```powershell
 pwsh -File scripts/build-windows.ps1 -Action test
-$env:RELEASE_NATIVE_TESTS = '92'   # the passing count the run above printed
-node scripts/release-check.mjs --build --e2e
+$env:RELEASE_NATIVE_TESTS = '<positive passing test count from that run>'
+$env:RELEASE_NATIVE_STATUS = 'pass'
+node scripts/release-check.mjs --json
 ```
 
-Without that variable the row is `UNKNOWN` and the report carries the
-`native-tests-unknown` warning. `RELEASE_NATIVE_STATUS=blocked` records a real infrastructure
-blocker such as Windows SDK, `rc.exe`, or paging-file error 1455; it never becomes a native pass.
+A count without `RELEASE_NATIVE_STATUS=pass` is rejected.
+`RELEASE_NATIVE_STATUS=blocked` should include the exact blocker in `RELEASE_NATIVE_BLOCKER`.
+Never set `pass` from source inspection, a workflow definition, a historical receipt, or a package manifest.
 
-## Evidence status contract
+For CI, set `RELEASE_CI_STATUS=pass` only from a successful run of the release revision.
+Use `RELEASE_CI_STATUS=blocked` with `RELEASE_CI_BLOCKER` for a real provider/runner blocker; it is not a pass.
 
-The JSON report includes `releaseStatus.web`, `releaseStatus.native`, `releaseStatus.license`
-and `releaseStatus.ci`.
+For browser/native E2E, record `RELEASE_BROWSER_E2E_TESTS` only from a real Chrome run against the packaged host.
+The runner checks that a positive count was provided but cannot independently authenticate that run; attach the actual output/trace to release review.
 
-- `web` is `pass` only when the web and quality blockers are clear.
-- `native` is `pass` only with a positive native test count from a real native run.
-- `license` is `pass` only when every bundled runtime dependency has a notice.
-- `ci` is `pass` only when `RELEASE_CI_STATUS=pass` is supplied from an actual CI result.
+## Current known gaps
 
-Use `RELEASE_CI_STATUS=blocked` with `RELEASE_CI_BLOCKER="billing/runner locked"` when the
-provider prevents a run. Do not set `pass` from a workflow definition or an unexecuted job.
-Use `--require-native` or `--require-ci` when that evidence is required for the release being
-approved; absent or blocked evidence then exits 1.
-
-## How the runner fills each field
-
-Nothing is guessed:
-
-- **Counts** are parsed from the output of the command that produced them. `pnpm test` must exit
-  0 for its passing count to be recorded; when it fails, the row prints the real numbers and the
-  gate input records `0`, because a release does not rest on a red suite. `--e2e` parses the
-  passing count of a real run; without it, the row is the count `playwright test --list` reports
-  and is labelled "declared".
-- **The build gate** is the output, not a memory: `dist/web/index.html` and at least one asset
-  under `dist/web/assets`. `--build` runs `pnpm build` first and records a failure if it fails.
-- **The release package** is the newest `dist/pdf-workspace-*-release-*` directory with its
-  sibling `.zip`, `MANIFEST.json`, `CHECKSUMS.sha256` and required native files.
-- **The notices** are the files under `public/` whose names look like a notice or a licence; each
-  runtime dependency in `package.json` must be named in one of them (`pdfjs-dist` is named as
-  "pdf.js" in the notice text).
-- **The changelog** is `CHANGELOG.md` containing the version as a whole token.
-- **The feature inventory** is a timestamp proxy: `docs/features.md` must not be older than the
-  newest file under `src/`, `extension/` or `tests/`. The gate warns rather than blocks precisely
-  because a timestamp is a proxy no person has confirmed.
-
-## Known state on 2026-11-21
-
-The current release-gate run on this worktree reports these conditions:
-
-- `package-artifact-missing` — no native release package exists under `dist/`; the web build is
-  present, but this gate does not treat a web directory as a native release package.
-- `unit-tests-empty` and the dependent quality evidence codes — the full `pnpm test` command exits
-  non-zero in this worktree even though its verbose output contains passing tests; the gate records
-  zero passing tests for a non-green run.
-- `native-tests-unknown` — no `RELEASE_NATIVE_TESTS` value was supplied; the native workspace is
-  outside this JavaScript gate.
-- CI is unrecorded/unknown; no CI pass is claimed.
-- `features-doc-stale` — the inventory timestamp is older than source/test changes; update it only
-  after reviewing the claims, not merely to silence the warning.
-
-## What this gate does not cover
-
-Named here so nobody reads a green run as more than it is:
-
-- It does not run the native suite (item 5) and does not verify that any recorded number is true.
-- The preflight lists the end-to-end suite instead of running it; a release run must pass `--e2e`.
-- It does not replace the artifact structure gate (`pwsh -File scripts/verify-release.ps1 -RequireNativePackage`), the signing step, or a real cloud translation provider. The translation/export rows rest on local unit evidence and are not provider-quality claims.
-- OCR and performance rows are strict only when their scripts produce machine-readable evidence; a missing fixture, missing build, or failed budget remains a blocker rather than a guessed pass.
+The native release build, native messaging host build, commit-bound package and checksum/archive verification were rerun at HEAD `c3a5de5` and pass locally. This establishes build and package integrity only.
+The current Chrome/native E2E, trusted signing, Chrome registry/native-host installation, CI and independent PDF-reader checks remain unverified.
+Do not infer runtime acceptance from extension module tests, package integrity, or a previous branch's receipt.
+Translated-PDF writing is mounted in the desktop Save As flow, but remains quality-gated until an end-to-end output is verified in independent readers.
+K10 shared workspace/per-document RBAC remains deferred until deployment and identity scope are approved.

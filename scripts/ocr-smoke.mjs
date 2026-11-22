@@ -5,14 +5,14 @@ import path from 'node:path';
 import Tesseract from 'tesseract.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const assets = path.join(root, 'public', 'ocr');
+const assets = path.join(root, 'extension', 'viewer', 'public', 'ocr');
 
 function usage() {
   console.error(`Usage: node scripts/ocr-smoke.mjs --image <path.png|jpg> [--lang eng+vie] [--min-confidence 35]
 
 Runs the real Tesseract engine against a local screenshot. It uses the vendored
-assets in public/ocr, so it makes no network request. This script is not part of
-pnpm test.`);
+assets in extension/viewer/public/ocr, so it makes no network request. This script is not part of
+pnpm test:extension.`);
 }
 
 const args = process.argv.slice(2);

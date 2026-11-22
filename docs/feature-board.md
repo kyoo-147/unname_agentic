@@ -112,7 +112,7 @@ Số đo hiện tại (HEAD): **323 unit test / 29 file** + **49 e2e pass / 0 fa
 | | Chức năng | | Bằng chứng | Còn thiếu |
 |---|---|---|---|---|
 | D01 | Kiểu chung, block ID ổn định | ✅ | `tests/block-ids.test.ts` pin scheme `p{page}-r{n}` (0-based), id tất định khi trích lại, không trùng giữa các trang, và id OCR `ocr-p{page}-{n}` không đụng id PDF | Sau khi xoay, `rotateView` nối bản dịch **theo text** (id đổi vì thứ tự khối đổi); hai khối cùng text sẽ dùng chung một bản dịch — chấp nhận được, đã ghi rõ trong code |
-| D02 | Scheduler priority/dedupe/abort | ✅ | 4 test scheduler, wire trong `main.ts` | AbortController trong scheduler là **trang trí** (signal không được truyền) |
+| D02 | Scheduler priority/dedupe/abort | ✅ | priority + dedupe + queued/running per-job abort tests in `extension/tests/scheduler.test.ts`; `JobHandle` passes its signal to the task | Abort does not cancel sibling jobs; `abortAll` remains available for document-wide teardown |
 | D03 | Retry/backoff, phân loại lỗi | ✅ | 7 loại lỗi, backoff jitter, test delay 50/100 | — |
 | D04 | Batch cho tài liệu dài | ✅ | `TranslationService.translateBatch` (cache + đếm ký tự) + nối vào "Dịch toàn bộ"; e2e `translate-batch.spec.ts` đo **số request thật** < số block | Google/DeepL vẫn 1 request/khối (API single-text) — đã ghi rõ |
 | D05 | Đếm ký tự / chi phí | ✅ | `pricing.ts` (USD, 4 model) + 17 test; status bar hiện `... · ước tính $0.0004` | Bảng giá là ảnh chụp tại một thời điểm; model lạ hiện "chưa có bảng giá", không bịa số |

@@ -10,8 +10,8 @@
  *    (`diff.diffDocuments`), and scored for OCR error (`ocr-metrics.characterErrorRate`).
  *    Each scenario runs `WARMUP_RUNS` times unrecorded and `SAMPLED_RUNS` times
  *    recorded, and the report prints p50/p95/max against the budget.
- * 2. Did the last `pnpm build` grow the web bundle past its ceiling? Every
- *    `dist/web/assets/**\/*.{js,mjs,css}` byte is counted, and gzip is reported beside
+ * 2. Did the last `pnpm build` grow the extension bundle past its ceiling? Every
+ *    `dist/extension/assets/**\/*.{js,mjs,css}` byte is counted, and gzip is reported beside
  *    it because that is closer to what a user downloads.
  *
  * The measurement primitives, the percentile rule and the budget comparison all come
@@ -42,7 +42,7 @@
  *
  * This script does NOT run `pnpm build`: a hook runs the build first (see
  * `scripts/pre-push.ps1`), and building here would blow the hook's time budget. When
- * `dist/web` is absent the size row says "not built" and no size verdict is invented.
+ * `dist/extension` is absent the size row says "not built" and no size verdict is invented.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { registerHooks } from 'node:module';
@@ -51,12 +51,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const assetsDir = path.join(root, 'dist', 'web', 'assets');
+const assetsDir = path.join(root, 'dist', 'extension', 'assets');
 
 // --- Budgets ---------------------------------------------------------------
 //
 // Timing budgets are p95 milliseconds; size budgets are raw KiB of JS + CSS under
-// dist/web/assets. Every number was set from a measured baseline on the machine that
+// dist/extension/assets. Every number was set from a measured baseline on the machine that
 // wrote it, with the headroom stated: a budget that already fits the current code and
 // a little noise fails on a change that actually costs something, and nothing else.
 // docs/performance.md carries the same table with the reasoning in prose.
@@ -97,7 +97,7 @@ const BUDGETS = Object.freeze({
     // while still failing a complexity change (a full matrix instead of two rows is ~100x).
     p95Ms: 20,
   },
-  'web js+css': {
+  'extension js+css': {
     kind: 'size',
     // Baseline 2,951 KiB (the pdf.js worker and fontkit dominate). 3,200 KiB is +8%:
     // enough for a small feature, not enough for a new bundle-sized dependency.
@@ -370,19 +370,19 @@ function usage() {
   console.error(`Usage: node scripts/perf-budget.mjs [--json] [--help]
 
 Measures a deterministic synthetic workload over the pure core modules (chunking,
-BM25 index, search, document diff, CER) and the size of the last build's web bundle,
+BM25 index, search, document diff, CER) and the size of the last build's extension bundle,
 then compares both against the budgets declared at the top of this file.
 
   p50/p95/max are milliseconds over ${SAMPLED_RUNS} recorded runs after ${WARMUP_RUNS} warm-ups.
   p95 is the value at rank ceil(0.95*n)-1, so at ${SAMPLED_RUNS} samples it is the second-largest.
-  The bundle row counts dist/web/assets/**/*.{js,mjs,css}; gzip is reported for context.
+  The bundle row counts dist/extension/assets/**/*.{js,mjs,css}; gzip is reported for context.
 
   --json   machine-readable report
   --help   this text
 
 Exit codes: 0 every budget met, 1 a budget exceeded or a scenario measured nothing,
 2 the script could not run. This script does not run the build; run \`pnpm build\`
-first when dist/web is stale.`);
+first when dist/extension is stale.`);
 }
 
 function parseArgs(argv) {
@@ -440,10 +440,10 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   installTypeScriptResolver();
 
-  const perf = await loadModule('src/core/perf.ts');
-  const retrieval = await loadModule('src/core/retrieval.ts');
-  const diff = await loadModule('src/core/diff.ts');
-  const metrics = await loadModule('src/core/ocr-metrics.ts');
+  const perf = await loadModule('extension/viewer/src/core/perf.ts');
+  const retrieval = await loadModule('extension/viewer/src/core/retrieval.ts');
+  const diff = await loadModule('extension/viewer/src/core/diff.ts');
+  const metrics = await loadModule('extension/viewer/src/core/ocr-metrics.ts');
 
   // --- Corpus and the work each scenario does (built once, reused).
   const base = createCorpus();
@@ -503,7 +503,7 @@ async function main() {
   const unmeasured = timeNames.filter(name => !measuredNames.has(name));
   const timingMet = timeNames.length - unmeasured.length - violations.length;
   const bundle = measureBundle();
-  const sizeBudget = BUDGETS['web js+css'];
+  const sizeBudget = BUDGETS['extension js+css'];
   const sizeFailed = bundle.built && sizeBudget.kind === 'size' && bundle.bytes > sizeBudget.maxKiB * 1024;
   const failed = violations.length > 0 || unmeasured.length > 0 || sizeFailed;
   const diffSummary = diff.diffDocuments(base, revised).summary;
@@ -553,7 +553,7 @@ async function main() {
     console.log(formatTable(
       ['artifact', 'files', 'raw KiB', 'gzip KiB', 'budget', 'result'],
       [[
-        'dist/web/assets js+css',
+        'dist/extension/assets js+css',
         bundle.built ? String(bundle.files) : '-',
         bundle.built ? kibibytes(bundle.bytes) : '-',
         bundle.built ? kibibytes(bundle.gzipBytes) : '-',
@@ -580,7 +580,7 @@ async function main() {
       }
     }
     if (sizeFailed) {
-      console.log(`OVER dist/web/assets: ${kibibytes(bundle.bytes)} KiB > ${sizeBudget.maxKiB} KiB budget`);
+      console.log(`OVER dist/extension/assets: ${kibibytes(bundle.bytes)} KiB > ${sizeBudget.maxKiB} KiB budget`);
     }
     const timingTotal = timeNames.length - unmeasured.length;
     if (failed) {

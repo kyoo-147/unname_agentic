@@ -24,10 +24,10 @@
  *                    user's own cookies, into the extension reader.
  */
 import { MirrorController, pdfPath, sourceUrl, type MirrorSession } from './controller';
-import { createTranslationTransport } from '../src/core/translation';
-import type { TranslationSettings } from '../src/core/types';
+import { createTranslationTransport } from './viewer/src/core/translation';
+import type { TranslationSettings } from './viewer/src/core/types';
 import { NativeCompanion, NATIVE_HOST, normalizeNativePage, sameSession, COMPANION_UNAVAILABLE, type NativeAnnotation, type NativeAnnotationKind, type NativeTransferProgress } from './native-bridge';
-import { readCaptureParams } from '../src/ui/capture';
+import { readCaptureParams } from './viewer/src/ui/capture';
 
 const viewerUrl = chrome.runtime.getURL('index.html');
 const popupUrl = chrome.runtime.getURL('popup.html');
@@ -66,6 +66,9 @@ const controller = new MirrorController({
 const transport = createTranslationTransport();
 const transfers = new Map<string, { bytes: Uint8Array; viewer: number; created: number; sha256: string; nextOffset: number; lastOffset?: number; lastData?: number[]; complete: boolean }>();
 const captures = new Map<number, Capture>();
+// A newly-created tab can load before the async session write finishes. Keep a short-lived
+// handoff promise so the first reader request waits for the capture it was opened for.
+const pendingCaptures = new Map<string, Promise<Capture | undefined>>();
 const viewStates = new Map<number, { page: number; fraction: number; zoom?: number }>();
 const mimePdfTabs = new Set<number>();
 const companion = new NativeCompanion(() => {
@@ -112,6 +115,12 @@ function isReader(sender: chrome.runtime.MessageSender): boolean {
   try {
     const url = new URL(sender.url);
     return `${url.protocol}//${url.host}${url.pathname}` === viewerUrl;
+  } catch { return false; }
+}
+function isCaptureReaderUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return `${url.protocol}//${url.host}${url.pathname}` === viewerUrl && readCaptureParams(value) !== undefined;
   } catch { return false; }
 }
 function isPopup(sender: chrome.runtime.MessageSender): boolean { return sender.id === chrome.runtime.id && sender.url === popupUrl; }
@@ -192,7 +201,7 @@ chrome.webRequest.onHeadersReceived.addListener(details => {
 chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
   if (change.url) {
     companion.revoke(tabId); viewStates.delete(tabId); mimePdfTabs.delete(tabId);
-    void removeCapturesForTab(tabId).catch(report);
+    if (!isCaptureReaderUrl(change.url)) void removeCapturesForTab(tabId).catch(report);
     void controller.navigate(tabId, change.url).catch(report);
   }
   const url = change.url ?? tab.url;
@@ -276,18 +285,42 @@ async function openCapture(sourceTabId: number, image: string): Promise<{ viewer
   const capturedSourceUrl = sourceUrl(source.url ?? '');
   if (source.active === false || !capturedSourceUrl) throw new Error('Capture only supports the current accessible source tab.');
   const captureId = crypto.randomUUID();
-  const tab = await chrome.tabs.create({ url: `${viewerUrl}?capture=1&sourceTab=${sourceTabId}&captureId=${encodeURIComponent(captureId)}`, openerTabId: sourceTabId });
-  if (tab.id === undefined) throw new Error('Could not open captured mirror.');
-  const capture: Capture = { id: captureId, image, sourceTabId, sourceUrl: capturedSourceUrl, createdAt: Date.now(), sha256: await sha256Hex(await imageBytes(image)), viewerTabId: tab.id };
+  let resolvePending: (capture: Capture | undefined) => void = () => {};
+  const pending = new Promise<Capture | undefined>(resolve => { resolvePending = resolve; });
+  pendingCaptures.set(captureId, pending);
   try {
-    await persistCapture(capture);
+    const tab = await chrome.tabs.create({ url: `${viewerUrl}?capture=1&sourceTab=${sourceTabId}&captureId=${encodeURIComponent(captureId)}`, openerTabId: sourceTabId });
+    if (tab.id === undefined) throw new Error('Could not open captured mirror.');
+    const capture: Capture = { id: captureId, image, sourceTabId, sourceUrl: capturedSourceUrl, createdAt: Date.now(), sha256: await sha256Hex(await imageBytes(image)), viewerTabId: tab.id };
+    try {
+      await persistCapture(capture);
+    } catch (error) {
+      await chrome.tabs.remove(tab.id).catch(() => {});
+      throw error;
+    }
+    resolvePending(capture);
+    void chrome.runtime.sendMessage({ type: 'mirror:capture-ready', captureId, targetTabId: tab.id, sourceTabId }).catch(() => {});
+    await updateBadge();
+    return { viewerTabId: tab.id, captureId };
   } catch (error) {
-    await chrome.tabs.remove(tab.id).catch(() => {});
+    resolvePending(undefined);
     throw error;
+  } finally {
+    pendingCaptures.delete(captureId);
   }
-  void chrome.runtime.sendMessage({ type: 'mirror:capture-ready', captureId, targetTabId: tab.id, sourceTabId }).catch(() => {});
-  await updateBadge();
-  return { viewerTabId: tab.id, captureId };
+}
+
+async function waitForPendingCapture(captureId: string, viewerTabId: number): Promise<Capture | undefined> {
+  const pending = pendingCaptures.get(captureId);
+  if (!pending) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), 5_000); });
+    const capture = await Promise.race([pending, timeout]);
+    return capture?.viewerTabId === viewerTabId ? capture : undefined;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 chrome.commands.onCommand.addListener((command, tab) => {
   if (command === 'toggle-mirror') void toggleMirrors().catch(report);
@@ -397,7 +430,8 @@ async function handle(message: Record<string, unknown>, sender: chrome.runtime.M
       const params = readCaptureParams(sender.url);
       if (!params || params.sourceTab === undefined) throw new Error('Capture reader is not bound to a source tab.');
       const requestedId = typeof message.captureId === 'string' ? message.captureId : params.captureId;
-      const capture = await loadCapture(sender.tab.id, requestedId);
+      let capture = await loadCapture(sender.tab.id, requestedId);
+      if (!capture && requestedId) capture = await waitForPendingCapture(requestedId, sender.tab.id);
       if (!capture || capture.sourceTabId !== params.sourceTab || (requestedId && requestedId !== capture.id)) throw new Error('Capture does not belong to this viewer.');
       if (Date.now() - capture.createdAt > CAPTURE_TTL_MS) { await removeCapture(capture); throw new Error('Capture expired. Capture the visible source tab again.'); }
       const source = await chrome.tabs.get(capture.sourceTabId).catch(() => undefined);

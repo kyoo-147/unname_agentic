@@ -28,8 +28,6 @@ if (-not (Test-Path -LiteralPath (Join-Path $Destination '.git'))) { throw "Not 
 $product = @(
     @{ Path = 'src';                    Exclude = @() }
     @{ Path = 'extension';              Exclude = @() }
-    @{ Path = 'tests';                  Exclude = @() }
-    @{ Path = 'public';                 Exclude = @() }
     @{ Path = 'native-shell\src';       Exclude = @() }
     @{ Path = 'native-shell\assets';    Exclude = @() }
     @{ Path = 'native-shell\assets-safe'; Exclude = @() }
@@ -42,8 +40,7 @@ $product = @(
 )
 # Single files: build configuration and licences.
 $files = @(
-    'package.json', 'pnpm-lock.yaml', 'tsconfig.json', 'vite.config.ts', 'vitest.config.ts',
-    'playwright.config.ts', 'index.html', 'rust-toolchain.toml',
+    'package.json', 'pnpm-lock.yaml', 'tsconfig.json', 'extension\vitest.config.ts', 'rust-toolchain.toml',
     'native-shell\Cargo.toml', 'native-shell\Cargo.lock', 'native-shell\build.rs',
     'native-shell\rust-toolchain.toml', 'native-shell\LICENSE', 'native-shell\THIRD_PARTY.md',
     'native-shell\.gitattributes', 'desktop\Cargo.toml', 'desktop\Cargo.lock',

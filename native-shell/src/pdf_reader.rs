@@ -1,6 +1,9 @@
-mod document;
+use sha2::{Digest, Sha256};
+use anyhow::{Context as AnyhowContext, Result};
+pub(crate) mod document;
 mod export;
 mod geometry;
+pub mod ocr_markup;
 mod rotate;
 mod scrollbar;
 mod state;
@@ -12,7 +15,7 @@ use mirror_pdf_desktop::{capture, model::{self, CaptureSource, PageFrame, Provid
 use state::{Epoch, Stamp};
 use std::{cell::{Cell, RefCell}, path::PathBuf, rc::Rc, sync::Arc, time::{Duration, Instant}};
 pub use document::DocumentPage as ReaderPage;
-use document::{page_from_blocks, DocumentPages};
+use document::{page_from_blocks_with_size, DocumentPages};
 
 pub enum PdfReaderEvent { Location(u16), BrowserLocation { page: u16, fraction: f32, zoom: f32 }, Toast(String) }
 
@@ -187,6 +190,7 @@ pub struct PdfReader {
     native_scroll_input: Rc<Cell<bool>>,
     external_position: Option<f32>,
     selected: Option<usize>,
+    pending_citation: Option<String>,
     source_text: Entity<TextField>,
     target_text: Entity<TextField>,
     source_full: String,
@@ -257,7 +261,7 @@ impl PdfReader {
             for page in missing {
                 let Ok(frame) = pdf::load_page(path, page as u16, None) else { continue; };
                 if frame.document_digest != source_id || usize::from(frame.page_count) != page_count { continue; }
-                let page = page_from_blocks(&source_id, generation, page, page_count, &frame.blocks);
+                let page = page_from_blocks_with_size(&source_id, generation, page, page_count, frame.original.width() as f32, frame.original.height() as f32, &frame.blocks);
                 let _ = document.insert(page);
             }
         }
@@ -265,7 +269,7 @@ impl PdfReader {
         // The current frame carries translations that may have arrived after
         // the source-only document snapshot was built. Merge only this page's
         // accepted frame, never a page from an older generation.
-        let current = page_from_blocks(&source_id, generation, usize::from(self.page), page_count, &prepared.frame.blocks);
+        let current = page_from_blocks_with_size(&source_id, generation, usize::from(self.page), page_count, prepared.frame.original.width() as f32, prepared.frame.original.height() as f32, &prepared.frame.blocks);
         let _ = document.insert(current);
         document.snapshot()
     }
@@ -281,6 +285,54 @@ impl PdfReader {
     pub fn source_pdf_path(&self) -> Option<PathBuf> {
         match &self.source { Source::Pdf(path) => Some(path.clone()), Source::Capture(_) => None }
     }
+    /// Returns immutable source pixels and bytes for one local OCR derivation.
+    /// Live captures intentionally have no stable PDF source and remain unavailable.
+    pub fn ocr_input(&self) -> Result<(Arc<[u8]>, image::RgbaImage)> {
+        let path = self.source_pdf_path().context("OCR markup requires a retained local PDF")?;
+        let bytes: Arc<[u8]> = std::fs::read(&path).with_context(|| format!("read retained PDF {}", path.display()))?.into();
+        let image = self
+            .prepared
+            .as_ref()
+            .map(|page| page.frame.original.clone())
+            .context("OCR markup requires a loaded page")?;
+        Ok((bytes, image))
+    }
+
+    /// Builds the exact local source snapshot consumed by the translated-PDF writer.
+    /// Normalized reader polygons are converted into the current raster page space;
+    /// the output remains explicitly text-only and does not mutate source bytes.
+    pub fn translated_pdf_input(&self, title: &str) -> Result<crate::export_native::TranslatedPdfInput> {
+        let source_path = self.source_pdf_path().context("translated PDF requires a retained local PDF")?;
+        let source_pdf = std::fs::read(&source_path).with_context(|| format!("read retained PDF {}", source_path.display()))?;
+        let pages = self.document_pages();
+        let first = pages.first().context("translated PDF requires a loaded document")?;
+        let source_id = first.source_id.clone();
+        let translated_pages = pages
+            .into_iter()
+            .map(|page| {
+                let width = page.width.max(1.0);
+                let height = page.height.max(1.0);
+                let blocks = page
+                    .blocks
+                    .into_iter()
+                    .map(|block| crate::export_native::TranslatedPdfBlock {
+                        id: block.id,
+                        source: block.source,
+                        translation: block.translation,
+                        rect: block.polygon.map(|[x, y]| [x * width, y * height]),
+                    })
+                    .collect();
+                crate::export_native::TranslatedPdfPage { source_id: page.source_id, page_number: page.page_number, width, height, blocks }
+            })
+            .collect();
+        Ok(crate::export_native::TranslatedPdfInput {
+            title: title.to_string(),
+            source_id,
+            source_sha256: Sha256::digest(&source_pdf).into(),
+            source_path: Some(source_path),
+            pages: translated_pages,
+        })
+    }
     pub fn open_settings(&mut self, cx: &mut Context<Self>) { self.show_settings = true; cx.notify(); }
     fn rotate_page(&mut self, cx: &mut Context<Self>) {
         self.rotation = (self.rotation + 90) % 360;
@@ -292,22 +344,30 @@ impl PdfReader {
             cx.emit(PdfReaderEvent::Toast(tr3("只有本地 PDF 可以导出", "Only a local PDF can be exported", "Chỉ PDF cục bộ mới xuất được").into()));
             return;
         };
-        let (markdown, output) = {
-            let Some(prepared) = &self.prepared else { return; };
-            let title = path.file_stem().and_then(|name| name.to_str()).unwrap_or("document");
-            (export::page_markdown(title, self.page, self.page_count, &prepared.frame.blocks), export::output_path(&path, self.page, self.page_count))
-        };
-        match std::fs::write(&output, markdown) {
-            Ok(()) => {
-                let message = format!("{} {}", tr3("已导出", "Exported", "Đã xuất"), output.display());
-                self.status = message.clone();
-                cx.emit(PdfReaderEvent::Toast(message));
+        let Some(prepared) = &self.prepared else { return; };
+        let title = path.file_stem().and_then(|name| name.to_str()).unwrap_or("document");
+        let markdown = export::page_markdown(title, self.page, self.page_count, &prepared.frame.blocks);
+        let suggested = export::output_path(&path, self.page, self.page_count);
+        let filename = suggested.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| "document.bilingual.md".into());
+        let directory = dirs::document_dir().or_else(|| std::env::var_os("HOME").map(PathBuf::from)).unwrap_or_default();
+        let picked = crate::devtools::take_pick().and_then(|paths| paths.into_iter().next());
+        let prompt = picked.is_none().then(|| cx.prompt_for_new_path(&directory, Some(&filename)));
+        cx.spawn(async move |this, cx| {
+            let Some(output) = (match prompt {
+                Some(prompt) => prompt.await.ok().and_then(Result::ok).flatten(),
+                None => picked,
+            }) else { return; };
+            let write = cx.background_executor().spawn(async move { export::write_page_as(&output, &markdown) });
+            match write.await {
+                Ok(output) => {
+                    let message = format!("{} {}", tr3("已导出", "Exported", "Đã xuất"), output.display());
+                    let _ = this.update(cx, |reader, cx| { reader.status = message.clone(); cx.emit(PdfReaderEvent::Toast(message)); cx.notify(); });
+                }
+                Err(error) => {
+                    let _ = this.update(cx, |reader, cx| { reader.error = Some(format!("{}: {error:#}", tr3("导出失败", "Export failed", "Xuất thất bại"))); cx.notify(); });
+                }
             }
-            Err(error) => {
-                self.error = Some(format!("{}: {error}", tr3("导出失败", "Export failed", "Xuất thất bại")));
-            }
-        }
-        cx.notify();
+        }).detach();
     }
     pub fn set_browser_linked(&mut self, linked: bool, cx: &mut Context<Self>) { self.browser_linked = linked; if !linked { self.pending_external = None; } cx.notify(); }
     pub fn follow_external_location(&mut self, page: u16, progress: f32, cx: &mut Context<Self>) {
@@ -372,7 +432,7 @@ impl PdfReader {
             scrolls: [ScrollHandle::new(), ScrollHandle::new()], scrollbars: [Rc::default(), Rc::default()],
             viewport: Rc::new(Cell::new(Bounds::new(point(px(0.), px(0.)), size(px(800.), px(650.))))),
             panes: [geometry::Pane::default(); 2], layout_split: true, reflow_frames: 0, linked_scroll: geometry::LinkedScroll::default(), last_input: Rc::new(Cell::new(1)), native_scroll_input: Rc::new(Cell::new(false)),
-            external_position: None, selected: None, source_text, target_text, source_full: String::new(), target_full: String::new(),
+            external_position: None, selected: None, pending_citation: None, source_text, target_text, source_full: String::new(), target_full: String::new(),
             status: tr3("正在打开原始像素…", "Opening original pixels…", "Đang mở ảnh gốc…").into(), error: None, last_digest: String::new(), document_generation: 1, document_model: RefCell::new(None), tick: None, _subscriptions: subscriptions,
         };
         let task = cx.background_executor().spawn(async {
@@ -460,13 +520,17 @@ impl PdfReader {
                         if reader.document_model.borrow().is_none() {
                             *reader.document_model.borrow_mut() = Some(DocumentPages::new(source_id.clone(), reader.document_generation, page_count));
                         }
-                        let current = page_from_blocks(&source_id, reader.document_generation, usize::from(reader.page), page_count, &prepared.frame.blocks);
+                        let current = page_from_blocks_with_size(&source_id, reader.document_generation, usize::from(reader.page), page_count, prepared.frame.original.width() as f32, prepared.frame.original.height() as f32, &prepared.frame.blocks);
                         if let Some(document) = reader.document_model.borrow_mut().as_mut() { let _ = document.insert(current); }
                         if matches!(reader.source, Source::Capture(_)) && reader.prepared.as_ref().is_some_and(|old| old.frame.document_digest == prepared.frame.document_digest) { return; }
                         let ocr_error = prepared.frame.quality.contains("OCR unavailable").then(|| prepared.frame.quality.clone());
                         reader.epoch.source(); reader.prepared = Some(prepared); reader.selected = None; reader.translate_all = false; reader.selected_request = false;
                         reader.source_full.clear(); reader.target_full.clear();
                         reader.source_text.update(cx, |f, cx| f.set_text("", cx)); reader.target_text.update(cx, |f, cx| f.set_text("", cx));
+                        if let Some(block_id) = reader.pending_citation.take() {
+                            reader.selected = reader.prepared.as_ref().and_then(|page| page.frame.blocks.iter().enumerate().find_map(|(rank, _)| (format!("p{}-r{rank}", usize::from(reader.page) + 1) == block_id).then_some(rank)));
+                            if reader.selected.is_some() { reader.refresh_selection(cx); }
+                        }
                         reader.status = if reader.failed { tr3("原始文件已刷新 · 翻译需要重试", "Original refreshed · translation needs Retry", "Đã làm mới bản gốc · bản dịch cần thử lại") } else if reader.paused { tr3("翻译已暂停 · 原始文件已刷新", "Translation paused · original refreshed", "Đã tạm dừng dịch · bản gốc đã làm mới") } else { tr3("原始文件已就绪 · 正在翻译可见区域", "Original ready · translating visible regions", "Bản gốc đã sẵn sàng · đang dịch các vùng hiển thị") }.into();
                         if !reader.failed { reader.error = None; }
                         if let Some(error) = ocr_error { if matches!(reader.source, Source::Capture(_)) { reader.capture_live = false; } reader.fail(error, cx); }
@@ -589,6 +653,18 @@ impl PdfReader {
         self.load_needed = true; self.failed = false; self.error = None; self.external_position = None; self.linked_scroll = geometry::LinkedScroll::default();
         for scroll in &self.scrolls { scroll.set_offset(point(px(0.), px(0.))); }
         self.status = tr3("正在打开原始像素…", "Opening original pixels…", "Đang mở ảnh gốc…").into(); self.pump(cx); cx.notify();
+    }
+    pub fn navigate_to_citation(&mut self, page: usize, block_id: &str, cx: &mut Context<Self>) {
+        let Ok(page) = u16::try_from(page) else { return; };
+        if page >= self.page_count { return; }
+        self.pending_citation = Some(block_id.to_string());
+        self.goto_page(page, cx);
+        if self.prepared.is_some() {
+            if let Some(index) = self.prepared.as_ref().and_then(|prepared| prepared.frame.blocks.iter().enumerate().find_map(|(rank, _)| (format!("p{}-r{rank}", usize::from(self.page) + 1) == block_id).then_some(rank))) {
+                self.pending_citation = None;
+                self.select(index, cx);
+            }
+        }
     }
     /// 页码跳转: turn the page pill into an editable field with the current page selected.
     fn begin_page_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -745,7 +821,7 @@ mod reader_block_tests {
         assert_eq!(page.page_count, 3);
         assert_eq!(page.source_id, "document");
         assert_eq!(page.generation, 4);
-        assert_eq!(page.blocks[0].id, "p3-r1");
+        assert_eq!(page.blocks[0].id, "p3-r0");
         assert_eq!(page.blocks[0].source, "Revenue");
         assert_eq!(page.blocks[0].translation.as_deref(), Some("Doanh thu"));
         assert_eq!(page.blocks[1].translation, None);

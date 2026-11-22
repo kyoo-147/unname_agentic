@@ -15,10 +15,10 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validate } from '../src/core/ir.ts';
-import { defineSchema } from '../src/core/schema.ts';
-import { extractReviewableDocument, serializeStructuredExtraction } from '../src/core/workflow.ts';
-import type { DocumentIR } from '../src/core/ir.ts';
+import { validate } from '../extension/viewer/src/core/ir.ts';
+import { defineSchema } from '../extension/viewer/src/core/schema.ts';
+import { extractReviewableDocument, serializeStructuredExtraction } from '../extension/viewer/src/core/workflow.ts';
+import type { DocumentIR } from '../extension/viewer/src/core/ir.ts';
 
 const PROGRAM = 'document-workflow';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
