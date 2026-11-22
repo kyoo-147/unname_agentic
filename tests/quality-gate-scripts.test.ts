@@ -36,13 +36,17 @@ async function runPrePush(pnpmScript: string): Promise<Run> {
   const fakeBin = await mkdtemp(path.join(tmpdir(), 'quality-gate-pnpm-'));
   try {
     await writeFile(path.join(fakeBin, 'pnpm.cmd'), pnpmScript, 'utf8');
+    // Keep this bounded probe focused on pnpm process and summary handling. The real
+    // committed-import scan is an independent gate and exceeds Vitest's 5s test budget
+    // on the junctioned integration dependency tree.
+    await writeFile(path.join(fakeBin, 'node.cmd'), '@echo off\r\nexit /b 0\r\n', 'utf8');
     return await new Promise(resolve => {
       execFile(
         'powershell.exe',
         ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', prePush, '-Quick'],
         {
           cwd: repositoryRoot,
-          env: { ...process.env, Path: `${fakeBin};${process.env.Path ?? ''}` },
+          env: { ...process.env, PATH: `${fakeBin};${process.env.PATH ?? ''}` },
           timeout: 120_000,
           windowsHide: true,
         },

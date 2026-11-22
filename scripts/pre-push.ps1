@@ -4,7 +4,7 @@
 # here instead: a push that fails these checks is refused. Install once with
 # `powershell -NoProfile -File scripts/install-hooks.ps1`.
 #
-# Native output is redirected to files, not piped through Out-String. This avoids
+# Native output is redirected to files, not accumulated in one in-memory string. This avoids
 # PowerShell 5.1 allocating the complete test transcript in memory and makes an
 # output-capture exception a blocking result rather than an accidental pass.
 param([switch]$Quick)
