@@ -1,3 +1,5 @@
+use sha2::{Digest, Sha256};
+use anyhow::{Context as AnyhowContext, Result};
 pub(crate) mod document;
 mod export;
 mod geometry;
@@ -13,7 +15,7 @@ use mirror_pdf_desktop::{capture, model::{self, CaptureSource, PageFrame, Provid
 use state::{Epoch, Stamp};
 use std::{cell::{Cell, RefCell}, path::PathBuf, rc::Rc, sync::Arc, time::{Duration, Instant}};
 pub use document::DocumentPage as ReaderPage;
-use document::{page_from_blocks, DocumentPages};
+use document::{page_from_blocks_with_size, DocumentPages};
 
 pub enum PdfReaderEvent { Location(u16), BrowserLocation { page: u16, fraction: f32, zoom: f32 }, Toast(String) }
 
@@ -259,7 +261,7 @@ impl PdfReader {
             for page in missing {
                 let Ok(frame) = pdf::load_page(path, page as u16, None) else { continue; };
                 if frame.document_digest != source_id || usize::from(frame.page_count) != page_count { continue; }
-                let page = page_from_blocks(&source_id, generation, page, page_count, &frame.blocks);
+                let page = page_from_blocks_with_size(&source_id, generation, page, page_count, frame.original.width() as f32, frame.original.height() as f32, &frame.blocks);
                 let _ = document.insert(page);
             }
         }
@@ -267,7 +269,7 @@ impl PdfReader {
         // The current frame carries translations that may have arrived after
         // the source-only document snapshot was built. Merge only this page's
         // accepted frame, never a page from an older generation.
-        let current = page_from_blocks(&source_id, generation, usize::from(self.page), page_count, &prepared.frame.blocks);
+        let current = page_from_blocks_with_size(&source_id, generation, usize::from(self.page), page_count, prepared.frame.original.width() as f32, prepared.frame.original.height() as f32, &prepared.frame.blocks);
         let _ = document.insert(current);
         document.snapshot()
     }
@@ -282,6 +284,54 @@ impl PdfReader {
     /// return `None`: they are live pixels, not a stable PDF byte source.
     pub fn source_pdf_path(&self) -> Option<PathBuf> {
         match &self.source { Source::Pdf(path) => Some(path.clone()), Source::Capture(_) => None }
+    }
+    /// Returns immutable source pixels and bytes for one local OCR derivation.
+    /// Live captures intentionally have no stable PDF source and remain unavailable.
+    pub fn ocr_input(&self) -> Result<(Arc<[u8]>, image::RgbaImage)> {
+        let path = self.source_pdf_path().context("OCR markup requires a retained local PDF")?;
+        let bytes: Arc<[u8]> = std::fs::read(&path).with_context(|| format!("read retained PDF {}", path.display()))?.into();
+        let image = self
+            .prepared
+            .as_ref()
+            .map(|page| page.frame.original.clone())
+            .context("OCR markup requires a loaded page")?;
+        Ok((bytes, image))
+    }
+
+    /// Builds the exact local source snapshot consumed by the translated-PDF writer.
+    /// Normalized reader polygons are converted into the current raster page space;
+    /// the output remains explicitly text-only and does not mutate source bytes.
+    pub fn translated_pdf_input(&self, title: &str) -> Result<crate::export_native::TranslatedPdfInput> {
+        let source_path = self.source_pdf_path().context("translated PDF requires a retained local PDF")?;
+        let source_pdf = std::fs::read(&source_path).with_context(|| format!("read retained PDF {}", source_path.display()))?;
+        let pages = self.document_pages();
+        let first = pages.first().context("translated PDF requires a loaded document")?;
+        let source_id = first.source_id.clone();
+        let translated_pages = pages
+            .into_iter()
+            .map(|page| {
+                let width = page.width.max(1.0);
+                let height = page.height.max(1.0);
+                let blocks = page
+                    .blocks
+                    .into_iter()
+                    .map(|block| crate::export_native::TranslatedPdfBlock {
+                        id: block.id,
+                        source: block.source,
+                        translation: block.translation,
+                        rect: block.polygon.map(|[x, y]| [x * width, y * height]),
+                    })
+                    .collect();
+                crate::export_native::TranslatedPdfPage { source_id: page.source_id, page_number: page.page_number, width, height, blocks }
+            })
+            .collect();
+        Ok(crate::export_native::TranslatedPdfInput {
+            title: title.to_string(),
+            source_id,
+            source_sha256: Sha256::digest(&source_pdf).into(),
+            source_path: Some(source_path),
+            pages: translated_pages,
+        })
     }
     pub fn open_settings(&mut self, cx: &mut Context<Self>) { self.show_settings = true; cx.notify(); }
     fn rotate_page(&mut self, cx: &mut Context<Self>) {
@@ -470,7 +520,7 @@ impl PdfReader {
                         if reader.document_model.borrow().is_none() {
                             *reader.document_model.borrow_mut() = Some(DocumentPages::new(source_id.clone(), reader.document_generation, page_count));
                         }
-                        let current = page_from_blocks(&source_id, reader.document_generation, usize::from(reader.page), page_count, &prepared.frame.blocks);
+                        let current = page_from_blocks_with_size(&source_id, reader.document_generation, usize::from(reader.page), page_count, prepared.frame.original.width() as f32, prepared.frame.original.height() as f32, &prepared.frame.blocks);
                         if let Some(document) = reader.document_model.borrow_mut().as_mut() { let _ = document.insert(current); }
                         if matches!(reader.source, Source::Capture(_)) && reader.prepared.as_ref().is_some_and(|old| old.frame.document_digest == prepared.frame.document_digest) { return; }
                         let ocr_error = prepared.frame.quality.contains("OCR unavailable").then(|| prepared.frame.quality.clone());

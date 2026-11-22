@@ -23,6 +23,9 @@ pub struct DocumentPage {
     pub page: usize,
     pub page_number: usize,
     pub page_count: usize,
+    /// Raster/page-space dimensions used when a derived export maps normalized geometry.
+    pub width: f32,
+    pub height: f32,
     pub blocks: Vec<DocumentBlock>,
 }
 
@@ -107,6 +110,18 @@ pub fn page_from_blocks(
     page_count: usize,
     blocks: &[TextBlock],
 ) -> DocumentPage {
+    page_from_blocks_with_size(source_id, generation, page, page_count, 612.0, 792.0, blocks)
+}
+
+pub fn page_from_blocks_with_size(
+    source_id: impl Into<String>,
+    generation: u64,
+    page: usize,
+    page_count: usize,
+    width: f32,
+    height: f32,
+    blocks: &[TextBlock],
+) -> DocumentPage {
     let source_id = source_id.into();
     let blocks = blocks
         .iter()
@@ -129,6 +144,8 @@ pub fn page_from_blocks(
         page,
         page_number: page + 1,
         page_count,
+        width: if width.is_finite() && width > 0.0 { width } else { 612.0 },
+        height: if height.is_finite() && height > 0.0 { height } else { 792.0 },
         blocks,
     }
 }
@@ -140,6 +157,8 @@ fn empty_page(source_id: String, generation: u64, page: usize, page_count: usize
         page,
         page_number: page + 1,
         page_count,
+        width: 612.0,
+        height: 792.0,
         blocks: Vec::new(),
     }
 }

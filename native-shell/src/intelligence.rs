@@ -40,17 +40,17 @@ impl ModuleId {
 
     pub fn status(self) -> ModuleStatus {
         match self {
-            Self::RagCitations => ModuleStatus::Unavailable(
-                "Document evidence retrieval and citation verification are not connected to this native shell.",
+            Self::RagCitations => ModuleStatus::Available(
+                "Local lexical retrieval, citation verification, and reader navigation are connected.",
             ),
-            Self::ResearchWorkspace => ModuleStatus::Unavailable(
-                "The research workspace is not available in the native shell yet.",
+            Self::ResearchWorkspace => ModuleStatus::Available(
+                "Local research cards, collections, proposals, and RIS round-trips are connected.",
             ),
             Self::OcrMarkup => ModuleStatus::Partial(
                 "Local OCR is available in the PDF reader. Persistent markup integration is not connected.",
             ),
-            Self::TranslatedPdf => ModuleStatus::Unavailable(
-                "A native translated-PDF writer is not available. The existing PDF export preserves the original.",
+            Self::TranslatedPdf => ModuleStatus::Partial(
+                "Translated PDF writing is connected as a new text-only artifact; source artwork and embedded fonts are not preserved.",
             ),
         }
     }
@@ -58,6 +58,7 @@ impl ModuleId {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModuleStatus {
+    Available(&'static str),
     Partial(&'static str),
     Unavailable(&'static str),
 }
@@ -252,19 +253,10 @@ mod tests {
     }
 
     #[test]
-    fn not_yet_integrated_capabilities_are_explicitly_unavailable() {
-        assert!(matches!(
-            ModuleId::RagCitations.status(),
-            ModuleStatus::Unavailable(_)
-        ));
-        assert!(matches!(
-            ModuleId::ResearchWorkspace.status(),
-            ModuleStatus::Unavailable(_)
-        ));
-        assert!(matches!(
-            ModuleId::TranslatedPdf.status(),
-            ModuleStatus::Unavailable(_)
-        ));
+    fn capability_status_is_explicit_for_each_native_module() {
+        assert!(matches!(ModuleId::RagCitations.status(), ModuleStatus::Available(_)));
+        assert!(matches!(ModuleId::ResearchWorkspace.status(), ModuleStatus::Available(_)));
+        assert!(matches!(ModuleId::TranslatedPdf.status(), ModuleStatus::Partial(_)));
         assert!(matches!(
             ModuleId::OcrMarkup.status(),
             ModuleStatus::Partial(_)
@@ -307,7 +299,7 @@ mod tests {
     impl ModuleStatus {
         fn message(self) -> &'static str {
             match self {
-                Self::Partial(message) | Self::Unavailable(message) => message,
+                Self::Available(message) | Self::Partial(message) | Self::Unavailable(message) => message,
             }
         }
     }

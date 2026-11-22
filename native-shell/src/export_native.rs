@@ -37,6 +37,8 @@ pub const PAGE_BREAK: char = '\u{c}';
 pub enum ExportFormat {
     /// The retained source PDF, copied byte-for-byte by the Save As action.
     Pdf,
+    /// A new text-only PDF built from explicit translated block input.
+    TranslatedPdf,
     /// Both languages, page by page: the form that loses nothing.
     Markdown,
     /// The translation alone.
@@ -54,6 +56,7 @@ impl ExportFormat {
     pub fn extension(self) -> &'static str {
         match self {
             Self::Pdf => "pdf",
+            Self::TranslatedPdf => "translated.pdf",
             Self::Markdown => "md",
             Self::Text => "txt",
             Self::Html => "html",
@@ -65,6 +68,10 @@ impl ExportFormat {
     /// The form a chosen path asks for: its extension decides, so the user does
     /// not have to choose a format in a dialog as well as a name.
     pub fn from_path(path: &Path) -> Self {
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_ascii_lowercase();
+        if name.ends_with(".translated.pdf") {
+            return Self::TranslatedPdf;
+        }
         path.extension().and_then(|extension| extension.to_str()).map_or(Self::Markdown, Self::from_extension)
     }
 
@@ -73,6 +80,7 @@ impl ExportFormat {
     pub fn label(self) -> &'static str {
         match self {
             Self::Pdf => tr3("原始 PDF", "Original PDF", "PDF gốc"),
+            Self::TranslatedPdf => tr3("翻译 PDF", "Translated PDF", "PDF đã dịch"),
             Self::Markdown => "Markdown",
             Self::Text => tr3("纯文本", "Plain text", "Văn bản thuần"),
             Self::Html => "HTML",
@@ -88,6 +96,7 @@ impl ExportFormat {
     pub fn from_extension(extension: &str) -> Self {
         match extension.trim().trim_start_matches('.').to_ascii_lowercase().as_str() {
             "pdf" => Self::Pdf,
+            "translated-pdf" | "translatedpdf" => Self::TranslatedPdf,
             "txt" | "text" => Self::Text,
             "html" | "htm" => Self::Html,
             "docx" => Self::Docx,
@@ -98,12 +107,13 @@ impl ExportFormat {
 
     /// Whether this format can be generated from the native snapshot without
     /// pretending to be a translated-PDF writer.
-    pub fn can_generate(self) -> bool { !matches!(self, Self::Pdf) }
+    pub fn can_generate(self) -> bool { !matches!(self, Self::Pdf | Self::TranslatedPdf) }
 
     /// The preservation promise shown by provider/export UX and reports.
     pub fn preservation(self) -> &'static str {
         match self {
             Self::Pdf => "source bytes, fonts, images, vectors, bookmarks and hyperlinks preserved exactly",
+            Self::TranslatedPdf => "new text-only PDF; source artwork and annotations are not preserved; standard Helvetica is not embedded",
             Self::Markdown | Self::Text | Self::Html | Self::Docx => "text, formulas, tables and native coordinates only; PDF objects are not preserved",
             Self::Json => "IR metadata, polygons, formulas and tables preserved; PDF objects are not embedded",
         }
@@ -294,7 +304,7 @@ pub fn export_document(document: &ExportDocument, format: ExportFormat) -> Strin
     match format {
         // PDF is handled by `write_export_bytes_path`: a text snapshot cannot
         // preserve the original PDF's objects, fonts or source hash.
-        ExportFormat::Pdf | ExportFormat::Docx => String::new(),
+        ExportFormat::Pdf | ExportFormat::TranslatedPdf | ExportFormat::Docx => String::new(),
         ExportFormat::Markdown => markdown(document),
         ExportFormat::Text => plain_text(document),
         ExportFormat::Html => html(document),
@@ -392,7 +402,7 @@ fn json(document: &ExportDocument) -> String {
 /// PDF generation requires the source-byte and page-geometry contract in [`build_translated_pdf`].
 pub fn export_document_bytes(document: &ExportDocument, format: ExportFormat) -> Result<Vec<u8>> {
     match format {
-        ExportFormat::Pdf => anyhow::bail!("Translated PDF writing is not implemented; use Save As on the retained source PDF."),
+        ExportFormat::Pdf | ExportFormat::TranslatedPdf => anyhow::bail!("PDF output requires an explicit source or translated-PDF writer path."),
         ExportFormat::Docx => Ok(docx(document)),
         ExportFormat::Html => Ok(html(document).into_bytes()),
         ExportFormat::Markdown | ExportFormat::Text | ExportFormat::Json => Ok(export_document(document, format).into_bytes()),
@@ -1096,6 +1106,7 @@ mod tests {
     #[test]
     fn format_capabilities_and_binary_exports_are_truthful() {
         assert!(!ExportFormat::Pdf.can_generate());
+        assert!(!ExportFormat::TranslatedPdf.can_generate(), "translated PDF requires the explicit source-mapped writer");
         assert!(ExportFormat::Docx.can_generate() && ExportFormat::Html.can_generate());
         assert!(ExportFormat::Pdf.preservation().contains("preserved exactly"));
         assert!(ExportFormat::Docx.preservation().contains("not preserved"));
@@ -1201,6 +1212,7 @@ mod tests {
         assert_eq!(ExportFormat::Json.label(), "JSON");
         assert_eq!(ExportFormat::Html.label(), "HTML");
         assert_eq!(ExportFormat::Docx.label(), "DOCX");
+        assert_eq!(ExportFormat::TranslatedPdf.label(), tr3("翻译 PDF", "Translated PDF", "PDF đã dịch"));
     }
 
     #[test]
@@ -1261,6 +1273,8 @@ mod tests {
     #[test]
     fn the_chosen_extension_decides_the_format() {
         assert_eq!(ExportFormat::from_path(Path::new("notes.pdf")), ExportFormat::Pdf);
+        assert_eq!(ExportFormat::from_path(Path::new("notes.translated.pdf")), ExportFormat::TranslatedPdf);
+        assert_eq!(ExportFormat::from_path(Path::new("C:/docs/NOTES.TRANSLATED.PDF")), ExportFormat::TranslatedPdf);
         assert_eq!(ExportFormat::from_path(Path::new("notes.md")), ExportFormat::Markdown);
         assert_eq!(ExportFormat::from_path(Path::new("notes.txt")), ExportFormat::Text);
         assert_eq!(ExportFormat::from_path(Path::new("notes.json")), ExportFormat::Json);
@@ -1290,7 +1304,7 @@ mod tests {
                 }
                 ExportFormat::Markdown => assert!(written.starts_with("# Empty report")),
                 ExportFormat::Text => assert!(written.starts_with("Empty report")),
-                ExportFormat::Pdf | ExportFormat::Html | ExportFormat::Docx => unreachable!("binary formats use export_document_bytes or retained PDF Save As"),
+                ExportFormat::Pdf | ExportFormat::TranslatedPdf | ExportFormat::Html | ExportFormat::Docx => unreachable!("binary formats use export_document_bytes or an explicit PDF writer"),
             }
         }
         assert_eq!(files(&dir).len(), 3, "each format is its own file, and no temporary survives: {:?}", files(&dir));
