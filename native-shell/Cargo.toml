@@ -1,6 +1,6 @@
 [package]
 name = "pdf_workspace"
-version = "0.1.7"
+version = "0.1.0"
 edition = "2024"
 description = "A native PDF reading and translation workspace: paired source and translation panes, local library, live mirror"
 license = "MIT"
