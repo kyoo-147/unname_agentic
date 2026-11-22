@@ -8,6 +8,7 @@ export * from './study';
 export * from './study';
 export * from './knowledge';
 export * from './library';
+export * from './workspace';
 export * from './exchange';
 export * from '../bibtex';
 export * from '../citation-graph';

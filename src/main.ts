@@ -1,5 +1,6 @@
 import './style.css';
 import './ui/reader.css';
+import './ui/research-workspace.css';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { defaultSettings, type TextBlock, type TranslationSettings } from './core/types';
 import { TranslationService } from './core/translation';
@@ -21,6 +22,7 @@ import {
 import { isCaptureRequest, mountCaptureReader, type CaptureReaderHandle } from './capture/reader';
 import { createLibraryStore } from './core/library-store';
 import { isRtlLanguage, resolveBlockDirection } from './core/text-direction';
+import { mountResearchWorkspace } from './ui/research-workspace';
 import { toBilingualHtml, toBilingualText, type ExportedPage } from './export/bilingual';
 import { documentTitle, printHtml, PrintTimeoutError, PrintUnavailableError } from './export/print';
 import { buildPdf, canvasToPng, type PdfPageSource } from './export/pdf';
@@ -68,6 +70,19 @@ root.innerHTML = `<aside class="sidebar"><a class="brand" href="#" data-i18n-ari
 root.insertAdjacentHTML('beforeend', `<dialog id="command-palette" class="command-palette" role="dialog" aria-modal="true" aria-labelledby="command-palette-title" tabindex="-1"><div class="dialog-heading"><h2 id="command-palette-title" data-i18n="shortcuts">Keyboard shortcuts</h2><button type="button" id="command-palette-close" data-i18n-aria-label="closePanel" aria-label="Close panel">${icon('close')}</button></div><input id="command-palette-input" type="search" autocomplete="off" data-i18n-placeholder="searchPlaceholder" placeholder="Search this document" aria-label="Search this document"><div id="command-palette-list" role="listbox" aria-label="Keyboard shortcuts"></div><p id="command-palette-empty" class="reader-panel__empty" hidden></p></dialog>`);
 apply(document);
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+const researchSection = document.createElement('section');
+researchSection.id = 'research';
+researchSection.hidden = true;
+researchSection.innerHTML = '<div id="research-workspace-mount"></div>';
+$('reader').before(researchSection);
+const researchNav = document.createElement('button');
+researchNav.type = 'button';
+researchNav.id = 'research-nav';
+researchNav.className = 'nav-item';
+researchNav.setAttribute('aria-controls', 'research');
+researchNav.innerHTML = `${icon('file')} <span>Research desk</span>`;
+$('library-nav').after(researchNav);
+mountResearchWorkspace($('research-workspace-mount'));
 const intelligenceTrigger = document.createElement('button');
 intelligenceTrigger.id = 'intelligence-toggle';
 intelligenceTrigger.type = 'button';
@@ -288,7 +303,7 @@ function canTranslate() { return settings.provider==='local' || settings.allowCl
 function providerName() { return settings.provider==='local'?t('providerLocalShort'):settings.provider==='deepl'?'DeepL':settings.provider==='google'?'Google':'OpenAI'; }
 function updateProvider() { $('provider-label').textContent=`${providerName()} · ${languageNativeName(settings.targetLanguage)}`; }
 function refreshTransportLabels() { $('pause').textContent=t(paused?'resume':'pause'); $('full').textContent=t(full?'stopFull':'translateAll'); }
-function refreshBreadcrumb() { $('breadcrumb').textContent=$('library').hidden?activeTitle:t('myLibrary'); }
+function refreshBreadcrumb() { $('breadcrumb').textContent=!$('research').hidden?'Research desk':$('library').hidden?activeTitle:t('myLibrary'); }
 function updatePageControls() {
   const has=Boolean(pdf&&pageTotal);
   $<HTMLButtonElement>('prev-page').disabled=!has||pageNumber<=1;
@@ -761,7 +776,8 @@ input.addEventListener('change',async()=>{
   // order means the last load() call is the first file, instead of the last.
   for(const file of [...files].reverse()) await load(new Uint8Array(await file.arrayBuffer()),file.name);
 });
-$('library-nav').addEventListener('click',()=>{ $('reader').hidden=true;$('library').hidden=false;refreshBreadcrumb(); });
+$('library-nav').addEventListener('click',()=>{ $('reader').hidden=true;$('research').hidden=true;$('library').hidden=false;researchNav.classList.remove('active');$('library-nav').classList.add('active');refreshBreadcrumb(); });
+researchNav.addEventListener('click',()=>{ $('reader').hidden=true;$('library').hidden=true;$('research').hidden=false;researchNav.classList.add('active');$('library-nav').classList.remove('active');refreshBreadcrumb(); });
 root.querySelector('.brand')!.addEventListener('click',event=>{event.preventDefault();$('library-nav').click();});
 window.addEventListener('dragover',event=>{event.preventDefault();root.classList.add('dragging');});
 window.addEventListener('dragleave',event=>{if(!event.relatedTarget)root.classList.remove('dragging');});
