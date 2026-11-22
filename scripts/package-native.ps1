@@ -271,11 +271,11 @@ The package was assembled from one source revision.
     $archive = [IO.Compression.ZipFile]::OpenRead($zip)
     try {
         $expected = @(Get-ChildItem -LiteralPath $stage -Recurse -File)
-        $actual = @($archive.Entries | Where-Object { -not ($_.FullName.EndsWith('/') -or $_.FullName.EndsWith('\')) })
+        $actual = @($archive.Entries | Where-Object { -not ($_.FullName.EndsWith('/') -or $_.FullName.EndsWith('\')) } | ForEach-Object { $_.FullName.Replace('\', '/') })
         if ($actual.Count -ne $expected.Count) { throw "Archive has $($actual.Count) files, package has $($expected.Count)." }
         foreach ($file in $expected) {
             $entryName = Relative $stage $file.FullName
-            if (-not ($actual | Where-Object FullName -eq $entryName)) { throw "Archive entry is missing: $entryName" }
+            if (-not ($actual -contains $entryName)) { throw "Archive entry is missing: $entryName" }
         }
     } finally { $archive.Dispose() }
     $archiveHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()

@@ -161,7 +161,7 @@ try {
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $archive = [IO.Compression.ZipFile]::OpenRead($zipPath)
         try {
-            $entryNames = @($archive.Entries | Where-Object { -not ($_.FullName.EndsWith('/') -or $_.FullName.EndsWith('\')) } | ForEach-Object FullName)
+            $entryNames = @($archive.Entries | Where-Object { -not ($_.FullName.EndsWith('/') -or $_.FullName.EndsWith('\')) } | ForEach-Object { $_.FullName.Replace('\', '/') })
             foreach ($line in $checksumLines) {
                 $relative = [regex]::Match($line, '^([0-9a-fA-F]{64})\s{2}(.+)$').Groups[2].Value
                 if ($entryNames -notcontains $relative) { throw "Archive entry is missing: $relative" }
