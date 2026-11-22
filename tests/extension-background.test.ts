@@ -297,6 +297,8 @@ describe('context menu, commands, badge and capture contract', () => {
     await vi.waitFor(() => expect(h.chrome.tabs.create).toHaveBeenCalledWith(expect.objectContaining({ url: expect.stringMatching(/^chrome-extension:\/\/test\/index\.html\?capture=1&sourceTab=3&captureId=/), openerTabId: 3 })));
     expect(h.chrome.runtime.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'mirror:capture-ready', targetTabId: 90, sourceTabId: 3 }));
     const createdUrl = (h.chrome.tabs.create as any).mock.calls[0][0].url as string;
+    h.chrome.tabs.onUpdated.fire(90, { url: createdUrl }, { id: 90, url: createdUrl, index: 0 });
+    await new Promise(resolve => setTimeout(resolve, 10));
     const captureId = new URL(createdUrl).searchParams.get('captureId')!;
     const capture = await h.message({ type: 'mirror:get-capture', captureId }, { id: 'test', tab: { id: 90 }, url: createdUrl, frameId: 0 });
     expect(capture).toMatchObject({ ok: true, sourceTabId: 3, captureId: expect.any(String) });
