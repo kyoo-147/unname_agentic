@@ -1,28 +1,29 @@
 # Chức năng và trạng thái xác minh
 
--Cập nhật: **2026-11-22**, tích hợp tại HEAD `c3a5de5` (`c3a5de51093f5276f0fdcff28d95fc709d6accd3`). `native-shell` là bề mặt sản phẩm; `dist/extension` là artifact duy nhất của Chrome extension. `dist/web` không phải artifact được chấp nhận.
--
--## Bằng chứng hiện tại tại HEAD `c3a5de5`
--
--| Nhóm / cổng | Bằng chứng chạy lại | Trạng thái |
--|---|---|---|
--| Native unit tests | `cargo test`: 180 pass, 2 ignored | ✅ local |
--| Native release build | `cargo build --release -j 1` với Windows SDK `rc.exe` | ✅ local |
--| Native messaging host | `cargo build --release --manifest-path desktop/Cargo.toml --bin pdf-workspace-host -j 1` | ✅ local build |
--| Extension | 170 files, 3,092 tests pass; typecheck/build pass | ✅ local |
--| UI string gate | 37 native files, 0 literals cần sửa | ✅ local |
--| Committed imports | 391 files resolve | ✅ local |
--| Native package | `scripts/package-native.ps1` + `verify-release.ps1 -ArtifactsOnly -RequireNativePackage`; 1,013 package files | ✅ integrity/provenance |
--| Desktop PDF runtime | `desktop/tests/pdf_runtime.rs`: 1 pass; fixture path points to extension fixture | ✅ local |
--| Native desktop E2E | `--list`/`--mock-contract` pass; `--acceptance` fails closed | 🟡 blocked |
--
--Native document-intelligence wiring is now mounted in the visible desktop surface: local lexical RAG/citation chat navigation, persisted local research cards and RIS import/export, local OCR/markup derivation with explicit partial status, and translated-PDF Save As with source-hash/page-geometry checks. The translated PDF remains a new text-only artifact and does not preserve source artwork or embed Helvetica.
--
--Remaining release blockers are explicit: real Chrome/native-host E2E and OS desktop assertions lack `CHROME_PATH`, authored FDL assertions, registered host/origin and independent PDF-reader review; PR #35 CI is blocked/unstable; signing and registry verification remain unconfigured; K10/RBAC remains deferred. These facts are not inferred from unit tests or package integrity.
--
--Các mục cũ bên dưới là inventory lịch sử; checkpoint hiện tại chỉ ghi bằng chứng đã chạy lại, không suy diễn thành kiểm thử native/browser E2E hoặc release acceptance.
--
--Ký hiệu: ✅ có mã **và** có bằng chứng chạy · 🟡 có mã nhưng thiếu test/UX hoặc còn giới hạn đáng kể · ⬜ chưa có.
+Cập nhật: **2026-11-22**, code checkpoint `746afa0` (`fix(native): mount export menu and ignore build outputs`). `native-shell` là bề mặt sản phẩm; `dist/extension` là artifact duy nhất của Chrome extension. `dist/web` không phải artifact được chấp nhận.
+
+## Bằng chứng hiện tại tại code checkpoint `746afa0`
+
+| Nhóm / cổng | Bằng chứng chạy lại | Trạng thái |
+|---|---|---|
+| Native unit tests | `cargo test`: 180 pass, 2 ignored | ✅ local |
+| Native release build | `cargo build --release -j 1` với Windows SDK `rc.exe` | ✅ local |
+| Native messaging host | `cargo build --release --manifest-path desktop/Cargo.toml --bin pdf-workspace-host -j 1` | ✅ local build |
+| Extension | 170 files, 3,092 tests pass; typecheck/build pass | ✅ local |
+| UI string gate | 37 native files, 0 literals cần sửa | ✅ local |
+| Committed imports | 391 files resolve | ✅ local |
+| Native package | `scripts/package-native.ps1` + `verify-release.ps1 -ArtifactsOnly -RequireNativePackage`; 1,013 package files | ✅ integrity/provenance |
+| Desktop PDF runtime | `desktop/tests/pdf_runtime.rs`: 1 pass; fixture path points to extension fixture | ✅ local |
+| Native desktop E2E | `--list`/`--mock-contract` pass; `--acceptance` fails closed | 🟡 blocked |
+
+Native document-intelligence wiring is now mounted in the visible desktop surface: local lexical RAG/citation chat navigation, persisted local research cards and RIS import/export, local OCR/markup derivation with explicit partial status, and translated-PDF Save As with source-hash/page-geometry checks. The translated PDF remains a new text-only artifact and does not preserve source artwork or embed Helvetica.
+
+Remaining release blockers are explicit: real Chrome/native-host E2E and OS desktop assertions lack `CHROME_PATH`, authored FDL assertions, registered host/origin and independent PDF-reader review; PR #35 CI is blocked/unstable; signing and registry verification remain unconfigured; K10/RBAC remains deferred. These facts are not inferred from unit tests or package integrity.
+
+Các mục cũ bên dưới là inventory lịch sử; checkpoint hiện tại chỉ ghi bằng chứng đã chạy lại, không suy diễn thành kiểm thử native/browser E2E hoặc release acceptance.
+
+Ký hiệu: ✅ có mã **và** có bằng chứng chạy · 🟡 có mã nhưng thiếu test/UX hoặc còn giới hạn đáng kể · ⬜ chưa có.
+
 
 
 ## Wave 3 historical integration checkpoint (2026-11-21)
