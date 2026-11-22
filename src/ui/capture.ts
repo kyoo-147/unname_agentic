@@ -1,6 +1,7 @@
 export interface CaptureParams {
   capture: true;
   sourceTab?: number;
+  captureId?: string;
 }
 
 export interface DecodedImage {
@@ -16,6 +17,8 @@ export interface CaptureRuntime {
 export interface RequestCaptureOptions {
   runtime?: CaptureRuntime;
   timeoutMs?: number;
+  captureId?: string;
+  sourceTabId?: number;
 }
 
 export type CaptureErrorCode = 'no-extension' | 'expired' | 'invalid-response' | 'timeout';
@@ -44,7 +47,9 @@ export function readCaptureParams(search: string): CaptureParams | undefined {
   if (capture !== '1' && capture !== 'true') return undefined;
   const rawSourceTab = params.get('sourceTab');
   const sourceTab = rawSourceTab && /^\d+$/.test(rawSourceTab) ? Number(rawSourceTab) : undefined;
-  return { capture: true, ...(sourceTab !== undefined ? { sourceTab } : {}) };
+  const rawCaptureId = params.get('captureId');
+  const captureId = rawCaptureId && /^[A-Za-z0-9_-]{1,128}$/.test(rawCaptureId) ? rawCaptureId : undefined;
+  return { capture: true, ...(sourceTab !== undefined ? { sourceTab } : {}), ...(captureId ? { captureId } : {}) };
 }
 
 function runtimeFromGlobal(): CaptureRuntime | undefined {
@@ -97,13 +102,13 @@ function asOptions(value: RequestCaptureOptions | CaptureRuntime | undefined): R
 }
 
 export async function requestCaptureImage(options: RequestCaptureOptions | CaptureRuntime = {}): Promise<string> {
-  const { runtime: provided, timeoutMs = 15_000 } = asOptions(options);
+  const { runtime: provided, timeoutMs = 15_000, captureId, sourceTabId } = asOptions(options);
   const runtime = provided ?? runtimeFromGlobal();
   if (!runtime) throw new CaptureError('no-extension', NO_EXTENSION);
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const response = await Promise.race([
-      runtime.sendMessage({ type: 'mirror:get-capture' }),
+      runtime.sendMessage({ type: 'mirror:get-capture', ...(captureId ? { captureId } : {}) }),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(new CaptureError('timeout', TIMEOUT)), timeoutMs);
       }),
@@ -116,6 +121,8 @@ export async function requestCaptureImage(options: RequestCaptureOptions | Captu
       throw new CaptureError(code, messageFor(code, detail));
     }
     if (result.ok !== true || typeof result.image !== 'string') throw new CaptureError('invalid-response', INVALID);
+    if (captureId && result.captureId !== captureId) throw new CaptureError('invalid-response', INVALID);
+    if (sourceTabId !== undefined && result.sourceTabId !== sourceTabId) throw new CaptureError('invalid-response', INVALID);
     decodeDataUrl(result.image);
     return result.image;
   } catch (error) {

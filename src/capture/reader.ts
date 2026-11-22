@@ -540,7 +540,8 @@ export async function mountCaptureReader(options: CaptureReaderOptions): Promise
     try {
       // The extension hands a capture out once, so a retry re-reads the screenshot
       // this reader already received instead of asking the background again.
-      dataUrl = captureImage ?? await requestCaptureImage();
+      const captureParams = readCaptureParams(view?.location.search ?? '');
+      dataUrl = captureImage ?? await requestCaptureImage({ captureId: captureParams?.captureId, sourceTabId: captureParams?.sourceTab });
     } catch (error) {
       if (generation !== loadGeneration || destroyed || isAbortError(error)) return;
       showFailure(failureFor(error));

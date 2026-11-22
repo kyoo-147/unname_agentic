@@ -11,6 +11,7 @@ export class NativeBridgeError extends Error {
 }
 export interface NativeBinding { session_id: string; source_id: string; request_nonce: string; generation: number }
 export interface NativePage { page: number; page_count: number | null; fraction: number; zoom: number }
+export interface NativeTransferProgress { state: 'transferring' | 'following' | 'reconnecting' | 'stopped' | 'error'; completed: number; total: number; percent: number; detail?: string }
 export type NativeAnnotationKind = 'highlight' | 'underline' | 'note' | 'selection';
 export interface NativeAnnotation { id: string; page: number; x: number; y: number; width: number; height: number; kind: NativeAnnotationKind; text: string; baseRevision: number }
 export type NativeAnnotationResult = { status: 'applied' | 'conflict'; revision: number; annotation?: NativeAnnotation } | { status: 'offline' | 'stale' };
@@ -80,6 +81,13 @@ export function nativeCommand(value: unknown, binding: NativeBinding): { sequenc
   if (!command || command.version !== 1 || command.kind !== 'view_state' || !sameBinding(command.binding, binding) || !Number.isSafeInteger(command.sequence) || command.sequence! <= 0 || !page || !Number.isInteger(page.page) || page.page < 0 || page.page > 65535 || (page.page_count !== null && (!Number.isInteger(page.page_count) || page.page_count <= page.page || page.page_count > 65535)) || !Number.isFinite(page.fraction) || page.fraction < 0 || page.fraction > 1 || !Number.isFinite(page.zoom) || page.zoom < 0.1 || page.zoom > 10) throw new NativeBridgeError('invalid-response', 'Invalid desktop navigation command.');
   return { sequence: command.sequence!, page };
 }
+function nativeAnnotation(value: unknown): NativeAnnotation {
+  if (!value || typeof value !== 'object') throw new NativeBridgeError('invalid-response', 'Invalid desktop annotation response.');
+  const item = value as Record<string, unknown>;
+  const kind = item.kind;
+  if (typeof item.id !== 'string' || item.id.length === 0 || item.id.length > 128 || [...item.id].some(character => character.charCodeAt(0) < 32) || !Number.isSafeInteger(item.page) || Number(item.page) < 0 || Number(item.page) > 65535 || !['highlight', 'underline', 'note', 'selection'].includes(String(kind)) || typeof item.text !== 'string' || [...item.text].length > 4000 || [...item.text].some(character => character.charCodeAt(0) < 32 && !'\n\r\t'.includes(character)) || !Number.isFinite(item.x) || !Number.isFinite(item.y) || !Number.isFinite(item.width) || !Number.isFinite(item.height) || Number(item.x) < 0 || Number(item.y) < 0 || Number(item.width) <= 0 || Number(item.height) <= 0 || Number(item.x) + Number(item.width) > 1 || Number(item.y) + Number(item.height) > 1 || !Number.isSafeInteger(item.base_revision) || Number(item.base_revision) < 0) throw new NativeBridgeError('invalid-response', 'Invalid desktop annotation response.');
+  return { id: item.id, page: item.page as number, x: item.x as number, y: item.y as number, width: item.width as number, height: item.height as number, kind: kind as NativeAnnotationKind, text: item.text, baseRevision: item.base_revision as number };
+}
 export class NativeCompanion {
   private connection?: Connection;
   private connecting?: Promise<Connection>;
@@ -94,9 +102,10 @@ export class NativeCompanion {
   private queuedPage?: NativePage;
   private pageTask?: Promise<void>;
   private echoes: NativePage[] = [];
-  constructor(private readonly connect: () => NativePort, private readonly onCommand?: (session: MirrorSession, page: NativePage) => Promise<void>) {}
+  constructor(private readonly connect: () => NativePort, private readonly onCommand?: (session: MirrorSession, page: NativePage) => Promise<void>, private readonly onProgress?: (progress: NativeTransferProgress) => void) {}
   get following(): boolean { return !!this.active; }
   get transferring(): boolean { return this.busy; }
+  private emitProgress(progress: NativeTransferProgress): void { try { this.onProgress?.(progress); } catch { /* UI reporting cannot change transfer truth. */ } }
   private cancelPoll(): void { if (this.timer !== undefined) clearTimeout(this.timer); this.timer = undefined; }
   private invalidate(): void { this.revision++; this.cancelPoll(); this.active = undefined; this.source = undefined; this.queuedPage = undefined; this.echoes = []; this.resumeNeeded = false; }
   private serialize(task: () => Promise<void>): Promise<void> {
@@ -109,7 +118,7 @@ export class NativeCompanion {
     if (this.connecting) return this.connecting;
     if (this.connection) return this.connection;
     let connection: Connection;
-    try { connection = new Connection(this.connect(), reconnect => { if (this.connection !== connection) return; this.connection = undefined; this.connecting = undefined; if (reconnect && this.active && !this.busy) { this.resumeNeeded = true; this.schedulePoll(); } else this.invalidate(); }); }
+    try { connection = new Connection(this.connect(), reconnect => { if (this.connection !== connection) return; this.connection = undefined; this.connecting = undefined; if (reconnect && this.active && !this.busy) { this.resumeNeeded = true; this.emitProgress({ state: 'reconnecting', completed: 0, total: 0, percent: 0 }); this.schedulePoll(); } else this.invalidate(); }); }
     catch { throw new NativeBridgeError('unavailable', COMPANION_UNAVAILABLE); }
     this.connection = connection;
     this.connecting = connection.request({ type: 'hello' }).then(hello => {
@@ -138,7 +147,7 @@ export class NativeCompanion {
           if (!sameBinding(resumed.binding, active.binding) || (resumed.status !== 'resumed' && resumed.status !== 'missing') || !Number.isSafeInteger(resumed.sequence)) throw new NativeBridgeError('invalid-response', 'Invalid desktop resume response.');
           active.sequence = resumed.sequence as number;
           this.resumeNeeded = false;
-          if (resumed.status === 'missing') { this.active = undefined; throw new NativeBridgeError('stale', 'Desktop source is no longer available.'); }
+          if (resumed.status === 'missing') { this.active = undefined; this.source = undefined; this.emitProgress({ state: 'error', completed: 0, total: 0, percent: 0, detail: 'Desktop source is no longer available.' }); throw new NativeBridgeError('stale', 'Desktop source is no longer available.'); }
         }
         const reply = await connection.request({ type: 'poll', binding: active.binding, after_sequence: active.sequence }, 1000);
         if (revision !== this.revision) return;
@@ -166,6 +175,7 @@ export class NativeCompanion {
       connection = await this.connected(); this.check(revision);
       const bytes = await acquire(); this.check(revision);
       if (!bytes.length || bytes.length > NATIVE_MAX_PDF) throw new NativeBridgeError('transfer', 'PDF exceeds the 256 MiB desktop bridge limit or is empty.');
+      this.emitProgress({ state: 'transferring', completed: 0, total: bytes.length, percent: 0 });
       await authorized();
       this.generation = Math.max(Date.now(), this.generation + 1);
       const digest = async (input: Uint8Array) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(input).buffer)), v => v.toString(16).padStart(2, '0')).join('');
@@ -177,7 +187,8 @@ export class NativeCompanion {
         if (!sameBinding(reply.binding, binding)) throw new NativeBridgeError('invalid-response', 'Desktop companion acknowledged a different source.');
         return reply;
       };
-      await request({ type: 'begin', binding, total_bytes: bytes.length, sha256, page, title: title.slice(0, 200) });
+      const begun = await request({ type: 'begin', binding, total_bytes: bytes.length, sha256, page, title: title.slice(0, 200) });
+      if (begun.status !== 'receiving' || begun.next_index !== 0) throw new NativeBridgeError('invalid-response', 'Desktop companion acknowledged an invalid upload state.');
       let index = 0;
       for (let offset = 0; offset < bytes.length; offset += NATIVE_CHUNK_BYTES) {
         await authorized();
@@ -185,14 +196,19 @@ export class NativeCompanion {
         let binary = '';
         for (let start = 0; start < part.length; start += 8192) binary += String.fromCharCode(...part.subarray(start, start + 8192));
         const reply = await request({ type: 'chunk', binding, index, data: btoa(binary) });
-        if (reply.next_index !== ++index) throw new NativeBridgeError('invalid-response', 'Desktop companion acknowledged an unexpected chunk.');
+        if (reply.status !== 'receiving' || !Number.isSafeInteger(reply.next_index) || reply.next_index !== ++index) throw new NativeBridgeError('invalid-response', 'Desktop companion acknowledged an unexpected chunk.');
+        this.emitProgress({ state: 'transferring', completed: Math.min(bytes.length, offset + part.length), total: bytes.length, percent: Math.floor(((offset + part.length) / bytes.length) * 100) });
       }
       await authorized();
       const reply = await request({ type: 'commit', binding });
       if (reply.status !== 'complete') throw new NativeBridgeError('transfer', 'Desktop companion did not complete the PDF transfer.');
       this.resumeNeeded = false;
       this.active = { session: { ...session }, binding, authorize, sequence: 0 };
-    } catch (error) { connection?.close(); this.invalidate(); throw error; }
+      this.emitProgress({ state: 'following', completed: bytes.length, total: bytes.length, percent: 100 });
+    } catch (error) {
+      this.emitProgress({ state: 'error', completed: 0, total: 0, percent: 0, detail: error instanceof Error ? error.message : String(error) });
+      connection?.close(); this.invalidate(); throw error;
+    }
     finally { this.busy = false; this.schedulePoll(); }
   }
   page(session: MirrorSession, page: NativePage): Promise<void> {
@@ -228,10 +244,9 @@ export class NativeCompanion {
       await active.authorize();
       const reply = await connection.request({ type: 'annotation', binding: active.binding, annotation: { id: annotation.id, page: annotation.page, x: annotation.x, y: annotation.y, width: annotation.width, height: annotation.height, kind: annotation.kind, text: annotation.text, base_revision: annotation.baseRevision } });
       if (!reply || !sameBinding(reply.binding, active.binding) || (reply.status !== 'applied' && reply.status !== 'conflict') || !Number.isSafeInteger(reply.revision)) throw new NativeBridgeError('invalid-response', 'Invalid desktop annotation response.');
-      const value = reply.annotation as Record<string, unknown> | undefined;
       const status = reply.status === 'applied' ? 'applied' : 'conflict';
       const result: NativeAnnotationResult = { status, revision: reply.revision as number };
-      if (value) result.annotation = { id: String(value.id), page: Number(value.page), x: Number(value.x), y: Number(value.y), width: Number(value.width), height: Number(value.height), kind: value.kind as NativeAnnotationKind, text: String(value.text), baseRevision: Number(value.base_revision) };
+      if (reply.annotation !== undefined) result.annotation = nativeAnnotation(reply.annotation);
       return result;
     } catch (error) {
       if (error instanceof NativeBridgeError && (error.code === 'stale' || error.code === 'unavailable')) return { status: error.code === 'stale' ? 'stale' : 'offline' };
@@ -244,7 +259,7 @@ export class NativeCompanion {
     if (this.busy) { connection?.close(); return; }
     await this.operation;
     try { if (active && this.connection === connection) await connection?.request({ type: 'end', binding: active.binding }); }
-    finally { connection?.close(); }
+    finally { connection?.close(); this.emitProgress({ state: 'stopped', completed: 0, total: 0, percent: 0 }); }
   }
   revoke(tabId: number): void {
     if (this.source && (this.source.sourceTabId === tabId || this.source.viewerTabId === tabId)) { this.invalidate(); this.connection?.close(); }
