@@ -1,12 +1,37 @@
 # Chức năng và trạng thái xác minh
 
-Cập nhật: **2026-11-21**, tích hợp tại HEAD `fab6a93` trên nền `bc48328`. Các mục cũ bên dưới là inventory lịch sử; checkpoint hiện tại chỉ ghi bằng chứng đã chạy lại hoặc được truy nguyên từ commit/worker report, không suy diễn thành kiểm thử native hay E2E hệ điều hành.
+Cập nhật: **2026-11-22**, tích hợp tại HEAD `df70a41` (`df70a41831d775cee1a1a4cf30d6104e86d976ff`) trên nền `f5ccdd1`. Các mục cũ bên dưới là inventory lịch sử; checkpoint hiện tại chỉ ghi bằng chứng đã chạy lại hoặc được truy nguyên từ commit/worker report, không suy diễn thành kiểm thử native hay E2E hệ điều hành.
 
 Ký hiệu: ✅ có mã **và** có bằng chứng chạy · 🟡 có mã nhưng thiếu test/UX hoặc còn giới hạn đáng kể · ⬜ chưa có.
 
-Số đo hiện tại: **3.023 unit test web**, **51 E2E được khai báo**; typecheck, build, committed-imports và kiểm tra artifact web pass local. Native GPUI, Chrome↔Rust thật, package release và CI chưa được chứng minh ở integration branch.
+Số đo **lịch sử** của checkpoint trước là **3.023 unit test web** và **51 E2E được khai báo**; đây không phải bằng chứng tại final HEAD. Bằng chứng final HEAD của Wave 3 nằm ở mục dưới; không suy diễn từ số đo lịch sử sang full suite hoặc E2E hiện tại.
 
-## Wave 3 integration checkpoint (2026-11-21)
+## Wave 3 final evidence (2026-11-22, HEAD `df70a41`)
+
+| Nhóm / cổng | Bằng chứng tại final HEAD | Trạng thái |
+|---|---|---|
+| OCR | 22 focused tests pass | ✅ local |
+| RAG | 105 focused tests pass | ✅ local |
+| Quality gate | 11 focused tests pass | ✅ local |
+| Automation / CLI | 69 focused tests pass | ✅ local |
+| Research | 176 focused tests pass | ✅ worker evidence |
+| Bridge | 48 focused tests pass | ✅ worker evidence |
+| Typecheck | final `pnpm typecheck` pass | ✅ local |
+| Committed imports | 401 checks pass | ✅ local |
+| Artifact gate | current `ArtifactsOnly` 3/3 pass | ✅ local |
+
+Final HEAD limits and blockers:
+
+- No full suite, build, or Playwright rerun was performed at final HEAD.
+- Native package dry-run is blocked by a missing GPUI executable and native messaging host, with about 690 MB free on `D:`.
+- No Chrome native registry key or host is available for the real Chrome↔native path.
+- PR 34 latest CI run `44982321053` has the web job failing with zero steps; the native job was skipped.
+- Release acceptance remains open and is not claimed.
+
+
+## Wave 3 historical integration checkpoint (2026-11-21)
+
+The table below is retained as historical inventory evidence, not final-HEAD evidence.
 
 | Nhóm | Bằng chứng hiện có | Trạng thái |
 |---|---|---|
@@ -18,7 +43,9 @@ Số đo hiện tại: **3.023 unit test web**, **51 E2E được khai báo**; t
 | Bridge reconnect/annotation | commit `fab6a93`; worker report ghi 10 native-host + 42 extension tests pass; chưa có Chrome↔Rust/OS roundtrip | 🟡 |
 | Security/release policy | commit `5ef1511`; full local quality evidence and license check pass | ✅ local slice |
 
-## Release checkpoint (2026-11-21)
+## Historical release checkpoint (2026-11-21)
+
+The table below records the older release checkpoint and does not replace the final-HEAD limits above.
 
 | Hạng mục | Bằng chứng hiện có | Trạng thái |
 |---|---|---|
