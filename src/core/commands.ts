@@ -279,10 +279,16 @@ const READER_COMMANDS: readonly Command[] = [
   { id: 'reader.shortcuts', titleKey: 'shortcuts', group: 'help' },
 ];
 
+/** Optional action handlers supplied by a host. The registry remains pure until a host binds real actions. */
+export type ReaderCommandRuns = Readonly<Partial<Record<string, () => void>>>;
+
 /** A fresh registry with every reader action registered, ready for a palette. */
-export function readerCommands(): CommandRegistry {
+export function readerCommands(runs: ReaderCommandRuns = {}): CommandRegistry {
   const registry = new CommandRegistry();
-  for (const command of READER_COMMANDS) registry.register(command);
+  for (const command of READER_COMMANDS) {
+    const run = runs[command.id];
+    registry.register(run ? { ...command, run } : command);
+  }
   return registry;
 }
 
@@ -350,6 +356,12 @@ export class CommandPaletteModel {
     const step = Number.isFinite(delta) ? Math.trunc(delta) : 0;
     this.selected = (this.selected + step + count) % count;
     return this.snapshot();
+  }
+
+  execute(commandId: string): CommandExecution {
+    const result = this.registry.execute(commandId, this.context);
+    if (result.executed) this.isOpen = false;
+    return result;
   }
 
   executeSelected(): CommandExecution {

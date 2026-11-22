@@ -34,6 +34,9 @@ import {
   type IntelligencePageSource,
   type IntelligenceSourceKind,
 } from './core/document-intelligence';
+import { ReviewQueue } from './core/review';
+import { createUnifiedProgress, UnifiedProgressStore } from './core/unified-progress';
+import { CommandPaletteModel, readerCommands } from './core/commands';
 import { createStatusModel, renderStatus as renderStatusStrip } from './ui/status-bar';
 import {
   isReadingMode, layoutFor, positionAfterModeChange, type ModeChange, type ReadingLayout, type ReadingMode,
@@ -62,6 +65,7 @@ root.innerHTML = `<aside class="sidebar"><a class="brand" href="#" data-i18n-ari
 <input type="file" id="file-input" accept="application/pdf,.pdf" hidden multiple>
 <dialog id="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1"><form id="settings-form"><div class="dialog-heading"><div><span class="eyebrow" data-i18n="settingsEyebrow">MAKE IT YOURS</span><h2 id="settings-title" data-i18n="translationSettings">Translation settings</h2></div><button type="button" id="settings-close" data-i18n-aria-label="closeSettings" aria-label="Close settings">${icon('close')}</button></div>${localeSwitcher()}<p class="dialog-description" data-i18n="settingsDescription">Only extracted text is sent to your chosen provider. Your PDF stays here. Credentials are kept in memory, not saved.</p><label><span data-i18n="providerLabel">Provider</span><select name="provider"><option value="local" data-i18n="providerLocal">Local / Ollama (OpenAI-compatible)</option><option value="google" data-i18n="providerGoogle">Google Cloud Translation</option><option value="deepl" data-i18n="providerDeepl">DeepL</option><option value="openai" data-i18n="providerOpenai">OpenAI-compatible API</option></select></label><label><span data-i18n="apiEndpoint">API endpoint</span><input name="endpoint" type="url" placeholder="http://127.0.0.1:11434/v1" required></label><label><span data-i18n="model">Model</span><input name="model" autocomplete="off"></label><div class="form-row"><label><span data-i18n="sourceLanguage">Source language</span><select name="sourceLanguage"><option value="auto" data-i18n="sourceAuto">Detect automatically</option>${targetOptions()}</select></label><label><span data-i18n="targetLanguage">Target language</span><select name="targetLanguage">${targetOptions()}</select></label></div><label><span data-i18n="apiKey">API key</span><input name="apiKey" type="password" autocomplete="off" data-i18n-placeholder="apiKeyPlaceholder" placeholder="Not needed for a local server"></label><label class="glossary-field"><span data-i18n="glossaryLabel">Glossary</span><textarea name="glossary" rows="5" spellcheck="false" data-i18n-placeholder="glossaryPlaceholder" placeholder="transformer = bộ biến đổi"></textarea></label><p class="settings-help" data-i18n="glossaryHelp">One term per line as "source = translation". Up to 200 terms.</p><p class="settings-help" data-i18n="glossaryProviderHint">Google and DeepL do not accept a custom glossary.</p><p id="glossary-status" class="glossary-status" role="status" aria-live="polite"></p><label class="consent"><input name="allowCloud" type="checkbox"><span data-i18n="cloudConsent">I allow extracted document text to be sent to the selected cloud provider. Provider charges may apply.</span></label><p class="settings-help" data-i18n="settingsHelp">Local endpoints must use localhost. If the provider is unavailable, the original stays readable; no substitute translation is invented.</p><button class="primary" type="submit" data-i18n="applySettings">Apply & translate visible pages</button></form></dialog>
 <dialog id="selection-dialog" role="dialog" aria-modal="true" aria-labelledby="selection-title" tabindex="-1"><div class="dialog-heading"><h2 id="selection-title" data-i18n="pairedReading">Paired reading view</h2><button id="selection-close" data-i18n-aria-label="closePaired" aria-label="Close paired view">${icon('close')}</button></div><div class="selection-columns"><section><h3 data-i18n="original">Original</h3><p id="selected-source"></p></section><section><h3 data-i18n="translation">Translation</h3><p id="selected-translation"></p></section></div><button id="selection-translate" class="primary" data-i18n="translateRegion">Translate this region</button><p class="settings-help" data-i18n="pairedHelp">Region-level correspondence. Word alignment is not inferred.</p></dialog>`;
+root.insertAdjacentHTML('beforeend', `<dialog id="command-palette" class="command-palette" role="dialog" aria-modal="true" aria-labelledby="command-palette-title" tabindex="-1"><div class="dialog-heading"><h2 id="command-palette-title" data-i18n="shortcuts">Keyboard shortcuts</h2><button type="button" id="command-palette-close" data-i18n-aria-label="closePanel" aria-label="Close panel">${icon('close')}</button></div><input id="command-palette-input" type="search" autocomplete="off" data-i18n-placeholder="searchPlaceholder" placeholder="Search this document" aria-label="Search this document"><div id="command-palette-list" role="listbox" aria-label="Keyboard shortcuts"></div><p id="command-palette-empty" class="reader-panel__empty" hidden></p></dialog>`);
 apply(document);
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const intelligenceTrigger = document.createElement('button');
@@ -71,6 +75,12 @@ intelligenceTrigger.dataset.i18n = 'intelligenceToggle';
 intelligenceTrigger.textContent = t('intelligenceToggle');
 intelligenceTrigger.setAttribute('aria-controls', 'reader-panel');
 intelligenceTrigger.setAttribute('aria-expanded', 'false');
+const selectionResult = document.createElement('p');
+selectionResult.id = 'selected-result';
+selectionResult.className = 'selection-result';
+selectionResult.setAttribute('role', 'status');
+selectionResult.setAttribute('aria-live', 'polite');
+$('selected-translation').after(selectionResult);
 $('outline-toggle').after(intelligenceTrigger);
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]):not([type="hidden"]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 const dialogOpeners = new WeakMap<HTMLDialogElement,HTMLElement>();
@@ -89,7 +99,7 @@ function trapDialogFocus(dialog: HTMLDialogElement,event: KeyboardEvent) {
   if(!event.shiftKey&&(active===last||!dialog.contains(active))) { event.preventDefault(); first.focus(); }
   else if(event.shiftKey&&(active===first||!dialog.contains(active))) { event.preventDefault(); last.focus(); }
 }
-for(const id of ['settings-dialog','selection-dialog']) {
+for(const id of ['settings-dialog','selection-dialog','command-palette']) {
   const element=$<HTMLDialogElement>(id);
   element.addEventListener('keydown',event=>trapDialogFocus(element,event));
   element.addEventListener('close',()=>{
@@ -142,6 +152,10 @@ let intelligenceResult: DocumentIntelligenceResult | null = null;
 let intelligenceSchemaText = BUILT_IN_INTELLIGENCE_SCHEMA_JSON;
 let intelligenceState: 'idle' | 'loading' | 'ready' | 'empty' | 'error' = 'idle';
 let intelligenceError = '';
+let reviewQueue: ReviewQueue | null = null;
+let reviewEditingId: string | null = null;
+let progressStore: UnifiedProgressStore | null = null;
+let progressUnsubscribe: (() => void) | null = null;
 const intelligencePageSources = new Map<number, IntelligencePageSource>();
 const statusModel = createStatusModel();
 const GLOSSARY_ISSUE_KEY: Record<GlossaryIssueCode, TranslationKey> = {
@@ -149,12 +163,45 @@ const GLOSSARY_ISSUE_KEY: Record<GlossaryIssueCode, TranslationKey> = {
   'source-too-long':'glossaryIssueSourceTooLong', 'target-too-long':'glossaryIssueTargetTooLong', duplicate:'glossaryIssueDuplicate', 'entry-limit':'glossaryIssueEntryLimit',
 };
 
+function progressJob() {
+  const progress = progressStore?.snapshot();
+  if (!progress || !canTranslate() || progress.total <= 0) return null;
+  if (progress.stage === 'translate' && !full && !progress.settled && progress.completed >= progress.total) return null;
+  const state = progress.state === 'done'
+    ? 'done'
+    : progress.state === 'failed' || progress.state === 'aborted' || progress.state === 'cancelled'
+      ? 'failed'
+      : progress.state === 'queued' ? 'queued' : 'running';
+  return { state, progress: progress.total > 0 ? (progress.completed / progress.total) * 100 : 0, eta: null } as const;
+}
+
+function updateReaderProgress(): void {
+  if (!progressStore || !canTranslate()) { renderStatus(); return; }
+  const total = [...rendered.values()].reduce((sum, page) => sum + page.model.blocks.length, 0);
+  if (total > 0) {
+    const completed = [...rendered.values()].reduce((sum, page) => sum + page.model.blocks.filter(block => translations.has(block.id) || errors.has(block.id)).length, 0);
+    const snapshot = progressStore.snapshot();
+    if (snapshot.stage === 'import') {
+      progressStore.update({ state: 'running', stage: 'import', completed: pageTotal, total: pageTotal, detail: 'Document pages are available locally.' });
+    }
+    if (!progressStore.snapshot().settled) {
+      progressStore.update({ state: paused ? 'paused' : 'running', stage: 'translate', completed, total, detail: 'Visible document blocks only.' });
+    }
+    if (full && rendered.size >= pageTotal && completed >= total && !progressStore.snapshot().settled) {
+      progressStore.complete('All rendered document blocks translated or recorded as failed.');
+    }
+  }
+  renderStatus();
+}
+
 function renderStatus() {
   const element=$('status');
   statusModel.update({
+    mode: !pdf || !canTranslate() ? 'idle' : paused ? 'paused' : full ? 'full' : 'visible',
     page: pageNumber,
     pageCount: pageTotal,
     provider: providerName(),
+    job: progressJob(),
     message: { kind: statusView.error ? 'error' : 'info', text: statusView.text() },
   });
   element.replaceChildren(renderStatusStrip(statusModel, document));
@@ -165,6 +212,78 @@ function status(key: TranslationKey, error = false, vars?: Record<string,string|
 function statusText(message: string, error = false) { setStatusText(() => message, error); }
 function errorMessage(error: unknown) { return error instanceof Error?error.message:String(error); }
 function userMessage(error: unknown) { return error instanceof TranslationError ? error.userMessage : errorMessage(error); }
+
+const commandPaletteDialog = $<HTMLDialogElement>('command-palette');
+const commandPaletteInput = $<HTMLInputElement>('command-palette-input');
+const commandPaletteList = $('command-palette-list');
+const commandPaletteEmpty = $('command-palette-empty');
+let commandPaletteModel: CommandPaletteModel;
+
+function openSettingsDialog(): void {
+  fillSettingsForm();
+  showDialog(dialog, $('settings-open'));
+}
+
+function renderCommandPalette(): void {
+  const snapshot = commandPaletteModel.snapshot();
+  commandPaletteList.replaceChildren();
+  commandPaletteEmpty.hidden = !snapshot.empty;
+  commandPaletteEmpty.textContent = snapshot.empty ? t('searchEmpty') : '';
+  for (const [index, item] of snapshot.items.entries()) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'command-palette__item';
+    button.role = 'option';
+    button.dataset.commandId = item.command.id;
+    button.setAttribute('aria-selected', String(index === snapshot.selectedIndex));
+    button.disabled = !item.availability.enabled;
+    button.textContent = t(item.command.titleKey);
+    if (!item.availability.enabled) button.title = item.availability.reason ?? '';
+    button.addEventListener('click', () => executePaletteCommand(item.command.id));
+    commandPaletteList.append(button);
+  }
+}
+
+function executePaletteCommand(commandId?: string): void {
+  const result = commandId ? commandPaletteModel.execute(commandId) : commandPaletteModel.executeSelected();
+  if (result.executed) { commandPaletteDialog.close(); return; }
+  if (result.reason) statusText(result.reason, true);
+  renderCommandPalette();
+}
+
+commandPaletteModel = new CommandPaletteModel(readerCommands({
+  'reader.open': () => $<HTMLInputElement>('file-input').click(),
+  'reader.exportPdf': () => void exportPdfFile(),
+  'reader.settings': openSettingsDialog,
+  'reader.previousPage': () => scrollToPage(pageNumber - 1),
+  'reader.nextPage': () => scrollToPage(pageNumber + 1),
+  'reader.firstPage': () => scrollToPage(1),
+  'reader.lastPage': () => { if (pdf) scrollToPage(pdf.numPages); },
+  'reader.goToPage': () => { const field = $<HTMLInputElement>('page-input'); field.focus(); field.select(); },
+  'reader.find': () => openPanel('search'),
+  'reader.zoomIn': () => { fit = 'actual'; zoom = Math.min(3, zoom + .1); applyScale(); },
+  'reader.zoomOut': () => { fit = 'actual'; zoom = Math.max(.55, zoom - .1); applyScale(); },
+  'reader.zoomReset': () => { zoom = 1; fit = 'width'; applyFit('width'); },
+  'reader.toggleTranslation': () => setReadingMode(readingMode === 'side-by-side' ? 'overlay' : 'side-by-side'),
+  'reader.shortcuts': () => statusText(`${t('shortcuts')}: Ctrl+K, Ctrl+O, Ctrl+F, J/K, +/-`),
+}), { capabilityMode: 'local' });
+
+commandPaletteInput.addEventListener('input', () => { commandPaletteModel.setQuery(commandPaletteInput.value); renderCommandPalette(); });
+commandPaletteInput.addEventListener('keydown', event => {
+  if (event.key === 'ArrowDown') { event.preventDefault(); commandPaletteModel.move(1); renderCommandPalette(); }
+  else if (event.key === 'ArrowUp') { event.preventDefault(); commandPaletteModel.move(-1); renderCommandPalette(); }
+  else if (event.key === 'Enter') { event.preventDefault(); executePaletteCommand(); }
+});
+$('command-palette-close').addEventListener('click', () => commandPaletteDialog.close());
+commandPaletteDialog.addEventListener('close', () => { commandPaletteModel.close(); commandPaletteInput.value = ''; });
+
+function openCommandPalette(): void {
+  commandPaletteModel.open();
+  commandPaletteInput.value = '';
+  renderCommandPalette();
+  showDialog(commandPaletteDialog, document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  commandPaletteInput.focus();
+}
 function canTranslate() { return settings.provider==='local' || settings.allowCloud; }
 function providerName() { return settings.provider==='local'?t('providerLocalShort'):settings.provider==='deepl'?'DeepL':settings.provider==='google'?'Google':'OpenAI'; }
 function updateProvider() { $('provider-label').textContent=`${providerName()} · ${languageNativeName(settings.targetLanguage)}`; }
@@ -179,7 +298,16 @@ function updatePageControls() {
   updateCurrentMarkers();
 }
 function refreshPageStatus() { $('page-status').textContent=pageTotal?t('pageStatus',{page:pageNumber,total:pageTotal}):t('pageInitial'); updatePageControls(); }
-function renderSelectedTranslation() { if(selected) $('selected-translation').textContent=translations.get(selected.id)??errors.get(selected.id)??t('translationPending'); }
+function renderSelectedTranslation() {
+  if (!selected) { $('selected-translation').textContent=''; selectionResult.textContent=''; return; }
+  const translated = translations.get(selected.id);
+  const failure = errors.get(selected.id);
+  $('selected-translation').textContent = translated ?? failure ?? t('translationPending');
+  selectionResult.textContent = translated
+    ? `${t('translation')}: ${t('intelligenceEvidence')}`
+    : failure ?? t('translationPending');
+  selectionResult.classList.toggle('is-error', Boolean(failure));
+}
 function refreshPageLoaders() { root.querySelectorAll<HTMLElement>('.page-loading').forEach(element=>{ if(element.dataset.loading==='page') element.textContent=t('pageLoading',{page:Number(element.dataset.page)}); else if(element.dataset.loading==='follow') element.textContent=t('translationFollows'); else if(element.dataset.loading==='scroll') element.textContent=t('scrollToRender'); }); }
 function refreshRegionLabels() { root.querySelectorAll<HTMLElement>('.region').forEach(element=>{ if(element.classList.contains('callout-region')) { element.title=t('calloutTitle'); element.setAttribute('aria-label',t('calloutAria')); } else element.setAttribute('aria-label',t('compareRegion',{text:(element.dataset.text??'').slice(0,90)})); }); }
 function refreshLibraryLabels() { root.querySelectorAll<HTMLElement>('[data-pages]').forEach(element=>{ element.textContent=t('pagesOpened',{pages:Number(element.dataset.pages)}); }); }
@@ -206,6 +334,7 @@ function resetWork() {
   revision++; profile++; requestController.abort(); requestController=new AbortController();
   batchController?.abort(); batchController=null;
   translationQueue.reset(); renderQueue.reset(); rendered.clear(); translations.clear(); errors.clear(); visible.clear();
+  progressUnsubscribe?.(); progressUnsubscribe=null; progressStore=null; reviewQueue=null; reviewEditingId=null;
   observer?.disconnect(); observer=null; full=false; batching=false; paused=false; translationQueue.resume(); refreshTransportLabels();
   rotation=0; fit='width'; zoom=1; rotating=false; pageNumber=1; pageTotal=0; readingPosition={page:1,fraction:0}; activeDocKey='';
   outlineEntries=[]; outlineReady=false; outlineLoading=false;
@@ -213,6 +342,16 @@ function resetWork() {
   searchController?.abort(); searchController=null; clearTimeout(searchTimer); lastSearchQuery=''; searchInput=null; searchStatus=null; searchList=null;
   toggleThumbnails(false);
   const hint=$('detected-language'); hint.hidden=true; hint.textContent=''; detectedCode='';
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string | null> {
+  try {
+    if (!globalThis.crypto?.subtle) return null;
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', copy.buffer);
+    return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
+  } catch { return null; }
 }
 
 async function load(bytes: Uint8Array,name: string,source = '',id?: string) {
@@ -231,6 +370,15 @@ async function load(bytes: Uint8Array,name: string,source = '',id?: string) {
     void libraryStore.open().then(()=>libraryStore.put({id:recordId,name,bytes:recordBytes,size:bytes.length,addedAt:Date.now(),lastOpenedAt:Date.now(),pageCount:loaded.numPages})).catch(()=>undefined);
     updateLibrary(); $('library').hidden=true; $('reader').hidden=false;
     pageNumber=1; pageTotal=loaded.numPages; refreshBreadcrumb(); refreshPageStatus(); $('document-title').textContent=name;
+    const sourceSha256 = await sha256Hex(bytes);
+    if (sourceSha256) {
+      progressStore = new UnifiedProgressStore(createUnifiedProgress({
+        jobId: crypto.randomUUID(), documentId: recordId, sourceSha256, generation,
+        initialStage: 'import', total: loaded.numPages,
+        stages: [{ stage: 'import', total: loaded.numPages }, { stage: 'translate', total: 0 }],
+      }));
+      progressUnsubscribe = progressStore.subscribe(() => renderStatus());
+    }
     const link=$<HTMLAnchorElement>('original-link'); link.hidden=!source; if(source) link.href=source;
     const first=await loaded.getPage(1); const view=first.getViewport({scale:1});
     pageSize={width:view.width,height:view.height};
@@ -318,7 +466,7 @@ function mountPage(result: RenderedPage) {
   row.style.setProperty('--page-ratio',String(result.model.width/result.model.height));
   const original=row.querySelector<HTMLElement>('.original-slot')!;
   original.replaceChildren(result.original); result.original.className='page-canvas';
-  addRegions(original,result,false); paintMirror(result);
+  addRegions(original,result,false); paintMirror(result); updateReaderProgress();
 }
 function addRegions(slot: HTMLElement,result: RenderedPage,translated: boolean) {
   for(const block of result.model.blocks) {
@@ -414,12 +562,12 @@ function scheduleBlock(block: TextBlock,priority: number) {
       translations.set(block.id,result.text); errors.delete(block.id);
       const page=rendered.get(block.page); if(page) paintMirror(page);
       if(selected?.id===block.id) renderSelectedTranslation();
-      renderTranslationStatus();
+      renderTranslationStatus(); updateReaderProgress();
     } catch(error) {
       if(generation!==revision||currentProfile!==profile||signal.aborted) return;
       const message=userMessage(error); errors.set(block.id,message); statusText(message,true);
       const page=rendered.get(block.page);if(page) paintMirror(page);
-      if(selected?.id===block.id) renderSelectedTranslation();
+      if(selected?.id===block.id) renderSelectedTranslation(); updateReaderProgress();
     }
   }).catch(()=>undefined);
 }
@@ -440,7 +588,7 @@ async function translatePageInBatch(number: number): Promise<boolean> {
     for(const entry of batch.translations) { translations.set(entry.id,entry.text); errors.delete(entry.id); }
     const page=rendered.get(number); if(page) paintMirror(page);
     if(selected&&translations.has(selected.id)) renderSelectedTranslation();
-    renderTranslationStatus();
+    renderTranslationStatus(); updateReaderProgress();
     return true;
   } catch(error) {
     if(generation!==revision||currentProfile!==profile||signal.aborted) return true;
@@ -653,7 +801,7 @@ $('reading-mode-switch').addEventListener('keydown',event=>{
 });
 $('zoom-in').addEventListener('click',()=>{fit='actual';zoom=Math.min(3,zoom+.1);applyScale();});
 $('zoom-out').addEventListener('click',()=>{fit='actual';zoom=Math.max(.55,zoom-.1);applyScale();});
-$('pause').addEventListener('click',()=>{paused=!paused;if(paused)translationQueue.pause();else translationQueue.resume();refreshTransportLabels();status(paused?'statusPaused':'statusResumed');});
+$('pause').addEventListener('click',()=>{paused=!paused;if(paused){translationQueue.pause();progressStore?.pause('Paused by the reader.');}else{translationQueue.resume();progressStore?.resume('Resumed by the reader.');}refreshTransportLabels();status(paused?'statusPaused':'statusResumed');});
 $('retry').addEventListener('click',()=>{
   // Retry must reach every failed block, not only the ones currently on screen:
   // a failure the reader scrolled past used to stay dead forever.
@@ -737,7 +885,7 @@ document.addEventListener('keydown',event=>{
   void printBilingual();
 });
 $('full').addEventListener('click',async()=>{
-  full=!full; refreshTransportLabels();
+  full=!full; refreshTransportLabels(); updateReaderProgress();
   if(!full){
     // Stop means stop: abort the batch in flight as well as the per-block queue.
     batching=false; batchController?.abort(); batchController=null;
@@ -755,10 +903,16 @@ $('full').addEventListener('click',async()=>{
       // provider that cannot batch falls back to the per-block queue inside the loop.
       await translatePageInBatch(number);
     }
-  } finally { batching=false; batchController=null; }
+  } finally { batching=false; batchController=null; updateReaderProgress(); }
 });
 $<HTMLSelectElement>('target-language').addEventListener('change',()=>{const value=normalizeLanguageCode($<HTMLSelectElement>('target-language').value);if(value&&value!=='auto'){settings.targetLanguage=value;changeProfile();}});
-function changeProfile() {profile++; requestController.abort();requestController=new AbortController();translationQueue.reset();translations.clear();errors.clear();for(const page of rendered.values())paintMirror(page);for(const number of visible)schedulePage(number,0);updateProvider();status(canTranslate()?'statusSettingsApplied':'statusCloudNeeded');}
+function changeProfile() {
+  profile++; requestController.abort(); requestController=new AbortController(); translationQueue.reset(); translations.clear(); errors.clear();
+  if (progressStore?.snapshot().settled) progressStore.retry('translate');
+  for (const page of rendered.values()) paintMirror(page);
+  for (const number of visible) schedulePage(number,0);
+  updateProvider(); updateReaderProgress(); status(canTranslate() ? 'statusSettingsApplied' : 'statusCloudNeeded');
+}
 
 function intelligenceSourceLabel(source: IntelligenceSourceKind): string {
   return source === 'embedded-text' ? t('intelligenceEmbeddedText') : source === 'local-ocr' ? t('intelligenceLocalOcr') : t('intelligenceUnknownSource');
@@ -772,6 +926,93 @@ function intelligenceBlocks(): TextBlock[] {
   return [...rendered.values()]
     .sort((left, right) => left.model.number - right.model.number)
     .flatMap(page => page.model.blocks);
+}
+
+function renderReviewQueue(container: HTMLElement, result: DocumentIntelligenceResult): void {
+  const section = document.createElement('section');
+  section.className = 'reader-review';
+  const heading = document.createElement('div');
+  heading.className = 'reader-review__heading';
+  const title = document.createElement('h3');
+  title.textContent = t('reviewQueue');
+  const items = reviewQueue?.list() ?? [];
+  const pending = items.filter(item => item.status === 'pending').length;
+  const count = document.createElement('span');
+  count.textContent = t('reviewPending', { count: pending });
+  heading.append(title, count);
+  section.append(heading);
+  if (!items.length) {
+    const empty = document.createElement('p');
+    empty.className = 'reader-review__empty';
+    empty.textContent = t('intelligenceEvidence');
+    section.append(empty);
+    container.append(section);
+    return;
+  }
+  const list = document.createElement('ul');
+  list.className = 'reader-review__list';
+  for (const item of items) {
+    const evidence = result.evidence.find(entry => entry.id === item.id);
+    const row = document.createElement('li');
+    row.className = `reader-review__item reader-review__item--${item.status}`;
+    row.dataset.reviewId = item.id;
+    const label = document.createElement('strong');
+    label.textContent = result.schema.find(field => field.id === item.id)?.label ?? item.id;
+    const value = document.createElement('p');
+    value.className = 'reader-review__value';
+    value.textContent = item.decision?.value ?? item.value;
+    const meta = document.createElement('p');
+    meta.className = 'reader-review__meta';
+    meta.textContent = `${t('intelligencePage', { page: item.page })} · ${evidence ? intelligenceSourceLabel(evidence.sourceKind) : t('intelligenceUnknownSource')}`;
+    const state = document.createElement('span');
+    state.className = 'reader-review__state';
+    state.textContent = item.status === 'pending'
+      ? evidence ? intelligenceStateLabel(evidence.state) : t('intelligenceLowConfidence')
+      : t('reviewDecision', { decision: item.status });
+    row.append(label, state, value, meta);
+    row.addEventListener('click', event => {
+      if ((event.target as HTMLElement).closest('button,input')) return;
+      scrollToPage(item.page);
+      highlight(item.blockId);
+    });
+    if (item.status === 'pending') {
+      const actions = document.createElement('div');
+      actions.className = 'reader-review__actions';
+      if (reviewEditingId === item.id) {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = item.value;
+        input.className = 'reader-review__edit';
+        input.setAttribute('aria-label', t('reviewEdit'));
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.textContent = t('reviewSave');
+        save.addEventListener('click', event => {
+          event.stopPropagation();
+          const outcome = reviewQueue?.edit(item.id, input.value);
+          if (outcome?.ok) { reviewEditingId = null; statusText(t('reviewDecision', { decision: 'edited' })); }
+          else statusText(t('intelligenceInvalid'), true);
+          renderPanel();
+        });
+        actions.append(input, save);
+      } else {
+        const accept = document.createElement('button');
+        accept.type = 'button'; accept.textContent = t('reviewAccept');
+        accept.addEventListener('click', event => { event.stopPropagation(); reviewQueue?.accept(item.id); statusText(t('reviewDecision', { decision: 'accepted' })); renderPanel(); });
+        const reject = document.createElement('button');
+        reject.type = 'button'; reject.textContent = t('reviewReject');
+        reject.addEventListener('click', event => { event.stopPropagation(); reviewQueue?.reject(item.id); statusText(t('reviewDecision', { decision: 'rejected' })); renderPanel(); });
+        const edit = document.createElement('button');
+        edit.type = 'button'; edit.textContent = t('reviewEdit');
+        edit.addEventListener('click', event => { event.stopPropagation(); reviewEditingId = item.id; renderPanel(); });
+        actions.append(accept, reject, edit);
+      }
+      row.append(actions);
+    }
+    list.append(row);
+  }
+  section.append(list);
+  container.append(section);
 }
 
 function renderIntelligenceResult(container: HTMLElement): void {
@@ -834,6 +1075,7 @@ function renderIntelligenceResult(container: HTMLElement): void {
     missing.append(title, list);
     container.append(missing);
   }
+  renderReviewQueue(container, result);
 }
 
 function renderIntelligence(panel: HTMLElement): void {
@@ -896,6 +1138,9 @@ async function runIntelligence(): Promise<void> {
     await ensurePage(pageNumber, -10);
     const result = extractDocumentIntelligence(intelligenceBlocks(), [...intelligencePageSources.values()], JSON.parse(intelligenceSchemaText));
     intelligenceResult = result;
+    reviewQueue = new ReviewQueue({ schema: result.schema });
+    reviewQueue.fromExtraction(result.evidence, 0.75);
+    reviewEditingId = null;
     intelligenceState = result.evidence.length ? 'ready' : 'empty';
   } catch (error) {
     intelligenceResult = null;
@@ -1151,6 +1396,11 @@ listenForLinkedView(state => {
   $('reading-scroll').scrollTop = row.offsetTop + row.offsetHeight * state.fraction;
 });
 function handleIntent(event: KeyboardEvent) {
+  if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k') {
+    event.preventDefault();
+    if (!commandPaletteDialog.open) openCommandPalette();
+    return;
+  }
   if(document.querySelector('dialog[open]')) return;
   if((event.ctrlKey||event.metaKey)&&!event.altKey&&event.key.toLowerCase()==='o') { event.preventDefault(); input.click(); return; }
   if($('reader').hidden) return;
@@ -1175,6 +1425,7 @@ function handleIntent(event: KeyboardEvent) {
 }
 window.addEventListener('keydown',handleIntent);
 window.addEventListener('beforeunload',()=>{captureReader?.destroy();saveReadingNow();requestController.abort();translationQueue.reset();renderQueue.reset();});
+refreshReadingModeUi();
 applyScale();
 refreshBreadcrumb(); refreshPageStatus(); refreshTransportLabels(); updateProvider();
 subscribe(() => {

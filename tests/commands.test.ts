@@ -204,6 +204,15 @@ describe('palette state and capability execution', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it('binds host actions without changing the reader command descriptors', () => {
+    const run = vi.fn();
+    const registry = readerCommands({ 'reader.zoomReset': run });
+    const palette = new CommandPaletteModel(registry, { capabilityMode: 'local' });
+    palette.open('reader.zoomReset');
+    expect(palette.handleKey({ key: 'Enter' })).toMatchObject({ executed: true });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it('executes an allowed command and closes the palette', () => {
     const registry = new CommandRegistry({ label: candidate => candidate.id });
     const run = vi.fn();
