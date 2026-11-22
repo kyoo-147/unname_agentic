@@ -45,6 +45,7 @@ export interface NormalizeResult {
   report: NormalizeReport;
   transform?: OcrCoordinateTransform;
   steps?: readonly PreprocessStepKind[];
+  dewarp?: DewarpProvenance;
 }
 
 export interface OcrCoordinateTransform {
@@ -54,6 +55,43 @@ export interface OcrCoordinateTransform {
   outputHeight: number;
   sourceToOutput: Matrix2D;
   outputToSource: Matrix2D;
+}
+
+export type DewarpErrorCode = 'invalid-image' | 'invalid-angle' | 'unsupported-angle' | 'pixel-budget';
+
+export class DewarpError extends Error {
+  readonly code: DewarpErrorCode;
+
+  constructor(code: DewarpErrorCode, message: string) {
+    super(message);
+    this.name = 'DewarpError';
+    this.code = code;
+  }
+}
+
+export interface DewarpOptions {
+  /** Refuse a dewarped raster larger than this many pixels. */
+  maxPixels?: number;
+  /** Maximum measured skew accepted as a rotation-only correction. */
+  maxAngleDeg?: number;
+}
+
+export interface DewarpProvenance {
+  status: 'not-needed' | 'applied' | 'unknown';
+  measuredSkewDeg: number;
+  correctionDeg: number;
+  sourceWidth: number;
+  sourceHeight: number;
+  outputWidth: number;
+  outputHeight: number;
+  mappedBackToSource: boolean;
+  reason?: string;
+}
+
+export interface DewarpResult {
+  image: RgbaImage;
+  transform: OcrCoordinateTransform;
+  provenance: DewarpProvenance;
 }
 
 /** Default histogram trim: enough to drop sensor specks and JPEG ringing. */
@@ -126,6 +164,20 @@ function dimensionsOf(image: RgbaImage): Dimensions | undefined {
   const pixels = width * height;
   if (image.data.length < pixels * 4) return undefined;
   return { width, height, pixels };
+}
+
+function strictDimensionsOf(image: RgbaImage): Dimensions {
+  if (!image || typeof image !== 'object' || !(image.data instanceof Uint8ClampedArray)) {
+    throw new DewarpError('invalid-image', 'dewarpForOcr needs RGBA pixel data.');
+  }
+  if (!Number.isInteger(image.width) || !Number.isInteger(image.height) || image.width <= 0 || image.height <= 0) {
+    throw new DewarpError('invalid-image', `dewarpForOcr needs positive integer dimensions, got ${image.width}x${image.height}.`);
+  }
+  const pixels = image.width * image.height;
+  if (image.data.length !== pixels * 4) {
+    throw new DewarpError('invalid-image', `dewarpForOcr needs exactly ${pixels * 4} RGBA bytes, got ${image.data.length}.`);
+  }
+  return { width: image.width, height: image.height, pixels };
 }
 
 function medianOf(values: number[]): number {
@@ -311,9 +363,7 @@ function denoise(image: RgbaImage): RgbaImage {
   return { ...image, data: output };
 }
 
-function deskew(image: RgbaImage, angleDeg: number): { image: RgbaImage; matrix: Matrix2D } {
-  if (Math.abs(angleDeg) < 1e-9) return { image, matrix: identityTransform(image.width, image.height).sourceToOutput };
-  const plan = planDeskew(angleDeg, { width: image.width, height: image.height });
+function renderDeskewPlan(image: RgbaImage, plan: ReturnType<typeof planDeskew>): { image: RgbaImage; matrix: Matrix2D } {
   const output = new Uint8ClampedArray(plan.crop.width * plan.crop.height * 4);
   for (let offset = 0; offset < output.length; offset += 4) {
     output[offset] = 255;
@@ -338,6 +388,11 @@ function deskew(image: RgbaImage, angleDeg: number): { image: RgbaImage; matrix:
     }
   }
   return { image: { data: output, width: plan.crop.width, height: plan.crop.height }, matrix: plan.matrix };
+}
+
+function deskew(image: RgbaImage, correctionDeg: number): { image: RgbaImage; matrix: Matrix2D } {
+  if (Math.abs(correctionDeg) < 1e-9) return { image, matrix: identityTransform(image.width, image.height).sourceToOutput };
+  return renderDeskewPlan(image, planDeskew(-correctionDeg, { width: image.width, height: image.height }));
 }
 
 function binarize(image: RgbaImage): RgbaImage {
@@ -379,6 +434,78 @@ function scaleMatrix(matrix: Matrix2D, scale: number): Matrix2D {
   return { a: matrix.a * scale, b: matrix.b * scale, c: matrix.c * scale, d: matrix.d * scale, e: matrix.e * scale, f: matrix.f * scale };
 }
 
+/**
+ * Applies the existing rotation-only deskew executor to a validated raster.
+ * The angle is the measured clockwise skew, not a guessed perspective warp.
+ * Quarter turns and large tilts are refused because they need page rotation or
+ * a perspective correction, not a silent OCR transform.
+ */
+export function dewarpForOcr(image: RgbaImage, measuredSkewDeg: number, options: DewarpOptions = {}): DewarpResult {
+  const { width, height } = strictDimensionsOf(image);
+  if (typeof measuredSkewDeg !== 'number' || !Number.isFinite(measuredSkewDeg)) {
+    throw new DewarpError('invalid-angle', `dewarpForOcr needs a finite skew angle, got ${String(measuredSkewDeg)}.`);
+  }
+  const maxAngleDeg = options.maxAngleDeg ?? 15;
+  if (!Number.isFinite(maxAngleDeg) || maxAngleDeg <= 0 || maxAngleDeg >= 90) {
+    throw new DewarpError('invalid-angle', `dewarpForOcr maxAngleDeg must be finite and in (0, 90), got ${String(maxAngleDeg)}.`);
+  }
+  const maxPixels = options.maxPixels ?? MAX_SCALED_PIXELS;
+  if (!Number.isFinite(maxPixels) || maxPixels <= 0) {
+    throw new DewarpError('pixel-budget', `dewarpForOcr maxPixels must be positive and finite, got ${String(maxPixels)}.`);
+  }
+  if (Math.abs(measuredSkewDeg) < 1e-9) {
+    return {
+      image,
+      transform: identityTransform(width, height),
+      provenance: {
+        status: 'not-needed',
+        measuredSkewDeg: 0,
+        correctionDeg: 0,
+        sourceWidth: width,
+        sourceHeight: height,
+        outputWidth: width,
+        outputHeight: height,
+        mappedBackToSource: true,
+      },
+    };
+  }
+  if (Math.abs(measuredSkewDeg) >= 90 || Math.abs(measuredSkewDeg) > maxAngleDeg) {
+    throw new DewarpError(
+      'unsupported-angle',
+      `dewarpForOcr refuses ${measuredSkewDeg}°; use page rotation or a perspective correction for this angle.`,
+    );
+  }
+  const plan = planDeskew(measuredSkewDeg, { width, height });
+  const outputPixels = plan.crop.width * plan.crop.height;
+  if (outputPixels > maxPixels) {
+    throw new DewarpError('pixel-budget', `dewarpForOcr output ${outputPixels} pixels exceeds the ${maxPixels} pixel budget.`);
+  }
+  const rendered = renderDeskewPlan(image, plan);
+  return {
+    image: rendered.image,
+    transform: {
+      sourceWidth: width,
+      sourceHeight: height,
+      outputWidth: rendered.image.width,
+      outputHeight: rendered.image.height,
+      sourceToOutput: rendered.matrix,
+      outputToSource: invertMap(rendered.matrix),
+    },
+    provenance: {
+      status: 'applied',
+      measuredSkewDeg,
+      correctionDeg: plan.angle,
+      sourceWidth: width,
+      sourceHeight: height,
+      outputWidth: rendered.image.width,
+      outputHeight: rendered.image.height,
+      mappedBackToSource: true,
+    },
+  };
+}
+
+export const dewarpImageForOcr = dewarpForOcr;
+
 export function toGrayscale(image: RgbaImage): RgbaImage {
   const dimensions = dimensionsOf(image);
   if (!dimensions) return emptyImage();
@@ -416,7 +543,23 @@ export function estimateGlyphHeight(image: RgbaImage): number {
 
 export function normalizeForOcr(image: RgbaImage, options: NormalizeOptions = {}): NormalizeResult {
   const dimensions = dimensionsOf(image);
-  if (!dimensions) return { image: emptyImage(), report: { inverted: false, contrastGain: 1, scale: 1 } };
+  if (!dimensions) {
+    return {
+      image: emptyImage(),
+      report: { inverted: false, contrastGain: 1, scale: 1 },
+      dewarp: {
+        status: 'unknown',
+        measuredSkewDeg: 0,
+        correctionDeg: 0,
+        sourceWidth: 0,
+        sourceHeight: 0,
+        outputWidth: 0,
+        outputHeight: 0,
+        mappedBackToSource: false,
+        reason: 'source pixel data is unavailable or malformed',
+      },
+    };
+  }
   const { width, height, pixels } = dimensions;
   const plane = luminancePlane(image, pixels);
   const histogram = histogramOf(plane);
@@ -442,6 +585,16 @@ export function normalizeForOcr(image: RgbaImage, options: NormalizeOptions = {}
   let spatial = stretched;
   let spatialMatrix: Matrix2D = identityTransform(width, height).sourceToOutput;
   const steps: PreprocessStepKind[] = [];
+  let dewarp: DewarpProvenance = {
+    status: 'not-needed',
+    measuredSkewDeg: 0,
+    correctionDeg: 0,
+    sourceWidth: width,
+    sourceHeight: height,
+    outputWidth: width,
+    outputHeight: height,
+    mappedBackToSource: true,
+  };
   for (const step of plan.steps) {
     if (step.kind === 'none') continue;
     steps.push(step.kind);
@@ -454,6 +607,16 @@ export function normalizeForOcr(image: RgbaImage, options: NormalizeOptions = {}
       const corrected = deskew(spatial, step.angleDeg);
       spatial = corrected.image;
       spatialMatrix = corrected.matrix;
+      dewarp = {
+        status: 'applied',
+        measuredSkewDeg: -step.angleDeg,
+        correctionDeg: step.angleDeg,
+        sourceWidth: width,
+        sourceHeight: height,
+        outputWidth: spatial.width,
+        outputHeight: spatial.height,
+        mappedBackToSource: true,
+      };
       continue;
     }
     if (step.kind === 'binarize') spatial = binarize(spatial);
@@ -472,5 +635,6 @@ export function normalizeForOcr(image: RgbaImage, options: NormalizeOptions = {}
       outputToSource: invertMap(sourceToOutput),
     },
     steps,
+    dewarp,
   };
 }

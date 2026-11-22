@@ -3,7 +3,7 @@ import type { PageModel } from '../core/types';
 import type { OcrBbox, OcrEngine, OcrImage, OcrProgress, OcrWord } from './engine';
 import { DEFAULT_OCR_LANGUAGES, isImageData } from './engine';
 import { blocksToPageModel, mergeWordsToBlocks, type OcrBlock } from './geometry';
-import { normalizeForOcr, type NormalizeReport, type OcrCoordinateTransform, type RgbaImage } from './preprocess';
+import { normalizeForOcr, type DewarpProvenance, type NormalizeReport, type OcrCoordinateTransform, type RgbaImage } from './preprocess';
 import type { PreprocessStepKind } from '../core/preprocess';
 
 export type OcrScript = 'latin' | 'han' | 'kana' | 'hangul' | 'cyrillic' | 'arabic' | 'thai' | 'devanagari' | 'unknown';
@@ -31,6 +31,7 @@ export interface OcrRunInfo {
   normalization: NormalizeReport;
   preprocessingSteps?: readonly PreprocessStepKind[];
   coordinateTransform?: OcrCoordinateTransform;
+  dewarp?: DewarpProvenance;
 }
 
 export interface OcrPageModel extends PageModel {
@@ -119,6 +120,20 @@ function identityReport(): NormalizeReport {
   return { inverted: false, contrastGain: 1, scale: 1 };
 }
 
+function unknownDewarp(reason: string): DewarpProvenance {
+  return {
+    status: 'unknown',
+    measuredSkewDeg: 0,
+    correctionDeg: 0,
+    sourceWidth: 0,
+    sourceHeight: 0,
+    outputWidth: 0,
+    outputHeight: 0,
+    mappedBackToSource: false,
+    reason,
+  };
+}
+
 function rgbaFromPixels(pixels: ImageData): RgbaImage {
   return { data: pixels.data, width: pixels.width, height: pixels.height };
 }
@@ -188,6 +203,7 @@ interface PreparedImage {
   width: number;
   height: number;
   transform?: OcrCoordinateTransform;
+  dewarp?: DewarpProvenance;
   steps: readonly PreprocessStepKind[];
 }
 
@@ -205,11 +221,11 @@ export async function prepareImageForOcr(image: OcrImage): Promise<PreparedImage
     pixels = undefined;
   }
   if (!pixels || !isImageData(pixels)) {
-    return { image, report: identityReport(), width: 0, height: 0, steps: [] };
+    return { image, report: identityReport(), width: 0, height: 0, dewarp: unknownDewarp('source pixels are unavailable'), steps: [] };
   }
   const normalized = normalizeForOcr(rgbaFromPixels(pixels));
   if (!(normalized.image.width > 0) || !(normalized.image.height > 0)) {
-    return { image, report: identityReport(), width: 0, height: 0, steps: [] };
+    return { image, report: identityReport(), width: 0, height: 0, dewarp: unknownDewarp('source pixels are malformed'), steps: [] };
   }
   return {
     image: createImageData(normalized.image.data, normalized.image.width, normalized.image.height),
@@ -217,6 +233,7 @@ export async function prepareImageForOcr(image: OcrImage): Promise<PreparedImage
     width: normalized.image.width,
     height: normalized.image.height,
     transform: normalized.transform,
+    dewarp: normalized.dewarp,
     steps: normalized.steps ?? [],
   };
 }
@@ -327,6 +344,7 @@ export async function runOcr(request: OcrRequest): Promise<OcrPageModel> {
       normalization: prepared.report,
       preprocessingSteps: prepared.steps,
       coordinateTransform: prepared.transform,
+      dewarp: prepared.dewarp,
     },
   };
 }
