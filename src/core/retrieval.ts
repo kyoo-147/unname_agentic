@@ -103,7 +103,9 @@ export interface SearchHit {
 /** Whether a local embedding adapter can currently produce vectors. */
 export type EmbeddingStatus =
   | { state: 'available'; model: string }
-  | { state: 'unavailable'; reason: string };
+  | { state: 'unavailable'; reason: string }
+  | { state: 'incompatible'; reason: string }
+  | { state: 'unknown'; reason: string };
 
 /** Replaceable local-only embedding seam. It never performs network I/O here. */
 export interface EmbeddingAdapter {
@@ -736,9 +738,9 @@ export function search(target: RetrievalIndex, query: string, options: SearchOpt
 /**
  * Runs lexical BM25 and an optional local vector adapter, retaining both scores.
  *
- * Vector availability is explicit. When the adapter is unavailable, this function
- * returns lexical results with `vectorScore: null` and `retrievalMethod: 'lexical'`.
- * A lexical result is never relabelled as an embedding result.
+ * Vector availability is explicit. When the adapter is unavailable, incompatible or
+ * unknown, this function returns lexical results with `vectorScore: null` and
+ * `retrievalMethod: 'lexical'`. A lexical result is never relabelled as an embedding result.
  */
 export function hybridSearch(
   target: RetrievalIndex,
@@ -756,19 +758,37 @@ export function hybridSearch(
   const lexicalById = new Map(lexical.map(hit => [hit.chunk.id, hit]));
 
   const adapter = options.embedding;
-  const embeddingStatus: EmbeddingStatus = adapter?.status ?? {
-    state: 'unavailable',
-    reason: 'no local embedding adapter supplied',
-  };
+  let embeddingStatus = normalizeEmbeddingStatus(adapter?.status, adapter === undefined
+    ? { state: 'unavailable', reason: 'no local embedding adapter supplied' }
+    : { state: 'unknown', reason: 'local embedding adapter status was not available' });
   const vectorById = new Map<string, number>();
   let queryVector: readonly number[] | null = null;
   if (adapter && embeddingStatus.state === 'available') {
     queryVector = safeEmbedding(adapter, query);
-    if (queryVector !== null) {
+    if (queryVector === null) {
+      embeddingStatus = { state: 'unknown', reason: 'local embedding adapter returned no valid query vector' };
+    } else {
+      let incompatible = false;
+      let unknown = false;
       for (const chunk of candidates) {
         const vector = safeEmbedding(adapter, chunk.text);
-        const similarity = vector === null ? null : cosineSimilarity(queryVector, vector);
+        if (vector === null) {
+          unknown = true;
+          continue;
+        }
+        if (vector.length !== queryVector.length) {
+          incompatible = true;
+          continue;
+        }
+        const similarity = cosineSimilarity(queryVector, vector);
         if (similarity !== null) vectorById.set(chunk.id, similarity);
+      }
+      if (incompatible) {
+        embeddingStatus = { state: 'incompatible', reason: 'local embedding vectors have incompatible dimensions' };
+        vectorById.clear();
+      } else if (unknown) {
+        embeddingStatus = { state: 'unknown', reason: 'local embedding adapter returned an invalid chunk vector' };
+        vectorById.clear();
       }
     }
   }
@@ -841,6 +861,26 @@ function cosineSimilarity(left: readonly number[], right: readonly number[]): nu
   return denominator > 0 ? dot / denominator : null;
 }
 
+function normalizeEmbeddingStatus(
+  value: unknown,
+  fallback: EmbeddingStatus,
+): EmbeddingStatus {
+  if (typeof value !== 'object' || value === null) return fallback;
+  const state = (value as { state?: unknown }).state;
+  if (state === 'available') {
+    const model = (value as { model?: unknown }).model;
+    return typeof model === 'string' && model.trim().length > 0
+      ? { state: 'available', model: model.trim() }
+      : { state: 'unknown', reason: 'local embedding adapter omitted its model identity' };
+  }
+  if (state === 'unavailable' || state === 'incompatible' || state === 'unknown') {
+    const reason = (value as { reason?: unknown }).reason;
+    return typeof reason === 'string' && reason.trim().length > 0
+      ? { state, reason: reason.trim() }
+      : { state: 'unknown', reason: 'local embedding adapter omitted its status reason' };
+  }
+  return { state: 'unknown', reason: 'local embedding adapter returned an unknown status' };
+}
 function nonNegative(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
 }

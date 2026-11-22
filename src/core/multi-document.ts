@@ -118,8 +118,10 @@ const CHUNK_TARGET_CHARS = 900;
 export interface ContextBlock {
   documentId: string;
   title: string;
-  /** 1-based page the excerpt came from. */
+  /** 1-based page the excerpt starts on. */
   page: number;
+  /** Every source page represented by the excerpt, when a chunk spans pages. */
+  sourcePages?: number[];
   /** Every block the excerpt covers; a citation to this block names all of them. */
   blockIds: string[];
   /** The text shown to the model, trimmed to the budget when needed. */
@@ -362,6 +364,13 @@ const MARKER_PATTERN = /\[\[doc:(.+?) page (\d{1,9})(?: block ([A-Za-z0-9._-]{1,
  * reported, not repaired. Recognised markers are removed from `answer`, leaving the
  * prose a reader can show; when no marker matches, `answer` is the input unchanged.
  */
+function sourcePagesOf(block: ContextBlock): number[] {
+  const pages = Array.isArray(block.sourcePages)
+    ? block.sourcePages.filter(page => Number.isInteger(page) && page > 0)
+    : [];
+  if (!pages.includes(block.page) && Number.isInteger(block.page) && block.page > 0) pages.push(block.page);
+  return [...new Set(pages)].sort((left, right) => left - right);
+}
 export function parseAnswer(answer: string, context: readonly ContextBlock[]): ParsedAnswer {
   const text = typeof answer === 'string' ? answer : '';
   const blocks = Array.isArray(context) ? context : [];
@@ -383,7 +392,7 @@ export function parseAnswer(answer: string, context: readonly ContextBlock[]): P
     }
     const named = blocks.filter(
       block => block.documentId === documentId
-        && block.page === page
+        && sourcePagesOf(block).includes(page)
         && (blockId.length === 0 || block.blockIds.includes(blockId)),
     );
     const citation: AnswerCitation = {

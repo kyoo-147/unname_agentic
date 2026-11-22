@@ -33,11 +33,15 @@ import {
   type CitationMarker,
   type ResolvedCitation,
 } from './citations';
-import type { BlockType, DocumentIR } from './ir';
+import type { Block, BlockType, DocumentIR } from './ir';
 import type { Rect } from './types';
 
-/** Why caller-owned semantic retrieval is unavailable without fabricating evidence. */
-export type SemanticUnavailableReason = 'offline-mode' | 'no-provider' | 'provider-error' | 'invalid-result';
+/** Why caller-owned semantic retrieval cannot contribute trusted evidence. */
+export type SemanticUnavailableReason = 'offline-mode' | 'no-provider' | 'provider-error' | 'invalid-result' | 'cancelled';
+
+export type SemanticIncompatibleReason = 'invalid-result' | 'duplicate-result' | 'unknown-chunk' | 'invalid-score';
+
+export type SemanticUnknownReason = 'unknown-result';
 
 export interface SemanticHit {
   chunkId: string;
@@ -46,12 +50,15 @@ export interface SemanticHit {
 
 export type SemanticRetrieval =
   | { status: 'available'; hits: SemanticHit[] }
-  | { status: 'unavailable'; reason: SemanticUnavailableReason; detail?: string };
+  | { status: 'unavailable'; reason: SemanticUnavailableReason; detail?: string }
+  | { status: 'incompatible'; reason: SemanticIncompatibleReason; detail?: string }
+  | { status: 'unknown'; reason: SemanticUnknownReason; detail?: string };
 
 export interface SemanticRetrievalRequest {
   question: string;
   chunks: readonly Chunk[];
   limit: number;
+  signal?: AbortSignal;
 }
 
 /** The host owns the provider. This service never downloads models or opens a network. */
@@ -163,6 +170,7 @@ export interface RagPrepareOptions {
   maxToolSteps?: number;
   toolContext?: ToolCallContext;
   toolCalls?: readonly RagToolCall[];
+  signal?: AbortSignal;
 }
 
 /** A prepared request. It contains no model output and performs no I/O. */
@@ -186,7 +194,8 @@ export type RagStatus =
   | 'weak'
   | 'abstain'
   | 'unsupported-citation'
-  | 'tool-policy-rejected';
+  | 'tool-policy-rejected'
+  | 'cancelled';
 
 /** A citation resolved to every source block represented by a context block. */
 export interface RagCitation extends ResolvedCitation {
@@ -260,6 +269,7 @@ export function createRagService(workspace: Workspace, defaults: RagServiceOptio
     },
     run(question, transport, options = {}) {
       const prepared = prepareRequest(documents, question, mergeOptions(defaultOptions, options));
+      if (isCancelled(prepared)) return resultForCancellation(prepared);
       if (hasToolPolicyFailure(prepared.toolTrace)) return resultForPolicyFailure(prepared);
       if (prepared.assessment.verdict === 'abstain') return resultForAbstention(prepared);
       return completeAnswer(prepared, transport({
@@ -293,7 +303,7 @@ function prepareRequest(
   const prompt = formatPrompt(fencedContext(context), text);
   const toolTrace = auditToolCalls(options.toolCalls, options);
 
-  const selected = new Set(context.flatMap(block => `${block.documentId}\u0000${block.blockIds.join('\u0001')}\u0000${block.page}`));
+  const selected = new Set(context.map(block => block.chunkId).filter((chunkId): chunkId is string => typeof chunkId === 'string'));
   const retrievalHits = ranked.hits.map(hit => ({
     documentId: hit.chunk.documentId,
     chunkId: hit.chunk.id,
@@ -309,9 +319,10 @@ function prepareRequest(
     retrievalMethod: hit.retrievalMethod,
     embeddingStatus: hit.embeddingStatus,
     matchedTerms: [...hit.matchedTerms],
-    selected: selected.has(`${hit.chunk.documentId}\u0000${hit.chunk.blockIds.join('\u0001')}\u0000${hit.chunk.page}`),
+    selected: selected.has(hit.chunk.id),
   }));
 
+  const embeddingStatus = ranked.hits.find(hit => hit.embeddingStatus.state !== 'available')?.embeddingStatus ?? options.embedding.status;
   return {
     question: text,
     context,
@@ -323,8 +334,8 @@ function prepareRequest(
     selection: options.selection,
     toolTrace,
     abstainLanguage: options.abstainLanguage,
-    embeddingStatus: options.embedding.status,
-    retrievalMethod: options.embedding.status.state === 'available' ? 'hybrid' : 'lexical',
+    embeddingStatus,
+    retrievalMethod: embeddingStatus.state === 'available' ? 'hybrid' : 'lexical',
   };
 }
 
@@ -333,6 +344,7 @@ function completeAnswer(
   answer: string,
   documents: readonly WorkspaceDocumentView[],
 ): RagResult {
+  if (isCancelled(prepared)) return resultForCancellation(prepared);
   if (hasToolPolicyFailure(prepared.toolTrace)) return resultForPolicyFailure(prepared);
   if (prepared.assessment.verdict === 'abstain') return resultForAbstention(prepared, answer);
 
@@ -379,6 +391,19 @@ function resultForAbstention(prepared: RagPrepared, rawAnswer: string | null = n
   };
 }
 
+function resultForCancellation(prepared: RagPrepared): RagResult {
+  return {
+    ...prepared,
+    status: 'cancelled',
+    rawAnswer: null,
+    answer: null,
+    citations: [],
+    unsupportedCitations: [],
+    guard: null,
+    abstentionMessage: '',
+  };
+}
+
 function resultForPolicyFailure(prepared: RagPrepared): RagResult {
   return {
     ...prepared,
@@ -416,6 +441,7 @@ interface NormalizedPrepareOptions {
   vectorWeight: number;
   toolContext?: ToolCallContext;
   toolCalls?: readonly RagToolCall[];
+  signal?: AbortSignal;
 }
 
 function normalizeDefaults(options: RagServiceOptions): NormalizedPrepareOptions {
@@ -437,6 +463,7 @@ function normalizeDefaults(options: RagServiceOptions): NormalizedPrepareOptions
     vectorWeight: nonNegative(options.vectorWeight, 0.5),
     toolContext: undefined,
     toolCalls: undefined,
+    signal: undefined,
   };
 }
 
@@ -464,6 +491,7 @@ function mergeOptions(
     vectorWeight: nonNegative(options.vectorWeight, defaults.vectorWeight),
     toolContext: options.toolContext ?? defaults.toolContext,
     toolCalls: options.toolCalls ?? defaults.toolCalls,
+    signal: options.signal ?? defaults.signal,
   };
 }
 
@@ -517,9 +545,10 @@ function matchesFilters(chunk: Chunk, ir: DocumentIR, filters: RagFilters, quest
   if (documentIds !== undefined && !documentIds.includes(chunk.documentId)) return false;
   if (filters.metadata?.languages !== undefined && !filters.metadata.languages.includes(ir.language)) return false;
 
+  const chunkPages = pagesForChunk(chunk, ir);
   const pages = filters.pages;
-  if (pages !== undefined && !pages.includes(chunk.page)) return false;
-  if (question.page !== undefined && chunk.page !== question.page) return false;
+  if (pages !== undefined && !chunkPages.some(page => pages.includes(page))) return false;
+  if (question.page !== undefined && !chunkPages.includes(question.page)) return false;
 
   const blockIds = filters.blockIds;
   if (blockIds !== undefined && !chunk.blockIds.some(blockId => blockIds.includes(blockId))) return false;
@@ -532,11 +561,24 @@ function matchesFilters(chunk: Chunk, ir: DocumentIR, filters: RagFilters, quest
   return true;
 }
 
+function blocksForChunk(chunk: Chunk, ir: DocumentIR): Block[] {
+  const ids = new Set(chunk.blockIds);
+  return (Array.isArray(ir.blocks) ? ir.blocks : [])
+    .filter(block => block && ids.has(block.id))
+    .sort((left, right) => left.readingOrder - right.readingOrder);
+}
+
+function pagesForChunk(chunk: Chunk, ir: DocumentIR): number[] {
+  const pages = new Set<number>();
+  for (const block of blocksForChunk(chunk, ir)) pages.add(block.page);
+  if (pages.size === 0 && Number.isFinite(chunk.page)) pages.add(chunk.page);
+  return [...pages].sort((left, right) => left - right);
+}
 function matchesSelection(chunk: Chunk, ir: DocumentIR, selection: RagSelection | null): boolean {
   if (!selection) return false;
-  if (selection.page !== undefined && chunk.page !== selection.page) return false;
+  if (selection.page !== undefined && !blocksForChunk(chunk, ir).some(block => block.page === selection.page)) return false;
   if (selection.kinds !== undefined && !selection.kinds.includes(chunk.kind)) return false;
-  const blocks = ir.blocks.filter(block => chunk.blockIds.includes(block.id));
+  const blocks = blocksForChunk(chunk, ir);
   if (selection.blockIds !== undefined && !blocks.some(block => selection.blockIds?.includes(block.id))) return false;
   if (selection.blockTypes !== undefined && !blocks.some(block => selection.blockTypes?.includes(block.type))) return false;
   const region = selection.region;
@@ -568,31 +610,46 @@ function resolveSemanticRetrieval(
   question: string,
   options: NormalizedPrepareOptions,
 ): SemanticRetrieval {
+  if (options.signal?.aborted) return { status: 'unavailable', reason: 'cancelled' };
   if (options.offline) return { status: 'unavailable', reason: 'offline-mode' };
   if (!options.semanticRetriever) return { status: 'unavailable', reason: 'no-provider' };
   let result: SemanticRetrieval;
   try {
-    result = options.semanticRetriever({ question, chunks, limit: options.semanticTopK });
+    result = options.semanticRetriever({
+      question,
+      chunks: chunks.map(chunk => ({ ...chunk, blockIds: [...chunk.blockIds], headingPath: [...chunk.headingPath] })),
+      limit: options.semanticTopK,
+      signal: options.signal,
+    });
   } catch {
     return { status: 'unavailable', reason: 'provider-error' };
   }
-  if (!result || (result.status !== 'available' && result.status !== 'unavailable')) {
-    return { status: 'unavailable', reason: 'invalid-result' };
+  if (options.signal?.aborted) return { status: 'unavailable', reason: 'cancelled' };
+  if (!result || !['available', 'unavailable', 'incompatible', 'unknown'].includes(result.status)) {
+    return { status: 'incompatible', reason: 'invalid-result' };
   }
-  if (result.status === 'unavailable') return result;
-  if (!Array.isArray(result.hits)) return { status: 'unavailable', reason: 'invalid-result' };
+  if (result.status === 'unavailable' || result.status === 'incompatible' || result.status === 'unknown') return result;
+  if (!Array.isArray(result.hits)) return { status: 'incompatible', reason: 'invalid-result' };
   const chunkIds = new Set(chunks.map(chunk => chunk.id));
-  const deduped = new Map<string, SemanticHit>();
+  const seen = new Set<string>();
   for (const hit of result.hits) {
-    if (!hit || typeof hit.chunkId !== 'string' || !chunkIds.has(hit.chunkId) || !Number.isFinite(hit.score)) {
-      return { status: 'unavailable', reason: 'invalid-result' };
+    if (!hit || typeof hit.chunkId !== 'string') {
+      return { status: 'incompatible', reason: 'invalid-result' };
     }
-    const previous = deduped.get(hit.chunkId);
-    if (!previous || hit.score > previous.score) deduped.set(hit.chunkId, { chunkId: hit.chunkId, score: hit.score });
+    if (!chunkIds.has(hit.chunkId)) {
+      return { status: 'incompatible', reason: 'unknown-chunk' };
+    }
+    if (!Number.isFinite(hit.score) || hit.score < 0 || hit.score > 1) {
+      return { status: 'incompatible', reason: 'invalid-score' };
+    }
+    if (seen.has(hit.chunkId)) {
+      return { status: 'incompatible', reason: 'duplicate-result' };
+    }
+    seen.add(hit.chunkId);
   }
   return {
     status: 'available',
-    hits: [...deduped.values()]
+    hits: result.hits.map(hit => ({ chunkId: hit.chunkId, score: hit.score }))
       .sort((left, right) => right.score - left.score || compareText(left.chunkId, right.chunkId))
       .slice(0, options.semanticTopK),
   };
@@ -779,6 +836,10 @@ function selectContext(
     documentId: entry.hit.chunk.documentId,
     title: titles.get(entry.hit.chunk.documentId) ?? entry.hit.chunk.documentId,
     page: entry.hit.chunk.page,
+    sourcePages: pagesForChunk(
+      entry.hit.chunk,
+      documents.find(document => document.id === entry.hit.chunk.documentId)?.ir ?? { blocks: [] } as DocumentIR,
+    ),
     blockIds: [...entry.hit.chunk.blockIds],
     excerpt: entry.excerpt,
     rank: index + 1,
@@ -825,7 +886,7 @@ function resolveRagCitations(
     const document = byId.get(citation.documentId);
     const blocks = context.filter(
       block => block.documentId === citation.documentId
-        && block.page === citation.page
+        && (block.sourcePages?.includes(citation.page) ?? block.page === citation.page)
         && (citation.blockId === undefined || block.blockIds.includes(citation.blockId)),
     );
     if (!document || blocks.length === 0) {
@@ -864,7 +925,7 @@ function resolveRagCitations(
           documentId: citation.documentId,
           revisionId: document.ir.revisionId,
           sourceSha256: document.ir.sourceSha256,
-          chunkId: `${citation.documentId}\u0000${blockId}`,
+          chunkId: contextBlock.chunkId ?? `${citation.documentId}\u0000${blockId}`,
         });
       }
     }
@@ -911,6 +972,9 @@ function auditToolCalls(calls: readonly RagToolCall[] | undefined, options: Norm
   return trace;
 }
 
+function isCancelled(prepared: RagPrepared): boolean {
+  return prepared.semantic.status === 'unavailable' && prepared.semantic.reason === 'cancelled';
+}
 function hasToolPolicyFailure(trace: readonly RagToolTrace[]): boolean {
   return trace.some(event => event.status !== 'allowed');
 }
