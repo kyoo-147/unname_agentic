@@ -62,6 +62,24 @@ impl LiveHost {
 impl Drop for LiveHost { fn drop(&mut self) { let _ = self.child.kill(); let _ = self.child.wait(); } }
 fn command(sequence: u64) -> Value { json!({"version":1,"kind":"view_state","binding":binding(),"sequence":sequence,"page":page()}) }
 #[test]
+fn resume_reuses_committed_session_and_reports_annotation_conflicts() {
+    let inbox = Inbox::new();
+    let mut host = LiveHost::new(&inbox);
+    host.upload();
+    let resume = host.request(json!({"type":"resume","binding":binding()}));
+    assert_eq!(resume["ok"], true);
+    assert_eq!(resume["status"], "resumed");
+    assert_eq!(resume["sequence"], 0);
+    let annotation = json!({"id":"a1","page":1,"x":0.1,"y":0.2,"width":0.3,"height":0.1,"kind":"highlight","text":"hello","base_revision":0});
+    let applied = host.request(json!({"type":"annotation","binding":binding(),"annotation":annotation}));
+    assert_eq!(applied["status"], "applied");
+    assert_eq!(applied["revision"], 1);
+    let conflict = host.request(json!({"type":"annotation","binding":binding(),"annotation":{"id":"a1","page":1,"x":0.1,"y":0.2,"width":0.3,"height":0.1,"kind":"highlight","text":"stale","base_revision":0}}));
+    assert_eq!(conflict["status"], "conflict");
+    assert_eq!(conflict["revision"], 1);
+}
+
+#[test]
 fn poll_reads_only_current_fixed_command_and_rejects_replay() {
     let inbox = Inbox::new(); let mut host = LiveHost::new(&inbox); host.upload();
     let directory = inbox.entries().pop().unwrap();
@@ -101,6 +119,19 @@ fn framed_hello_is_available_without_creating_inbox_files() {
     assert!(inbox.entries().is_empty());
 }
 #[test]
+fn replaces_latest_event_when_multiple_page_updates_arrive() {
+    let inbox = Inbox::new(); let pdf = b"%PDF-1.7\nsynthetic test fixture\n%%EOF";
+    let page_one = json!({"type":"page","binding":binding(),"page":{"page":1,"page_count":5,"fraction":0.1,"zoom":1.0}});
+    let page_two = json!({"type":"page","binding":binding(),"page":{"page":3,"page_count":5,"fraction":0.8,"zoom":1.5}});
+    let (reply, success) = run(&inbox, messages(&[begin(pdf), chunk(0, pdf), json!({"type":"commit","binding":binding()}), page_one, page_two]));
+    assert!(success); assert!(reply.iter().all(|value| value["ok"] == true));
+    let directory = inbox.entries().into_iter().find(|path| path.file_name().unwrap().to_string_lossy().starts_with("ready-")).unwrap();
+    let latest: Value = serde_json::from_slice(&fs::read(directory.join("latest.json")).unwrap()).unwrap();
+    assert_eq!(latest["kind"], "session_ended"); assert_eq!(latest["sequence"], 3);
+    assert_eq!(latest["reason"], "disconnected");
+}
+
+#[test]
 fn publishes_pdf_and_session_together_then_normalizes_matching_page_event() {
     let inbox = Inbox::new(); let pdf = b"%PDF-1.7\nsynthetic test fixture\n%%EOF";
     let follow = json!({"type":"page","binding":binding(),"page":{"page":999,"page_count":5,"fraction":2.0,"zoom":50.0}});
@@ -131,6 +162,7 @@ fn rejects_chunk_order_binding_oversize_encoding_and_digest_mismatch() {
         vec![begin(pdf), json!({"type":"chunk","binding":other,"index":0,"data":STANDARD.encode(pdf)})],
         vec![begin(pdf), chunk(0,&vec![0;192*1024+1])],
         vec![begin(pdf), json!({"type":"chunk","binding":binding(),"index":0,"data":"not base64!"})],
+        vec![begin(b"%PDF-1.7\nfixture"), json!({"type":"chunk","binding":binding(),"index":0,"data":STANDARD.encode(b"%PDF-1.7\nfixture").trim_end_matches('=').to_string()})],
         vec![begin(pdf), chunk(0,b"%PDF-1.7\nwrong!!"), json!({"type":"commit","binding":binding()})],
         vec![begin(pdf), json!({"type":"commit","binding":binding()})],
         vec![begin(pdf), chunk(0,pdf), chunk(0,pdf)],

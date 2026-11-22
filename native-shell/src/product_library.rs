@@ -23,9 +23,10 @@ mod tests {
 
     #[test]
     fn validates_pdf_signature_and_extension_before_rendering() {
-        assert!(validate_pdf(Path::new("report.PDF"), b"%PDF-1.7\n").is_ok());
+        assert!(validate_pdf(Path::new("report.PDF"), b"%PDF-1.7\n%%EOF").is_ok());
         assert!(validate_pdf(Path::new("report.pdf"), b"not a PDF").is_err());
         assert!(validate_pdf(Path::new("report.txt"), b"%PDF-1.7").is_err());
+        assert!(validate_pdf(Path::new("report.pdf"), b"%PDF-1.7\ntruncated").is_err());
     }
 
     /// 两个不同的 PDF 必须是两条记录，各自保留自己的源文件。
@@ -93,6 +94,7 @@ fn pdf_title(path: &Path) -> String {
 fn validate_pdf(path: &Path, bytes: &[u8]) -> Result<()> {
     anyhow::ensure!(path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")), "Choose a PDF file");
     anyhow::ensure!(bytes.iter().take(1024).copied().collect::<Vec<_>>().windows(5).any(|w| w == b"%PDF-"), "This file is not a PDF");
+    anyhow::ensure!(bytes.len() >= 5 && bytes.windows(5).any(|w| w == b"%%EOF"), "This PDF is incomplete (missing %%EOF)");
     Ok(())
 }
 

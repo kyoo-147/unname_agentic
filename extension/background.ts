@@ -26,7 +26,8 @@
 import { MirrorController, pdfPath, sourceUrl, type MirrorSession } from './controller';
 import { createTranslationTransport } from '../src/core/translation';
 import type { TranslationSettings } from '../src/core/types';
-import { NativeCompanion, NATIVE_HOST, normalizeNativePage, sameSession, COMPANION_UNAVAILABLE } from './native-bridge';
+import { NativeCompanion, NATIVE_HOST, normalizeNativePage, sameSession, COMPANION_UNAVAILABLE, type NativeAnnotation, type NativeAnnotationKind, type NativeTransferProgress } from './native-bridge';
+import { readCaptureParams } from '../src/ui/capture';
 
 const viewerUrl = chrome.runtime.getURL('index.html');
 const popupUrl = chrome.runtime.getURL('popup.html');
@@ -36,12 +37,14 @@ const CONTEXT_MENU_ID = 'mirror-open';
 const CAPTURE_PREFIX = 'data:image/png;base64,';
 const CAPTURE_MAX_CHARS = 20_000_000;
 const CAPTURE_TTL_MS = 120_000;
+const CAPTURE_STORAGE_PREFIX = 'mirror:capture:';
+const PDF_TRANSFER_CHUNK_SIZE = 256 * 1024;
 const notices = {
   invalidSource: 'Chỉ mở bản dịch cho tệp PDF. Hãy mở tệp PDF rồi chọn lại.',
   enabled: 'Đã bật tự động mở bản dịch.',
   disabled: 'Đã tắt tự động mở bản dịch.',
 };
-interface Capture { id: string; image: string; sourceTabId: number; createdAt: number }
+interface Capture { id: string; image: string; sourceTabId: number; sourceUrl: string; createdAt: number; sha256: string; viewerTabId: number }
 
 const controller = new MirrorController({
   enabled: async () => (await chrome.storage.local.get('mirror:enabled'))['mirror:enabled'] === true,
@@ -61,7 +64,7 @@ const controller = new MirrorController({
   fetcher: (input, init) => fetch(input, init),
 });
 const transport = createTranslationTransport();
-const transfers = new Map<string, { bytes: Uint8Array; viewer: number; created: number }>();
+const transfers = new Map<string, { bytes: Uint8Array; viewer: number; created: number; sha256: string; nextOffset: number; lastOffset?: number; lastData?: number[]; complete: boolean }>();
 const captures = new Map<number, Capture>();
 const viewStates = new Map<number, { page: number; fraction: number; zoom?: number }>();
 const mimePdfTabs = new Set<number>();
@@ -73,6 +76,8 @@ const companion = new NativeCompanion(() => {
   const state = { page: page.page + 1, fraction: page.fraction, zoom: page.zoom };
   viewStates.set(session.sourceTabId, state);
   await chrome.runtime.sendMessage({ type: 'mirror:view-state', state, targetTabId: session.viewerTabId, sourceTabId: session.sourceTabId, origin: 'desktop' }).catch(() => {});
+}, (progress: NativeTransferProgress) => {
+  void chrome.runtime.sendMessage({ type: 'mirror:desktop-progress', progress }).catch(() => {});
 });
 async function authorizeDesktop(session: MirrorSession): Promise<{ tabId: number; url: string }> {
   const viewer = await chrome.tabs.get(session.viewerTabId);
@@ -94,6 +99,14 @@ async function activeDesktopSource(): Promise<{ session: MirrorSession; title: s
   return { session, title: source.title ?? 'Browser PDF' };
 }
 
+function parseNativeAnnotation(value: unknown): NativeAnnotation {
+  if (!value || typeof value !== 'object') throw new Error('Invalid desktop annotation.');
+  const annotation = value as Record<string, unknown>;
+  const kind = annotation.kind;
+  const validKind = kind === 'highlight' || kind === 'underline' || kind === 'note' || kind === 'selection';
+  if (typeof annotation.id !== 'string' || annotation.id.length === 0 || annotation.id.length > 128 || [...annotation.id].some(character => character.charCodeAt(0) < 32) || !Number.isSafeInteger(annotation.page) || Number(annotation.page) < 0 || Number(annotation.page) > 65535 || !validKind || typeof annotation.text !== 'string' || [...annotation.text].length > 4000 || [...annotation.text].some(character => character.charCodeAt(0) < 32 && !'\n\r\t'.includes(character)) || !Number.isFinite(annotation.x) || !Number.isFinite(annotation.y) || !Number.isFinite(annotation.width) || !Number.isFinite(annotation.height) || Number(annotation.x) < 0 || Number(annotation.y) < 0 || Number(annotation.width) <= 0 || Number(annotation.height) <= 0 || Number(annotation.x) + Number(annotation.width) > 1 || Number(annotation.y) + Number(annotation.height) > 1 || !Number.isSafeInteger(annotation.baseRevision) || Number(annotation.baseRevision) < 0) throw new Error('Invalid desktop annotation.');
+  return { id: annotation.id as string, page: annotation.page as number, x: annotation.x as number, y: annotation.y as number, width: annotation.width as number, height: annotation.height as number, kind: kind as NativeAnnotationKind, text: annotation.text as string, baseRevision: annotation.baseRevision as number };
+}
 function isReader(sender: chrome.runtime.MessageSender): boolean {
   if (sender.id !== chrome.runtime.id || !sender.url) return false;
   try {
@@ -106,7 +119,54 @@ function report(error: unknown): void { console.warn('Mirror PDF', error); }
 function pngCapture(image: unknown): image is string {
   if (typeof image !== 'string' || !image.startsWith(CAPTURE_PREFIX) || image.length <= CAPTURE_PREFIX.length || image.length > CAPTURE_MAX_CHARS) return false;
   const body = image.slice(CAPTURE_PREFIX.length);
-  return body.length % 4 === 0 && !body.includes(' ') && !body.includes('\n');
+  return body.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(body);
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+  return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');
+}
+
+async function imageBytes(image: string): Promise<Uint8Array> {
+  const binary = atob(image.slice(CAPTURE_PREFIX.length));
+  return Uint8Array.from(binary, character => character.charCodeAt(0));
+}
+
+const captureKey = (id: string) => `${CAPTURE_STORAGE_PREFIX}${id}`;
+
+async function persistCapture(capture: Capture): Promise<void> {
+  captures.set(capture.viewerTabId, capture);
+  try {
+    await chrome.storage.session.set({ [captureKey(capture.id)]: capture });
+  } catch {
+    captures.delete(capture.viewerTabId);
+    throw new Error('The screenshot could not be retained by Chrome. Close unused tabs and try the capture again.');
+  }
+}
+
+async function loadCapture(viewerTabId: number, captureId?: string): Promise<Capture | undefined> {
+  const cached = captures.get(viewerTabId);
+  if (cached && (!captureId || cached.id === captureId)) return cached;
+  if (!captureId) return undefined;
+  const stored = (await chrome.storage.session.get(captureKey(captureId)))[captureKey(captureId)] as Capture | undefined;
+  if (!stored || stored.viewerTabId !== viewerTabId || stored.id !== captureId) return undefined;
+  captures.set(viewerTabId, stored);
+  return stored;
+}
+
+async function removeCapture(capture: Capture | undefined): Promise<void> {
+  if (!capture) return;
+  captures.delete(capture.viewerTabId);
+  await chrome.storage.session.remove(captureKey(capture.id)).catch(() => {});
+}
+
+async function removeCapturesForTab(tabId: number): Promise<void> {
+  const removed: Capture[] = [];
+  for (const capture of captures.values()) if (capture.viewerTabId === tabId || capture.sourceTabId === tabId) removed.push(capture);
+  for (const capture of removed) await removeCapture(capture);
+  const all = await chrome.storage.session.get(null);
+  const keys = Object.entries(all).filter(([key, value]) => key.startsWith(CAPTURE_STORAGE_PREFIX) && value && typeof value === 'object' && ((value as Capture).viewerTabId === tabId || (value as Capture).sourceTabId === tabId)).map(([key]) => key);
+  if (keys.length) await chrome.storage.session.remove(keys);
 }
 async function runDetect(tabId: number, documentUrl: string, candidate: string, force = false): Promise<void> {
   await controller.detect(tabId, documentUrl, candidate, { force });
@@ -130,7 +190,11 @@ chrome.webRequest.onHeadersReceived.addListener(details => {
 }, { urls: ['http://*/*', 'https://*/*', 'file:///*'], types: ['main_frame', 'sub_frame', 'object'] }, ['responseHeaders']);
 
 chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
-  if (change.url) { companion.revoke(tabId); viewStates.delete(tabId); mimePdfTabs.delete(tabId); void controller.navigate(tabId, change.url).catch(report); }
+  if (change.url) {
+    companion.revoke(tabId); viewStates.delete(tabId); mimePdfTabs.delete(tabId);
+    void removeCapturesForTab(tabId).catch(report);
+    void controller.navigate(tabId, change.url).catch(report);
+  }
   const url = change.url ?? tab.url;
   if (url && pdfPath(url) && (change.url || change.status === 'complete')) void discover(tabId, url, url).catch(report);
 });
@@ -138,8 +202,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
   companion.revoke(tabId);
   viewStates.delete(tabId);
   mimePdfTabs.delete(tabId);
-  captures.delete(tabId);
-  for (const [id, capture] of captures) if (capture.sourceTabId === tabId) captures.delete(id);
+  void removeCapturesForTab(tabId).catch(report);
   for (const [id, transfer] of transfers) if (transfer.viewer === tabId) transfers.delete(id);
   void removeTabSessions(tabId).catch(report);
 });
@@ -208,13 +271,20 @@ async function capturePage(tab: chrome.tabs.Tab | undefined): Promise<void> {
   await openCapture(tab.id, image);
 }
 async function openCapture(sourceTabId: number, image: string): Promise<{ viewerTabId: number; captureId: string }> {
-  if (!pngCapture(image)) throw new Error('Capture must be a PNG data URL under 20 MB.');
+  if (!Number.isSafeInteger(sourceTabId) || sourceTabId < 0 || !pngCapture(image)) throw new Error('Capture must be a PNG data URL under 20 MB.');
   const source = await chrome.tabs.get(sourceTabId);
-  if (source.active === false || !sourceUrl(source.url ?? '')) throw new Error('Capture only supports the current accessible source tab.');
-  const tab = await chrome.tabs.create({ url: `${viewerUrl}?capture=1&sourceTab=${sourceTabId}`, openerTabId: sourceTabId });
-  if (tab.id === undefined) throw new Error('Could not open captured mirror.');
+  const capturedSourceUrl = sourceUrl(source.url ?? '');
+  if (source.active === false || !capturedSourceUrl) throw new Error('Capture only supports the current accessible source tab.');
   const captureId = crypto.randomUUID();
-  captures.set(tab.id, { id: captureId, image, sourceTabId, createdAt: Date.now() });
+  const tab = await chrome.tabs.create({ url: `${viewerUrl}?capture=1&sourceTab=${sourceTabId}&captureId=${encodeURIComponent(captureId)}`, openerTabId: sourceTabId });
+  if (tab.id === undefined) throw new Error('Could not open captured mirror.');
+  const capture: Capture = { id: captureId, image, sourceTabId, sourceUrl: capturedSourceUrl, createdAt: Date.now(), sha256: await sha256Hex(await imageBytes(image)), viewerTabId: tab.id };
+  try {
+    await persistCapture(capture);
+  } catch (error) {
+    await chrome.tabs.remove(tab.id).catch(() => {});
+    throw error;
+  }
   void chrome.runtime.sendMessage({ type: 'mirror:capture-ready', captureId, targetTabId: tab.id, sourceTabId }).catch(() => {});
   await updateBadge();
   return { viewerTabId: tab.id, captureId };
@@ -247,6 +317,11 @@ async function handle(message: Record<string, unknown>, sender: chrome.runtime.M
         normalizeNativePage(viewStates.get(session.sourceTabId)), title);
       return { ok: true, status: 'PDF delivered to the local desktop inbox. Following page changes until you stop, close, or navigate the source. Open PDF Workspace to view it.' };
     }
+    case 'mirror:annotation': {
+      if (!isReader(sender)) throw new Error('Desktop annotations require the bound extension reader.');
+      const session = await controller.authorize(identity);
+      return { ok: true, ...(await companion.annotation(session, parseNativeAnnotation(message.annotation))) };
+    }
     case 'mirror:desktop-stop': {
       if (!isPopup(sender)) throw new Error('Use the extension action to stop following.');
       await companion.stop();
@@ -263,21 +338,27 @@ async function handle(message: Record<string, unknown>, sender: chrome.runtime.M
     case 'mirror:fetch-pdf': {
       if (typeof message.url !== 'string') throw new Error('A PDF URL is required.');
       const bytes = await controller.fetchPdf(identity, message.url);
-      if (bytes.length <= 8 * 1024 * 1024) return { ok: true, data: Array.from(bytes) };
+      const sha256 = await sha256Hex(bytes);
+      if (bytes.length <= 8 * 1024 * 1024) return { ok: true, data: Array.from(bytes), size: bytes.length, sha256 };
       for (const [id, transfer] of transfers) if (Date.now() - transfer.created > 120_000) transfers.delete(id);
       const transferId = crypto.randomUUID();
-      transfers.set(transferId, { bytes, viewer: sender.tab!.id!, created: Date.now() });
-      return { ok: true, transferId, size: bytes.length, chunkSize: 256 * 1024 };
+      transfers.set(transferId, { bytes, viewer: sender.tab!.id!, created: Date.now(), sha256, nextOffset: 0, complete: false });
+      return { ok: true, transferId, size: bytes.length, chunkSize: PDF_TRANSFER_CHUNK_SIZE, sha256 };
     }
     case 'mirror:fetch-pdf-chunk': {
       await controller.authorize(identity);
       const transfer = transfers.get(String(message.transferId));
       const offset = message.offset;
       if (!transfer || transfer.viewer !== sender.tab?.id || Date.now() - transfer.created > 120_000 || typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || offset >= transfer.bytes.length) throw new Error('PDF transfer expired or invalid. Reload the reader.');
-      const end = Math.min(offset + 256 * 1024, transfer.bytes.length);
+      if (transfer.lastOffset === offset && transfer.lastData) return { ok: true, data: transfer.lastData, done: transfer.complete, sha256: transfer.sha256 };
+      if (transfer.complete || offset !== transfer.nextOffset) throw new Error('PDF transfer chunk is duplicated or out of order. Reload the reader.');
+      const end = Math.min(offset + PDF_TRANSFER_CHUNK_SIZE, transfer.bytes.length);
       const data = Array.from(transfer.bytes.subarray(offset, end));
-      if (end === transfer.bytes.length) transfers.delete(String(message.transferId));
-      return { ok: true, data, done: end === transfer.bytes.length };
+      transfer.lastOffset = offset;
+      transfer.lastData = data;
+      transfer.nextOffset = end;
+      transfer.complete = end === transfer.bytes.length;
+      return { ok: true, data, done: transfer.complete, sha256: transfer.sha256 };
     }
     case 'mirror:translate': {
       if (!isReader(sender)) throw new Error('Only the extension reader can translate.');
@@ -288,7 +369,7 @@ async function handle(message: Record<string, unknown>, sender: chrome.runtime.M
     }
     case 'mirror:view-state': {
       const state = message.state as { page?: number; fraction?: number; zoom?: number } | undefined;
-      if (!state || !Number.isInteger(state.page) || state.page! < 1 || typeof state.fraction !== 'number' || !Number.isFinite(state.fraction) || state.fraction < 0 || state.fraction > 1) throw new Error('Invalid view state.');
+      if (!state || !Number.isInteger(state.page) || state.page! < 1 || typeof state.fraction !== 'number' || !Number.isFinite(state.fraction) || state.fraction < 0 || state.fraction > 1 || (state.zoom !== undefined && (typeof state.zoom !== 'number' || !Number.isFinite(state.zoom) || state.zoom < 0.1 || state.zoom > 10))) throw new Error('Invalid view state.');
       let session: MirrorSession;
       let destination: number;
       if (isReader(sender)) { session = await controller.authorize(identity); destination = session.sourceTabId; }
@@ -309,15 +390,20 @@ async function handle(message: Record<string, unknown>, sender: chrome.runtime.M
     case 'mirror:open-capture': {
       if (!isPopup(sender) || typeof message.sourceTabId !== 'number' || !Number.isInteger(message.sourceTabId)) throw new Error('Capture requires the extension action.');
       const capture = await openCapture(message.sourceTabId, message.image as string);
-      return { ok: true, viewerTabId: capture.viewerTabId };
+      return { ok: true, viewerTabId: capture.viewerTabId, captureId: capture.captureId };
     }
     case 'mirror:get-capture': {
-      if (!isReader(sender) || sender.tab?.id === undefined) throw new Error('Invalid capture reader.');
-      const capture = captures.get(sender.tab.id);
-      if (!capture) throw new Error('Capture expired. Capture the visible source tab again.');
-      if (typeof message.captureId === 'string' && message.captureId !== capture.id) throw new Error('Capture does not belong to this viewer.');
-      captures.delete(sender.tab.id);
-      if (Date.now() - capture.createdAt > CAPTURE_TTL_MS) throw new Error('Capture expired. Capture the visible source tab again.');
+      if (!isReader(sender) || sender.tab?.id === undefined || !sender.url) throw new Error('Invalid capture reader.');
+      const params = readCaptureParams(sender.url);
+      if (!params || params.sourceTab === undefined) throw new Error('Capture reader is not bound to a source tab.');
+      const requestedId = typeof message.captureId === 'string' ? message.captureId : params.captureId;
+      const capture = await loadCapture(sender.tab.id, requestedId);
+      if (!capture || capture.sourceTabId !== params.sourceTab || (requestedId && requestedId !== capture.id)) throw new Error('Capture does not belong to this viewer.');
+      if (Date.now() - capture.createdAt > CAPTURE_TTL_MS) { await removeCapture(capture); throw new Error('Capture expired. Capture the visible source tab again.'); }
+      const source = await chrome.tabs.get(capture.sourceTabId).catch(() => undefined);
+      if (!source || sourceUrl(source.url ?? '') !== capture.sourceUrl) { await removeCapture(capture); throw new Error('The source tab changed before the capture was read. Capture it again.'); }
+      if (!pngCapture(capture.image) || await sha256Hex(await imageBytes(capture.image)) !== capture.sha256) { await removeCapture(capture); throw new Error('Capture integrity validation failed. Capture it again.'); }
+      await removeCapture(capture);
       return { ok: true, image: capture.image, sourceTabId: capture.sourceTabId, captureId: capture.id };
     }
     case 'mirror:rescan': {

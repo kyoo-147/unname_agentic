@@ -441,6 +441,7 @@ impl Workspace {
                 .child(mode(0, "问答", "Ask", "Hỏi đáp"))
                 .child(mode(1, "文档", "Document", "Tài liệu")));
         let voice = self.voice.state();
+        let selected_model = mirror_pdf_desktop::model::load_settings().provider.model;
         let listening = voice.phase().is_active();
         let tools = div().mt(px(12.)).flex().items_center().gap(px(8.))
             .child(div().id("chat-attach").size(px(26.)).rounded(px(6.)).flex().items_center().justify_center().cursor_pointer().hover(|s| s.bg(Theme::fill_hover()))
@@ -456,17 +457,18 @@ impl Workspace {
             .child(div().flex_1())
             .child(div().flex().items_center().gap(px(5.))
                 .child(div().size(px(6.)).rounded_full().bg(Theme::primary()))
-                .child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(crate::i18n::tr3("模型 · 自动", "Model · Auto", "Mô hình · Tự động")))
-                .child(icon("chevron-down", 13., Theme::text_caption())))
+                .child(div().text_size(px(12.)).text_color(Theme::text_caption()).child(format!("{} · {}", crate::i18n::tr3("模型", "Model", "Mô hình"), if selected_model.trim().is_empty() { crate::i18n::tr3("未配置", "Not configured", "Chưa cấu hình").to_string() } else { selected_model })))
+                .child(icon("chevron-down", 13., Theme::text_caption()))
+                .on_click(cx.listener(|w, _, _, cx| { w.show_chat(cx); w.chat.update(cx, |chat, cx| chat.open_config(cx)); })))
             .child(div().w(px(1.)).h(px(18.)).bg(Theme::line_divider()))
             .child(div().id("chat-mic").size(px(26.)).rounded(px(6.)).flex().items_center().justify_center().cursor_pointer().hover(|s| s.bg(Theme::fill_hover()))
                 .when(listening, |d| d.bg(Theme::primary_fill_1()))
                 .tip(crate::i18n::tr3("语音输入（本机识别，音频不会离开这台电脑）", "Voice input (recognised on this machine; no audio leaves it)", "Nhập bằng giọng nói (nhận dạng trên máy; âm thanh không rời khỏi máy)"), None)
                 .child(icon("mic", 15., if listening { Theme::primary() } else { Theme::text_caption() }))
                 .on_click(cx.listener(|w, _, _, cx| w.voice_toggle(cx))))
-            .child(div().id("chat-voice").size(px(26.)).rounded(px(6.)).flex().items_center().justify_center().cursor_pointer().hover(|s| s.bg(Theme::fill_hover()))
-                .child(icon("audio-lines", 15., Theme::text_caption()))
-                .on_click(cx.listener(|w, _, _, cx| w.show_toast_kind(crate::ui::ToastKind::Info, crate::i18n::tr3("语音模式即将加入。", "Voice mode is coming next.", "Chế độ giọng nói sẽ sớm có."), cx))));
+            .child(div().id("chat-voice").size(px(26.)).rounded(px(6.)).flex().items_center().justify_center()
+                .tip(crate::i18n::tr3("双向语音对话尚未配置；可使用麦克风听写。", "Two-way voice chat is not configured; use the microphone for dictation.", "Trò chuyện thoại hai chiều chưa được cấu hình; hãy dùng micrô để đọc chính tả."), None)
+                .child(icon("audio-lines", 15., Theme::text_disabled())));
         let voice_error = voice.error().map(|error| error.message());
         // The dictation indicator: a red microphone dot, the phase in words, the
         // live hypothesis on its own line, and how to stop. Drawn only while a

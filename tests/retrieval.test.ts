@@ -398,3 +398,34 @@ describe('hybrid retrieval', () => {
     expect(hits[0]?.fusedScore).toBe(hits[0]?.score);
   });
 });
+
+describe('truthful local embedding states', () => {
+  it('reports incompatible dimensions instead of relabelling lexical hits as hybrid', () => {
+    const target = index(chunkDocument(document([{ text: 'retention policy evidence' }])));
+    const hits = hybridSearch(target, 'retention', {
+      embedding: {
+        status: { state: 'available', model: 'bad-dimensions' },
+        embed: text => text === 'retention' ? [1, 0] : [1, 0, 0],
+      },
+    });
+    expect(hits[0]?.retrievalMethod).toBe('lexical');
+    expect(hits[0]?.vectorScore).toBeNull();
+    expect(hits[0]?.embeddingStatus).toEqual({
+      state: 'incompatible',
+      reason: 'local embedding vectors have incompatible dimensions',
+    });
+  });
+
+  it('reports unknown adapter output without fabricating vector scores', () => {
+    const target = index(chunkDocument(document([{ text: 'retention policy evidence' }])));
+    const hits = hybridSearch(target, 'retention', {
+      embedding: {
+        status: { state: 'available', model: 'unknown-output' },
+        embed: text => text === 'retention' ? [1, 0] : [Number.NaN, 0],
+      },
+    });
+    expect(hits[0]?.retrievalMethod).toBe('lexical');
+    expect(hits[0]?.vectorScore).toBeNull();
+    expect(hits[0]?.embeddingStatus.state).toBe('unknown');
+  });
+});

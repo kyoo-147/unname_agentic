@@ -47,7 +47,7 @@ The popup sends only the PDF already allowed by the service worker's acquisition
 
 The native host does not launch a desktop window. Successful delivery means that the host published the PDF and session event to the inbox, not that the desktop imported or rendered the PDF. The native parser can still reject an unsupported or invalid PDF.
 
-After delivery, the extension relays page changes from the same authorized source or mirror. **Stop desktop following**, source navigation, reader navigation, tab closure, or port disconnection ends following. Restarting a disconnected bridge requires another explicit **Open in desktop** command. Already imported local copies remain in the desktop library.
+After delivery, the extension relays page and zoom changes from the same authorized source or mirror. A disconnected port is recoverable: the extension reconnects, sends `resume` for the exact binding, and continues polling the same local inbox session. A missing, replaced, or user-stopped session becomes stale and requires another explicit **Open in desktop** command. **Stop desktop following**, source navigation, reader navigation, or tab closure ends following. Already imported local copies remain in the desktop library.
 
 ## Check an unavailable companion
 
@@ -88,18 +88,22 @@ The message sequence is fixed.
 
 | Type | Additional fields | Result |
 | --- | --- | --- |
-| `hello` | None | `protocol: 1`, `status: "ready"`, and frame, PDF, and chunk limits. No inbox writes. |
+| `hello` | None | `protocol: 1`, `status: "ready"`, capabilities, and frame, PDF, and chunk limits. No inbox writes. |
 | `begin` | `binding`, `total_bytes`, `sha256`, `page`, optional `title` | Starts one upload. Positive `total_bytes` is at most 268,435,456. Lowercase `sha256` covers the entire PDF. Title is display text only, stripped of control characters and capped at 200 Unicode characters. |
 | `chunk` | `binding`, `index`, `data` | Index starts at zero and increases by one. Strict padded standard base64 decodes to 1 through 196,608 bytes. Bytes cannot exceed the declared total. Reply includes the next expected index. |
 | `commit` | `binding` | Requires the complete byte count, matching SHA-256, and `%PDF-` within the first 1,024 bytes. Publishes only a complete upload. |
 | `page` | `binding`, `page` | Requires the exact completed binding. Publishes a normalized page event. |
+| `resume` | `binding` | Reattaches to the matching committed inbox session after a reconnect. Returns `status: "resumed"` with the current desktop-command sequence, or `status: "missing"`. It never opens or fetches a path. |
+| `annotation` | `binding`, `annotation` | Applies one bounded normalized annotation patch using `base_revision`, or returns `status: "conflict"` with the current revision and value. |
 | `end` | `binding` | Requires the exact completed binding. Publishes `session_ended` and stops following. |
 
 The host rejects overlapping begins, repeated chunks, out-of-order chunks, mismatched bindings, stale generations, invalid base64, oversized chunks, short uploads, and digest mismatches. There is no arbitrary file-read, host-path, URL-fetch, provider, translation, or screenshot operation.
 
 A persistent `connectNative` port carries the upload and subsequent page events. `sendNativeMessage` is unsuitable because EOF ends following. There is one outstanding native request at a time. Each request has a 30-second extension timeout. Page updates coalesce while a previous page update is pending.
 
-Responses contain `ok: true` on success. Upload responses repeat `binding`. Commit uses `status: "complete"`, page uses `status: "following"`, and end uses `status: "ended"`. Errors contain `ok: false` and a bounded human-readable `error`.
+Responses contain `ok: true` on success. Upload responses repeat `binding`. Commit uses `status: "complete"`, page and poll use `status: "following"`, resume uses `status: "resumed"` or `"missing"`, annotation uses `status: "applied"` or `"conflict"`, and end uses `status: "ended"`. Errors contain `ok: false` and a bounded human-readable `error`. The extension maps failures to typed codes: `unavailable`, `busy`, `timeout`, `protocol`, `rejected`, `stale`, `transfer`, or `invalid-response`; callers should branch on the code, not on localized message text.
+
+Annotation patches use document-relative coordinates and a bounded revision counter. `id` is a caller-generated non-control identifier, `page` is zero-based, geometry is normalized to 0 through 1, `kind` is `highlight`, `underline`, `note`, or `selection`, and `text` is capped at 4,000 Unicode characters. The host stores only validated patches in `annotations.json` beside the committed PDF. A stale `base_revision` is returned as a conflict rather than overwritten.
 
 ## Inbox reference
 
@@ -113,6 +117,7 @@ On commit, the host syncs both files and atomically renames the staging director
 ready-<host-token>/
   document.pdf
   event.json
+  annotations.json (created only after an explicit annotation patch)
 ```
 
 `event.json` is immutable.

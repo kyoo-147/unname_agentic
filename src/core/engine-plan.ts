@@ -72,7 +72,7 @@ import {
   type PageClassification,
   type PageKind,
 } from './classify';
-import { normalizeLanguageCode } from './language';
+import { normalizeLanguageCode, type ScriptName } from './language';
 
 // --- Public shapes ---------------------------------------------------------
 
@@ -134,6 +134,8 @@ export interface PageFacts {
   readonly largestImageRatio: number;
   /** Language hints, any spelling; normalized before use. */
   readonly languages?: readonly string[];
+  /** Script hints from observed text or a caller's explicit document metadata. */
+  readonly scripts?: readonly ScriptName[];
 }
 
 /** The decision for one page, plus the evidence for it. */
@@ -232,6 +234,12 @@ export const ENGINE_LANGUAGES: Record<Engine, readonly string[]> = {
   browser: ['ar', 'de', 'en', 'es', 'fr', 'hi', 'id', 'it', 'ja', 'ko', 'pt', 'ru', 'th', 'vi', 'zh'],
 };
 
+/** Script coverage used when a page has no reliable language code yet. */
+export const ENGINE_SCRIPTS: Record<Engine, readonly ScriptName[]> = {
+  windows: ['latin', 'han', 'kana', 'hangul', 'cyrillic', 'arabic'],
+  tesseract: ['latin', 'han', 'kana', 'hangul', 'cyrillic', 'arabic', 'devanagari', 'thai'],
+  browser: ['latin', 'han', 'kana', 'hangul', 'cyrillic', 'arabic', 'devanagari', 'thai'],
+};
 /**
  * Default wall-clock budget for one run: two minutes.
  *
@@ -305,10 +313,20 @@ function normalizeLanguages(input: readonly string[] | undefined): string[] {
   return [...codes].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
-function supportsAll(engine: Engine, languages: readonly string[]): boolean {
-  if (languages.length === 0) return true;
+function normalizeScripts(input: readonly ScriptName[] | undefined): ScriptName[] {
+  const scripts = new Set<ScriptName>();
+  for (const value of input ?? []) {
+    if (value !== 'unknown') scripts.add(value);
+  }
+  return [...scripts].sort((a, b) => a.localeCompare(b));
+}
+
+function supportsAll(engine: Engine, languages: readonly string[], scripts: readonly ScriptName[]): boolean {
+  if (languages.length === 0 && scripts.length === 0) return true;
   const documented = ENGINE_LANGUAGES[engine];
-  return languages.every(code => documented.includes(code));
+  const languageSupport = languages.every(code => documented.includes(code));
+  const scriptSupport = scripts.every(script => ENGINE_SCRIPTS[engine].includes(script));
+  return languageSupport && scriptSupport;
 }
 
 interface Candidate {
@@ -407,9 +425,10 @@ export function planEngine(
   }
 
   const languages = normalizeLanguages(facts.languages);
+  const scripts = normalizeScripts(facts.scripts);
   const candidates: Candidate[] = usable.map(engine => ({
     engine,
-    supported: supportsAll(engine, languages),
+    supported: supportsAll(engine, languages, scripts),
     msPerPage: ENGINE_COST_MS[engine],
   }));
   candidates.sort((a, b) => compareCandidates(a, b, prefer));
@@ -422,14 +441,15 @@ export function planEngine(
     return { engine: 'none', fallback: [], reasons, estimatedMsPerPage: 0 };
   }
 
-  const languageList = languages.join(', ');
+  const supportHints = [...languages, ...scripts.map(script => `script:${script}`)];
+  const languageList = supportHints.join(', ');
   if (chosen.supported) {
     for (const candidate of candidates) {
       if (candidate.supported) continue;
-      reasons.push(`${ENGINE_LABELS[candidate.engine]} does not document ${languageList}, so it ranks below ${ENGINE_LABELS[chosen.engine]}.`);
+      reasons.push(`${ENGINE_LABELS[candidate.engine]} does not document ${languageList || 'the requested script'}, so it ranks below ${ENGINE_LABELS[chosen.engine]}.`);
     }
   } else {
-    reasons.push(`No available engine documents ${languageList}, so ${ENGINE_LABELS[chosen.engine]} runs as a best effort and its text may be poor.`);
+    reasons.push(`No available engine documents ${languageList || 'the requested OCR profile'}, so ${ENGINE_LABELS[chosen.engine]} runs as a best effort and its text may be poor.`);
   }
 
   if (chosen.engine === prefer) {

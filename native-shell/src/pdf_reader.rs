@@ -121,6 +121,18 @@ fn log_prepared_page(page: u16, label: &str, pdf: bool, elapsed: Duration, frame
     );
 }
 
+fn provider_validation_message(problems: &[provider::ConfigProblem]) -> String {
+    let details = problems.iter().map(|problem| match problem {
+        provider::ConfigProblem::Endpoint(detail) => format!("{}: {detail}", tr3("端点无效", "Endpoint", "Điểm cuối")),
+        provider::ConfigProblem::ModelMissing => tr3("需要模型名称", "Model is required", "Cần tên mô hình").to_string(),
+        provider::ConfigProblem::ApiKeyMissing => tr3("需要 API 密钥", "API key is required", "Cần khoá API").to_string(),
+        provider::ConfigProblem::CloudConsentMissing => tr3("需要云端传输同意", "Cloud transfer consent is required", "Cần đồng ý gửi dữ liệu lên đám mây").to_string(),
+        provider::ConfigProblem::GlossaryUnsupported => tr3("该提供方不支持术语表", "This provider does not support glossaries", "Nhà cung cấp này không hỗ trợ bảng thuật ngữ").to_string(),
+        provider::ConfigProblem::TargetLanguageMissing => tr3("需要目标语言", "Target language is required", "Cần ngôn ngữ đích").to_string(),
+        provider::ConfigProblem::TargetLanguageSameAsSource => tr3("目标语言不能与源语言相同", "Target language must differ from source language", "Ngôn ngữ đích phải khác ngôn ngữ nguồn").to_string(),
+    }).collect::<Vec<_>>().join(tr3("；", "; ", "; "));
+    format!("{}: {details}", tr3("配置未保存", "Configuration was not saved", "Chưa lưu cấu hình"))
+}
 struct ProfileFields {
     endpoint: Entity<TextField>, model: Entity<TextField>, source: Entity<TextField>, target: Entity<TextField>,
     glossary: Entity<TextField>, key: Entity<TextField>,
@@ -506,6 +518,12 @@ impl PdfReader {
         })
     }
     fn translate_visible(&mut self, cx: &mut Context<Self>) {
+        let validation = provider::validate_settings(&self.profile);
+        if !validation.is_empty() {
+            let status = provider_validation_message(&validation);
+            if self.status != status { self.status = status; cx.notify(); }
+            return;
+        }
         if self.profile.kind != ProviderKind::Local && (!self.profile.cloud_consent || self.profile.api_key.trim().is_empty()) {
             let status = tr3("翻译已关闭 · 选择“语言 / 提供方”以配置本地引擎或启用云端翻译", "Translation is off · choose Language / provider to configure a local engine or enable cloud translation", "Dịch đang tắt · chọn “Ngôn ngữ / nhà cung cấp” để cấu hình công cụ cục bộ hoặc bật dịch đám mây");
             if self.status != status { self.status = status.into(); cx.notify(); }
@@ -637,9 +655,16 @@ impl PdfReader {
         if let Some(prepared) = &mut self.prepared { for block in &mut prepared.frame.blocks { block.translated = None; } }
         let task = cx.background_executor().spawn(async move {
             let result: anyhow::Result<ProviderSettings> = (|| {
+                let stored_key = if forget { String::new() } else if key.is_empty() {
+                    provider::load_key(profile.kind)?
+                } else { key.clone() };
+                profile.api_key = stored_key;
+                if !forget {
+                    let problems = provider::validate_settings(&profile);
+                    anyhow::ensure!(problems.is_empty(), "{}", provider_validation_message(&problems));
+                }
                 if forget { provider::save_key(profile.kind, "")?; }
                 else if !key.is_empty() { provider::save_key(profile.kind, &key)?; }
-                profile.api_key = provider::load_key(profile.kind).unwrap_or_default();
                 let mut settings = model::load_settings(); settings.provider = profile.clone(); model::save_settings(&settings)?;
                 Ok(profile)
             })(); result.map_err(|e| format!("{e:#}"))

@@ -36,7 +36,7 @@ async function install() {
   };
   vi.stubGlobal('chrome', chrome);
   await import('../extension/background');
-  async function message(body: unknown, sender = { id: 'test', tab: { id: 90 }, url: 'chrome-extension://test/index.html?sourceTab=3', frameId: 0 }): Promise<any> {
+  async function message(body: unknown, sender = { id: 'test', tab: { id: 90 }, url: 'chrome-extension://test/index.html?capture=1&sourceTab=3', frameId: 0 }): Promise<any> {
     return new Promise(resolve => { chrome.runtime.onMessage.listeners[0]!(body, sender, resolve); });
   }
   return { chrome, local, session, message };
@@ -83,14 +83,21 @@ describe('Chrome extension event and message boundaries', () => {
     const h = await install();
     h.session['mirror:session:3'] = { sourceTabId: 3, viewerTabId: 90, documentUrl: 'https://example.com/download', pdfUrl: 'https://example.com/download' };
     const result = await h.message({ type: 'mirror:fetch-pdf', url: 'https://example.com/download' });
-    expect(result).toEqual({ ok: true, transferId: expect.any(String), size: 9 * 1024 * 1024, chunkSize: 256 * 1024 });
+    expect(result).toEqual({ ok: true, transferId: expect.any(String), size: 9 * 1024 * 1024, chunkSize: 256 * 1024, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
     expect((await h.message({ type: 'mirror:fetch-pdf-chunk', transferId: result.transferId, offset: -1 })).ok).toBe(false);
     const first = await h.message({ type: 'mirror:fetch-pdf-chunk', transferId: result.transferId, offset: 0 });
     expect(first.ok).toBe(true);
     expect(first.data.length).toBe(256 * 1024);
     expect(new TextDecoder().decode(new Uint8Array(first.data.slice(0, 8)))).toBe('%PDF-1.7');
-    const last = await h.message({ type: 'mirror:fetch-pdf-chunk', transferId: result.transferId, offset: bytes.length - 4 });
-    expect(last).toEqual({ ok: true, data: [0, 0, 0, 0], done: true });
+    let offset = first.data.length;
+    let last = first;
+    while (offset < bytes.length) {
+      last = await h.message({ type: 'mirror:fetch-pdf-chunk', transferId: result.transferId, offset });
+      expect(last.ok).toBe(true);
+      offset += last.data.length;
+    }
+    expect(last.done).toBe(true);
+    expect(last.sha256).toBe(result.sha256);
     expect((await h.message({ type: 'mirror:fetch-pdf-chunk', transferId: result.transferId, offset: 0 })).ok).toBe(false);
   });
   it('reuses a persisted session without opening another mirror after worker restart', async () => {
@@ -113,7 +120,7 @@ describe('Chrome extension event and message boundaries', () => {
   it('rejects desktop operations from web pages, source frames, and the reader itself', async () => {
     const h = await install();
     const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
-    for (const type of ['mirror:desktop-open', 'mirror:desktop-status', 'mirror:desktop-stop']) {
+    for (const type of ['mirror:desktop-open', 'mirror:desktop-status', 'mirror:desktop-stop', 'mirror:annotation']) {
       expect((await h.message({ type })).ok).toBe(false);
       expect((await h.message({ type }, { id: 'test', tab: { id: 3 }, url: 'https://example.com/download', frameId: 0 })).ok).toBe(false);
     }
@@ -147,8 +154,10 @@ describe('Chrome extension event and message boundaries', () => {
         postMessage: (request: any) => {
           requests.push(request);
           const reply = request.type === 'hello' ? { ok: true, protocol: 1, status: 'ready' }
-            : request.type === 'chunk' ? { ok: true, binding: request.binding, next_index: request.index + 1 }
+            : request.type === 'begin' ? { ok: true, binding: request.binding, status: 'receiving', next_index: 0 }
+            : request.type === 'chunk' ? { ok: true, binding: request.binding, status: 'receiving', next_index: request.index + 1 }
             : request.type === 'poll' ? { ok: true, binding: request.binding, status: 'following', command: { version: 1, kind: 'view_state', binding: request.binding, sequence: 1, page: { page: 2, page_count: 4, fraction: .25, zoom: 1.5 } } }
+            : request.type === 'annotation' ? { ok: true, binding: request.binding, status: 'applied', revision: 1, annotation: { ...request.annotation, base_revision: 1 } }
             : { ok: true, binding: request.binding, status: request.type === 'commit' ? 'complete' : 'receiving' };
           queueMicrotask(() => { if (!disconnected) nativeMessages.fire(reply); });
         },
@@ -159,13 +168,17 @@ describe('Chrome extension event and message boundaries', () => {
       h.chrome.tabs.get.mockImplementation(async id => ({ id, index: 0, active: true, windowId: 1, url: id === 90 ? 'chrome-extension://test/index.html?sourceTab=3' : 'https://example.com/download' }));
       const popup = { id: 'test', tab: { id: 91 }, url: 'chrome-extension://test/popup.html', frameId: 0 };
       expect((await h.message({ type: 'mirror:desktop-open' }, popup)).ok).toBe(true);
+      expect((await h.message({ type: 'mirror:desktop-open' }, popup)).ok).toBe(true);
+      await expect(h.message({ type: 'mirror:annotation', annotation: { id: 'a1', page: 2, x: .1, y: .2, width: .3, height: .1, kind: 'highlight', text: 'hello', baseRevision: 0 } })).resolves.toMatchObject({ ok: true, status: 'applied', revision: 1 });
       await vi.advanceTimersByTimeAsync(1000);
-      expect(h.chrome.runtime.sendMessage).toHaveBeenCalledExactlyOnceWith({ type: 'mirror:view-state', state: { page: 3, fraction: .25, zoom: 1.5 }, targetTabId: 90, sourceTabId: 3, origin: 'desktop' });
+      const viewMessages = (h.chrome.runtime.sendMessage as any).mock.calls.map((call: any[]) => call[0]).filter((message: any) => message?.type === 'mirror:view-state');
+      expect(viewMessages).toHaveLength(1);
+      expect(viewMessages[0]).toEqual({ type: 'mirror:view-state', state: { page: 3, fraction: .25, zoom: 1.5 }, targetTabId: 90, sourceTabId: 3, origin: 'desktop' });
       expect(h.chrome.tabs.sendMessage).not.toHaveBeenCalled();
       await h.message({ type: 'mirror:view-state', state: { page: 3, fraction: .2501, zoom: 1.5 } });
       expect(requests.filter(request => request.type === 'page')).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(1000);
-      expect(h.chrome.runtime.sendMessage).toHaveBeenCalledTimes(1);
+      expect((h.chrome.runtime.sendMessage as any).mock.calls.filter((call: any[]) => call[0]?.type === 'mirror:view-state')).toHaveLength(1);
       await h.message({ type: 'mirror:desktop-stop' }, popup);
       const count = requests.length; await vi.advanceTimersByTimeAsync(5000);
       expect(requests).toHaveLength(count); expect(h.chrome.runtime.connectNative).toHaveBeenCalledOnce();
@@ -281,9 +294,11 @@ describe('context menu, commands, badge and capture contract', () => {
   it('captures the visible page from the keyboard command and hands it to only that viewer once', async () => {
     const h = await install();
     h.chrome.commands.onCommand.fire('capture-page', { id: 3, url: 'https://example.com/article', active: true, windowId: 1 });
-    await vi.waitFor(() => expect(h.chrome.tabs.create).toHaveBeenCalledWith(expect.objectContaining({ url: 'chrome-extension://test/index.html?capture=1&sourceTab=3', openerTabId: 3 })));
+    await vi.waitFor(() => expect(h.chrome.tabs.create).toHaveBeenCalledWith(expect.objectContaining({ url: expect.stringMatching(/^chrome-extension:\/\/test\/index\.html\?capture=1&sourceTab=3&captureId=/), openerTabId: 3 })));
     expect(h.chrome.runtime.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'mirror:capture-ready', targetTabId: 90, sourceTabId: 3 }));
-    const capture = await h.message({ type: 'mirror:get-capture' });
+    const createdUrl = (h.chrome.tabs.create as any).mock.calls[0][0].url as string;
+    const captureId = new URL(createdUrl).searchParams.get('captureId')!;
+    const capture = await h.message({ type: 'mirror:get-capture', captureId }, { id: 'test', tab: { id: 90 }, url: createdUrl, frameId: 0 });
     expect(capture).toMatchObject({ ok: true, sourceTabId: 3, captureId: expect.any(String) });
     expect(capture.image).toMatch(/^data:image\/png;base64,/);
     expect((await h.message({ type: 'mirror:get-capture' })).ok).toBe(false);

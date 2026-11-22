@@ -1,5 +1,13 @@
 import { createTranslationTransport } from '../core/translation';
 import type { TranslationRequest, TranslationTransport } from '../core/types';
+function byteArray(value: unknown): value is number[] { return Array.isArray(value) && value.every(item => Number.isInteger(item) && item >= 0 && item <= 255); }
+async function verifySha256(bytes: Uint8Array, expected: unknown): Promise<void> {
+  if (expected === undefined) return;
+  if (typeof expected !== 'string' || !/^[a-f0-9]{64}$/.test(expected)) throw new Error('Invalid PDF transfer checksum.');
+  const digest = await crypto.subtle.digest('SHA-256', bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+  const actual = Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');
+  if (actual !== expected) throw new Error('PDF transfer checksum mismatch. Reload the reader and try again.');
+}
 export function hasExtension(): boolean { return typeof chrome !== 'undefined' && !!chrome.runtime?.id; }
 async function message(payload: unknown): Promise<Record<string, unknown>> {
   const response: unknown = await chrome.runtime.sendMessage(payload);
@@ -21,21 +29,39 @@ export function browserTransport(): TranslationTransport {
 }
 export async function fetchPdf(url: string): Promise<Uint8Array> {
   if (hasExtension()) {
-    const result = await message({type:'mirror:fetch-pdf',url});
-    if (Array.isArray(result.data)) return new Uint8Array(result.data as number[]);
-    if (typeof result.transferId==='string' && typeof result.size==='number') {
-      const bytes = new Uint8Array(result.size); let offset=0;
-      while (offset<bytes.length) {
-        const chunk = await message({type:'mirror:fetch-pdf-chunk',transferId:result.transferId,offset});
-        if (!Array.isArray(chunk.data) || !chunk.data.length) throw new Error('PDF transfer ended unexpectedly.');
-        bytes.set(chunk.data as number[],offset); offset+=chunk.data.length;
+    const result = await message({ type: 'mirror:fetch-pdf', url });
+    if (Array.isArray(result.data)) {
+      if (!byteArray(result.data)) throw new Error('Invalid PDF transfer reply.');
+      const bytes = new Uint8Array(result.data);
+      if (result.size !== undefined && (result.size as number) !== bytes.length) throw new Error('PDF transfer size mismatch. Reload the reader and try again.');
+      await verifySha256(bytes, result.sha256);
+      return bytes;
+    }
+    if (typeof result.transferId === 'string' && Number.isSafeInteger(result.size) && (result.size as number) > 0 && Number.isSafeInteger(result.chunkSize) && (result.chunkSize as number) > 0) {
+      const size = result.size as number;
+      const chunkSize = result.chunkSize as number;
+      if (typeof result.sha256 !== 'string') throw new Error('Invalid PDF transfer checksum.');
+      const bytes = new Uint8Array(size);
+      let offset = 0;
+      let completed = false;
+      while (offset < bytes.length) {
+        const chunk = await message({ type: 'mirror:fetch-pdf-chunk', transferId: result.transferId, offset });
+        if (!byteArray(chunk.data) || chunk.data.length === 0 || chunk.data.length > chunkSize || chunk.data.length > bytes.length - offset) throw new Error('PDF transfer chunk is invalid or out of order.');
+        const end = offset + chunk.data.length;
+        const expectedDone = end === bytes.length;
+        if (chunk.done !== expectedDone) throw new Error('PDF transfer completion state is invalid.');
+        bytes.set(chunk.data, offset);
+        offset = end;
+        completed = expectedDone;
       }
+      if (!completed) throw new Error('PDF transfer ended unexpectedly.');
+      await verifySha256(bytes, result.sha256);
       return bytes;
     }
     throw new Error('Invalid PDF transfer reply.');
   }
   const parsed = new URL(url);
-  if (!['https:','http:'].includes(parsed.protocol)) throw new Error('Choose a local PDF with Open PDF instead.');
+  if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error('Choose a local PDF with Open PDF instead.');
   const response = await fetch(parsed);
   if (!response.ok) throw new Error(`Cannot open PDF (HTTP ${response.status}). Save it locally and choose Open PDF.`);
   return new Uint8Array(await response.arrayBuffer());

@@ -11,18 +11,22 @@ and every row it cannot observe is named as a limit at the bottom of this page.
 ## Run the gate
 
 ```powershell
-node scripts/release-check.mjs                  # preflight: cheap checks; the e2e suite is listed, not run
-node scripts/release-check.mjs --build --e2e    # the release run: rebuilds, then runs end-to-end
-node scripts/release-check.mjs --json           # machine-readable report
+node scripts/release-check.mjs --json                         # web/package/license/native/CI status report
+node scripts/release-check.mjs --build --e2e                  # local release run; native remains separate
+node scripts/release-check.mjs --build --e2e --require-native # fail closed unless native evidence exists
+pwsh -File scripts/package-native.ps1 -DryRun -AllowDirty     # safe package preflight
+pwsh -File scripts/verify-release.ps1 -ArtifactsOnly         # web/extension artifact checks
+pwsh -File scripts/verify-release.ps1 -RequireNativePackage  # full native package structure/checksum gate
 ```
 
 Flags: `--build` runs `pnpm build` before reading the build output, `--e2e` runs the Playwright
-suite instead of listing it, `--json` prints the same report as JSON, `--help` prints usage.
+suite instead of listing it, `--require-native` and `--require-ci` fail closed when those
+independent evidence records are not passes, `--json` prints the same report as JSON, and
+`--help` prints usage.
 
-Exit codes: `0` every check passed or only warned, `1` at least one blocker, `2` the runner
-itself could not run (a missing module, an unreadable `package.json`). A blocker is never
-printed as anything else: when a command fails, the runner records that failure and the table
-says so.
+Exit codes: `0` every required check passed, `1` at least one blocker or required evidence gap,
+and `2` the runner itself could not run (a missing module or unreadable `package.json`). A
+blocked or unknown native/CI record is never printed as a pass.
 
 ## Items
 
@@ -32,14 +36,14 @@ says so.
 | 2 | Changelog entry | a heading for that version in `CHANGELOG.md` (e.g. `## 0.1.0`) | `Select-String -Path CHANGELOG.md -Pattern '^## '` |
 | 3 | Unit suite | `pnpm test` green; at least one passing unit test is recorded | `pnpm test` |
 | 4 | End-to-end suite | at least `E2E_TEST_FLOOR` (40) declared or passing tests | `pnpm exec playwright test --retries=0` |
-| 5 | Native suite (warning) | the Rust workspace gate, recorded through `RELEASE_NATIVE_TESTS` (see below) | `pwsh -File scripts/build-windows.ps1 -Action test` |
+| 5 | Native suite (separate evidence) | a positive count from a real Rust run, with `RELEASE_NATIVE_STATUS=pass` | `pwsh -File scripts/build-windows.ps1 -Action test` |
 | 6 | Typecheck | `pnpm typecheck` exits 0 | `pnpm typecheck` |
 | 7 | Build output | `dist/web/index.html` and its assets exist, produced by the sources being released | `pnpm build` |
 | 8 | Committed imports | every relative import resolves against the files committed at `HEAD` | `node scripts/check-committed-imports.mjs` |
 | 9 | Third-party notices | a notice naming every bundled runtime dependency, plus its licence text, under `public/` | `Get-ChildItem public -Recurse -File -Include NOTICE*,LICENSE*,OFL.txt` |
-| 10 | Release package | `dist/pdf-workspace-windows-x64-release-<stamp>` and its `.zip` | `pwsh -File scripts/package-native.ps1` |
+| 10 | Release package | commit-bound directory and `.zip` with GPUI exe, PDFium, host, assets, notices and checksums | `pwsh -File scripts/package-native.ps1` |
 | 11 | Feature inventory (warning) | `docs/features.md` updated for this release | edit `docs/features.md` |
-| 12 | The whole gate | items 1–11 in one command, on the tree that is about to ship | `node scripts/release-check.mjs --build --e2e` |
+| 12 | The whole gate | items 1–11 in one command, on the tree that is about to ship | `node scripts/release-check.mjs --build --e2e --require-native` |
 | 13 | Trust/quality evidence | privacy, secret boundary, resource limits, consent audit, retention, golden data, OCR, translation, export, performance, i18n, a11y, and SBOM are all measured | `node scripts/release-check.mjs --json` |
 
 Items 1–4, 6–10 and 13 are blockers; items 5 and 11 are warnings. Item 12 is the gate itself.
@@ -108,8 +112,24 @@ $env:RELEASE_NATIVE_TESTS = '92'   # the passing count the run above printed
 node scripts/release-check.mjs --build --e2e
 ```
 
-Without that variable the row reads "not recorded" and the report carries the
-`native-tests-unknown` warning — which is the honest state, not a failure.
+Without that variable the row is `UNKNOWN` and the report carries the
+`native-tests-unknown` warning. `RELEASE_NATIVE_STATUS=blocked` records a real infrastructure
+blocker such as Windows SDK, `rc.exe`, or paging-file error 1455; it never becomes a native pass.
+
+## Evidence status contract
+
+The JSON report includes `releaseStatus.web`, `releaseStatus.native`, `releaseStatus.license`
+and `releaseStatus.ci`.
+
+- `web` is `pass` only when the web and quality blockers are clear.
+- `native` is `pass` only with a positive native test count from a real native run.
+- `license` is `pass` only when every bundled runtime dependency has a notice.
+- `ci` is `pass` only when `RELEASE_CI_STATUS=pass` is supplied from an actual CI result.
+
+Use `RELEASE_CI_STATUS=blocked` with `RELEASE_CI_BLOCKER="billing/runner locked"` when the
+provider prevents a run. Do not set `pass` from a workflow definition or an unexecuted job.
+Use `--require-native` or `--require-ci` when that evidence is required for the release being
+approved; absent or blocked evidence then exits 1.
 
 ## How the runner fills each field
 
@@ -122,8 +142,8 @@ Nothing is guessed:
   and is labelled "declared".
 - **The build gate** is the output, not a memory: `dist/web/index.html` and at least one asset
   under `dist/web/assets`. `--build` runs `pnpm build` first and records a failure if it fails.
-- **The release package** is a `dist/pdf-workspace-*-release-*` directory or archive, newest by
-  modification time.
+- **The release package** is the newest `dist/pdf-workspace-*-release-*` directory with its
+  sibling `.zip`, `MANIFEST.json`, `CHECKSUMS.sha256` and required native files.
 - **The notices** are the files under `public/` whose names look like a notice or a licence; each
   runtime dependency in `package.json` must be named in one of them (`pdfjs-dist` is named as
   "pdf.js" in the notice text).
@@ -134,13 +154,16 @@ Nothing is guessed:
 
 ## Known state on 2026-11-21
 
-The current release-gate run on this worktree has all executable trust/quality checks green and
-reports these remaining release conditions:
+The current release-gate run on this worktree reports these conditions:
 
 - `package-artifact-missing` — no native release package exists under `dist/`; the web build is
   present, but this gate does not treat a web directory as a native release package.
+- `unit-tests-empty` and the dependent quality evidence codes — the full `pnpm test` command exits
+  non-zero in this worktree even though its verbose output contains passing tests; the gate records
+  zero passing tests for a non-green run.
 - `native-tests-unknown` — no `RELEASE_NATIVE_TESTS` value was supplied; the native workspace is
   outside this JavaScript gate.
+- CI is unrecorded/unknown; no CI pass is claimed.
 - `features-doc-stale` — the inventory timestamp is older than source/test changes; update it only
   after reviewing the claims, not merely to silence the warning.
 
@@ -150,5 +173,5 @@ Named here so nobody reads a green run as more than it is:
 
 - It does not run the native suite (item 5) and does not verify that any recorded number is true.
 - The preflight lists the end-to-end suite instead of running it; a release run must pass `--e2e`.
-- It does not run the artifact structure gate (`pwsh -File scripts/verify-release.ps1`), signing step, or a real cloud translation provider. The translation/export rows rest on local unit evidence and are not provider-quality claims.
+- It does not replace the artifact structure gate (`pwsh -File scripts/verify-release.ps1 -RequireNativePackage`), the signing step, or a real cloud translation provider. The translation/export rows rest on local unit evidence and are not provider-quality claims.
 - OCR and performance rows are strict only when their scripts produce machine-readable evidence; a missing fixture, missing build, or failed budget remains a blocker rather than a guessed pass.

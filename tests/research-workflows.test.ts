@@ -3,6 +3,8 @@ import {
   MetadataCache,
   ResearchLibrary,
   ResearchNoteStore,
+  applyEnrichmentProposal,
+  buildKnowledgeCards,
   buildResearchMatrix,
   buildStudyPack,
   cleanPaper,
@@ -15,6 +17,7 @@ import {
   importBibliography,
   matrixToMarkdown,
   parseRis,
+  proposePaperEnrichment,
   reflowPaper,
   researchPaperToEntry,
   toResearchMatrixJson,
@@ -105,6 +108,23 @@ describe('consented enrichment', () => {
     expect(second.record?.abstract).toBe('An abstract');
     expect(calls).toHaveLength(2);
   });
+
+  it('keeps metadata enrichment proposal-first and rejects stale confirmation', async () => {
+    const fetcher = async (input: string | URL | Request): Promise<Response> => {
+      if (String(input).includes('crossref')) return new Response(JSON.stringify({ message: { DOI: '10.1000/example', title: ['A paper'], author: [{ family: 'Doe', given: 'Jane' }], abstract: '<p>Verified abstract.</p>' } }), { status: 200 });
+      return new Response(JSON.stringify({ title: 'A paper', authors: [{ name: 'Jane Doe' }], externalIds: { DOI: '10.1000/example' } }), { status: 200 });
+    };
+    const original = paper();
+    const proposal = await proposePaperEnrichment(original, { mode: 'consent', consent: true, fetch: fetcher, now: () => '2026-01-01T00:00:00.000Z' });
+    expect(proposal.requiresConfirmation).toBe(true);
+    expect(original.abstract).toBeUndefined();
+    expect(proposal.changedFields).toContain('abstract');
+    expect(applyEnrichmentProposal(original, proposal, false).applied).toBe(false);
+    expect(applyEnrichmentProposal({ ...original, title: 'Edited locally' }, proposal, true).reason).toContain('stale');
+    const applied = applyEnrichmentProposal(original, proposal, true);
+    expect(applied.applied).toBe(true);
+    expect(applied.paper.abstract).toBe('Verified abstract.');
+  });
 });
 
 describe('evidence, notes, paper mode, and study packs', () => {
@@ -121,8 +141,9 @@ describe('evidence, notes, paper mode, and study packs', () => {
 
   it('keeps notes addressable by paper, block, and citation', () => {
     const store = new ResearchNoteStore({ now: () => '2026-01-01T00:00:00.000Z' });
-    const note = store.add({ paperId: 'paper-1', text: 'Review this', kind: 'note', citationIds: ['cite-1'], anchors: [{ status: 'supported', anchor: { paperId: 'paper-1', page: 1, blockId: 'p1-r0', anchorKind: 'block', quote: blocks[0]?.text } }] });
+    const note = store.add({ paperId: 'paper-1', text: 'Review this', kind: 'highlight', citationIds: ['cite-1'], anchors: [{ status: 'supported', anchor: { paperId: 'paper-1', page: 1, blockId: 'p1-r0', anchorKind: 'selection', quote: blocks[0]?.text, polygon: [{ x: 10, y: 20 }, { x: 100, y: 20 }, { x: 100, y: 40 }, { x: 10, y: 40 }] } }] });
     expect(store.backlinks({ blockId: 'p1-r0' })).toHaveLength(1);
+    expect(store.backlinks({ page: 1, hasPolygon: true })).toHaveLength(1);
     expect(store.backlinks({ citationId: 'cite-1' })[0]?.noteId).toBe(note.noteId);
     const restored = new ResearchNoteStore({ now: () => '2026-01-01T00:00:00.000Z' });
     expect(restored.importJson(store.toJson()).imported).toBe(1);
@@ -136,6 +157,15 @@ describe('evidence, notes, paper mode, and study packs', () => {
     const reflowed = reflowPaper(clean, { maxCharsPerLine: 18 });
     expect(reflowed.blocks.every(block => block.evidence.anchor?.blockId)).toBe(true);
     expect(reflowed.blocks.find(block => block.type === 'formula')?.lines.join(' ')).toContain('E = mc^2');
+    expect(reflowed.safety.status).toBe('safe');
+    expect(reflowed.safety.preservedFormulaIds).toContain('p1-r1');
+    expect(reflowed.safety.preservedFootnoteIds).toContain('p2-r0');
+  });
+  it('creates formula and explicit-term cards with UNKNOWN instead of inventing evidence', () => {
+    const cards = buildKnowledgeCards(blocks, 'paper-1', { terms: ['contrastive method', 'missing term'] });
+    expect(cards.find(card => card.kind === 'formula')).toMatchObject({ content: 'The formula E = mc^2 remains unchanged.', evidence: { status: 'supported' } });
+    expect(cards.find(card => card.label === 'contrastive method')?.evidence.anchor?.blockId).toBe('p1-r0');
+    expect(cards.find(card => card.label === 'missing term')).toMatchObject({ content: 'UNKNOWN', evidence: { status: 'unknown' } });
   });
 
   it('creates versioned evidence-linked study artifacts', () => {

@@ -155,7 +155,9 @@ impl PdfReader {
             .when(self.browser_linked, |el| el.child(ui::secondary_button("pdf-browser-detach", tr3("断开 Chrome", "Detach Chrome", "Ngắt liên kết Chrome")).on_click(cx.listener(|reader, _, _, cx| reader.set_browser_linked(false, cx)))))
     }
     fn settings_panel(&self, cx: &mut Context<Self>) -> Div {
-        let health = model::ModelCatalogue::default().health(&self.profile);
+        let catalogue = model::ModelCatalogue::default();
+        let health = catalogue.health(&self.profile);
+        let capability_text = catalogue.find(self.profile.model.trim()).map(|descriptor| format!("{} · {}k context · {}", descriptor.label, descriptor.context_tokens / 1000, if descriptor.capabilities.offline { tr3("离线", "offline", "ngoại tuyến") } else { tr3("需网络同意", "consent before network", "cần đồng ý trước khi dùng mạng") }));
         let health_label = match health.status {
             model::ModelHealthStatus::Ready => tr3("已配置", "Configured", "Đã cấu hình"),
             model::ModelHealthStatus::Configured => tr3("本地已配置", "Local configured", "Cục bộ đã cấu hình"),
@@ -173,6 +175,7 @@ impl PdfReader {
         div().flex().flex_col().gap(px(10.)).p(px(16.)).border_b_1().border_color(Theme::line_border())
             .child(kinds)
             .child(div().text_size(px(11.)).text_color(Theme::text_caption()).child(format!("{} · {}", tr3("模型健康", "Model health", "Sức khỏe mô hình"), health_label)))
+            .when_some(capability_text, |el, text| el.child(div().text_size(px(11.)).text_color(Theme::text_caption()).child(text)))
             .child(div().text_size(px(11.)).text_color(Theme::text_caption()).child(tr3("仅检查本地配置；不会下载模型或访问网络。", "Checks local configuration only; it does not download models or access the network.", "Chỉ kiểm tra cấu hình cục bộ; không tải mô hình hoặc truy cập mạng.")))
             .child(div().flex().gap(px(12.)).child(div().flex_1().min_w_0().child(input_row(tr3("端点 · 基础 URL（HTTPS 或本机回环 HTTP）", "Endpoint · base URL (HTTPS, or loopback HTTP)", "Điểm cuối · URL gốc (HTTPS hoặc HTTP vòng lặp cục bộ)"), &self.fields.endpoint)))
                 .child(div().w(px(190.)).child(input_row(tr3("模型 · OpenAI 兼容提供方", "Model · OpenAI-compatible providers", "Mô hình · nhà cung cấp tương thích OpenAI"), &self.fields.model))))

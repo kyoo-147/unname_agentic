@@ -16,7 +16,7 @@ Files:
 
 ## What this is, and what it is not
 
-**Is:** a parser plus a local durable runner. A non-dry run creates one idempotent job per PDF, persists checkpoints under `<out>/.automation/state.json`, imports through PDF.js and the existing document runtime, runs classification, leaves OCR-required pages in review unless an OCR adapter is supplied, extracts optional schema fields, optionally translates through the existing translation service, and writes immutable JSON and Markdown artifacts.
+**Is:** a parser plus a local durable runner. A non-dry run polls the input tree, persists the folder snapshot under `<out>/.automation/watch.json`, creates one idempotent job per added or modified PDF, stores an immutable source snapshot, persists checkpoints under `<out>/.automation/state.json`, imports through PDF.js and the existing document runtime, runs classification, leaves OCR-required pages in review unless an OCR adapter is supplied, extracts optional schema fields, optionally translates through the existing local translation service, and writes immutable JSON and Markdown artifacts.
 
 **Is not:** a cloud worker or a fabricated OCR fallback. The CLI authorizes only `--in` and `--out` roots, uses no remote provider in `extract`, and reports review or handler failures instead of silently accepting them. `check` remains a filesystem-only report.
 
@@ -38,7 +38,7 @@ The command may appear anywhere among the flags. A second bare word is a usage e
 | `--in` | `<dir>` | — | Folder of PDFs to read. Required by every command. |
 | `--out` | `<dir>` | — | Folder to write into. Refused by `check`, which writes nothing. |
 | `--lang` | `<code>` | — | Target language, for example `vi`, `en`, `zh`. Required by `translate`. |
-| `--provider` | `<kind>` | app default | `google`, `deepl`, `openai` or `local`. |
+| `--provider` | `<kind>` | app default | Parser accepts `google`, `deepl`, `openai` or `local`; this local bridge executes only `local`. |
 | `--offline` | — | off | Never leave this machine. Refused with a cloud provider. |
 | `--format` | `<md\|json\|txt>` | `md` | Output shape; also the report shape for `check`. |
 | `--dry-run` | — | off | Print the plan and write nothing. |
@@ -101,7 +101,8 @@ node scripts/mirror-cli.mjs --help
 node scripts/mirror-cli.mjs --version
 ```
 
-A non-dry run executes the durable pipeline and prints its JSON status:
+A non-dry run executes the durable pipeline and prints its JSON status. Existing failed jobs are
+retried once per invocation; review jobs remain review jobs until explicitly approved:
 
 ```sh
 $ node scripts/mirror-cli.mjs extract --in docs/pdfs --out build/text
@@ -163,11 +164,16 @@ parse test. Forgetting the runner is the failure the drift guard names first.
 
 ## Limits
 
-- Only the top level of `--in` is read. Sub-folders are not walked, which is why a batch
-  folder is expected to hold its PDFs flat.
+- The input tree is walked recursively, excluding dot-directories and the existing watcher ignore
+  rules. Changes are coalesced before jobs are created.
 - Only names ending in `.pdf` count, in any case; every other file is ignored.
+- At most 5,000 files and 512 MiB per batch are accepted. A single PDF may be at most 256 MiB.
+  Oversized or unreadable inputs are rejected before processing; no placeholder data is created.
 - Non-dry runs write only below the authorized `--out` folder and persist state there.
-- `extract` never contacts a provider. `translate` uses the existing local provider contract;
-  it fails or enters review if the loopback service is unavailable.
+- `extract` never contacts a provider. `translate` uses only the explicit local provider contract;
+  cloud providers are refused by the bridge, and an unavailable loopback service fails without
+  fabricated translation.
 - OCR is an explicit adapter boundary. A scanned page without an adapter is held for review.
+- Deleted source files do not delete prior state or artifacts. The durable snapshot records the
+  next poll and retries failed jobs without duplicating completed jobs.
 - Paths are echoed as given; a path with a space is not shell-quoted in the plan line.

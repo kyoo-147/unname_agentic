@@ -6,6 +6,10 @@ export interface AuthorizedFolderOptions extends WatchOptions {
   readonly authorizedRoots: readonly string[];
   readonly recursive?: boolean;
   readonly debounceMs?: number;
+  /** Refuse large files before they become jobs. */
+  readonly maxFileBytes?: number;
+  /** Optional delay used to reject files that are still changing. */
+  readonly stableForMs?: number;
 }
 
 export interface FolderPoll {
@@ -39,6 +43,7 @@ export async function scanFolder(root: string, options: AuthorizedFolderOptions)
   const plan = planWatch(options);
   const snapshot: Record<string, { size: number; mtimeMs: number }> = {};
   const rejected: string[] = [];
+  const maxFileBytes = options.maxFileBytes ?? 256 * 1024 * 1024;
   const pending = [directory];
   while (pending.length > 0 && Object.keys(snapshot).length < plan.maxFiles) {
     const current = pending.shift()!;
@@ -60,6 +65,18 @@ export async function scanFolder(root: string, options: AuthorizedFolderOptions)
       if (!entry.isFile() || !shouldProcess(relativePath, plan)) continue;
       try {
         const details = await stat(full);
+        if ((options.stableForMs ?? 0) > 0) {
+          await delay(options.stableForMs!);
+          const afterDelay = await stat(full);
+          if (afterDelay.size !== details.size || afterDelay.mtimeMs !== details.mtimeMs) {
+            rejected.push(full);
+            continue;
+          }
+        }
+        if (details.size > maxFileBytes) {
+          rejected.push(full);
+          continue;
+        }
         snapshot[relativePath] = { size: details.size, mtimeMs: details.mtimeMs };
       } catch {
         rejected.push(full);
@@ -114,4 +131,8 @@ export class FolderWatcher {
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.timer = undefined;
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolveDelay => setTimeout(resolveDelay, Math.max(0, ms)));
 }

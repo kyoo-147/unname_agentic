@@ -470,9 +470,8 @@ export function usage(): string {
     `  ${CLI_PROGRAM} extract --in docs/pdfs --out build/text --format md --dry-run`,
     `  ${CLI_PROGRAM} translate --in docs/pdfs --lang vi --provider local --offline`,
     '',
-    'A dry run prints the plan and writes nothing. Without --dry-run the runner prints the',
-    'same plan and stops: the batch work lives in the app core until those modules load',
-    'from Node.',
+    'A dry run prints the plan and writes nothing. Without --dry-run the runner executes the',
+    'durable local pipeline and prints runtime status JSON after the attempt.',
   ];
   return `${lines.join('\n')}\n`;
 }
@@ -574,5 +573,5 @@ const EXIT_GROUPS: readonly { readonly code: number; readonly text: string }[] =
   { code: EXIT_CODES['unsupported-format'], text: 'unsupported value for --format, --provider or --lang' },
   { code: EXIT_CODES['conflicting-options'], text: 'conflicting options' },
   { code: EXIT_CODES['input-unusable'], text: 'the --in folder cannot be used (missing, not a folder, no PDFs)' },
-  { code: EXIT_CODES['planned-only'], text: 'nothing ran: the batch work lives in the app core' },
+  { code: EXIT_CODES['planned-only'], text: 'one or more jobs remain in review or failed' },
 ];

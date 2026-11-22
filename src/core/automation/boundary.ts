@@ -83,7 +83,11 @@ export class LocalAutomationBoundary {
     if (request.operation === 'version.list') return { ok: true, operation: request.operation, data: await this.runtime.listVersions(request.documentId) };
     if (request.operation === 'version.compare') return { ok: true, operation: request.operation, data: await this.runtime.compareVersions(request.documentId, request.beforeId, request.afterId) };
     if (request.operation === 'version.restore') { assertAuthorizedPath(request.destination, this.options.authorizedRoots); await this.runtime.restoreVersion(request.documentId, request.versionId, request.destination); return { ok: true, operation: request.operation, data: { restored: true } }; }
-    if (request.operation === 'watch.poll') return { ok: true, operation: request.operation, data: await pollFolder(request.root, request.previous, request.options) };
+    if (request.operation === 'watch.poll') {
+      const root = assertAuthorizedPath(request.root, this.options.authorizedRoots);
+      const options = { ...request.options, authorizedRoots: this.options.authorizedRoots };
+      return { ok: true, operation: request.operation, data: await pollFolder(root, request.previous, options) };
+    }
     throw new BoundaryError('unsupported', `unsupported operation ${(request as BoundaryRequest).operation}.`);
   }
 

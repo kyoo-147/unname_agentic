@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   COMMAND_GROUPS,
+  CommandPaletteModel,
   CommandRegistry,
   normalizeChord,
   readerCommands,
@@ -185,6 +186,42 @@ describe('disabled commands', () => {
     expect(results[0]!.enabled).toBe(false);
     expect(registry.all()).toHaveLength(2);
     expect(registry.resolveChord('ctrl+l')).toBe(locked);
+  });
+});
+
+describe('palette state and capability execution', () => {
+  it('navigates deterministically, exposes an empty state, and audits blocked execution', () => {
+    const registry = new CommandRegistry({ label: candidate => candidate.id });
+    const run = vi.fn();
+    registry.register(command('reader.export', 'document', { requires: 'exportFile', run }));
+    const palette = new CommandPaletteModel(registry, { capabilityMode: 'reader' });
+    expect(palette.open('missing').empty).toBe(true);
+    palette.setQuery('export');
+    const item = palette.snapshot().items[0];
+    expect(item?.availability.enabled).toBe(false);
+    expect(item?.availability.reason).toContain('reader');
+    expect(palette.handleKey({ key: 'Enter' })).toMatchObject({ executed: false, audit: 'blocked' });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('binds host actions without changing the reader command descriptors', () => {
+    const run = vi.fn();
+    const registry = readerCommands({ 'reader.zoomReset': run });
+    const palette = new CommandPaletteModel(registry, { capabilityMode: 'local' });
+    palette.open('reader.zoomReset');
+    expect(palette.handleKey({ key: 'Enter' })).toMatchObject({ executed: true });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('executes an allowed command and closes the palette', () => {
+    const registry = new CommandRegistry({ label: candidate => candidate.id });
+    const run = vi.fn();
+    registry.register(command('reader.export', 'document', { requires: 'exportFile', run }));
+    const palette = new CommandPaletteModel(registry, { capabilityMode: 'local' });
+    palette.open('export');
+    expect(palette.handleKey({ key: 'Enter' })).toMatchObject({ executed: true, audit: 'executed' });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(palette.snapshot().open).toBe(false);
   });
 });
 

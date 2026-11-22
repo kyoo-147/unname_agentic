@@ -11,6 +11,10 @@ import {
   pageExtent,
   pageToOffset,
   positionAfterModeChange,
+  READER_MODES,
+  ReaderModeSession,
+  geometryModeForReaderMode,
+  resolveReaderMode,
 } from '../src/core/reading-modes';
 import type { Pane, PaneRole, ReadingLayout, ReadingMode, Viewport } from '../src/core/reading-modes';
 
@@ -334,5 +338,39 @@ describe('scroll offsets', () => {
     const toInterleaved = positionAfterModeChange('overlay', 'interleaved', position, geometry);
     expect(toInterleaved.offset).toBeCloseTo((3 + 0.42) * 800, 6);
     expect(toInterleaved.pageTop).toBeCloseTo(3 * 800, 6);
+  });
+});
+
+describe('semantic reader modes', () => {
+  it('keeps unavailable translation modes explicit instead of falling back', () => {
+    expect(READER_MODES).toEqual(['original', 'translation', 'bilingual', 'interleave']);
+    expect(resolveReaderMode('original', { sourceAvailable: true, translation: 'missing' })).toMatchObject({ available: true, status: 'available' });
+    expect(resolveReaderMode('bilingual', { sourceAvailable: true, translation: 'missing' })).toMatchObject({ available: false, status: 'missing-translation' });
+    expect(resolveReaderMode('translation', { sourceAvailable: true, translation: 'unsupported' })).toMatchObject({ available: false, status: 'unsupported' });
+  });
+
+  it('preserves page and anchor when a supported mode changes', () => {
+    const session = new ReaderModeSession({
+      documentId: 'doc-1',
+      sourceSha256: 'a'.repeat(64),
+      generation: 2,
+      mode: 'original',
+      position: { page: 3, progress: 0.42, anchorId: 'p3-r4' },
+    }, { sourceAvailable: true, translation: 'available' });
+    const change = session.setMode('bilingual');
+    expect(change.changed).toBe(true);
+    expect(change.state.position).toEqual({ page: 3, progress: 0.42, anchorId: 'p3-r4' });
+    expect(geometryModeForReaderMode('bilingual')).toBe('side-by-side');
+    expect(geometryModeForReaderMode('interleave')).toBe('interleaved');
+  });
+
+  it('reports unsupported interleave without changing the current mode', () => {
+    const session = new ReaderModeSession({
+      documentId: 'doc-1', sourceSha256: 'b'.repeat(64), generation: 1, mode: 'original', position: { page: 1, progress: 0 },
+    }, { sourceAvailable: true, translation: 'available', interleaveSupported: false });
+    const result = session.setMode('interleave');
+    expect(result.changed).toBe(false);
+    expect(result.resolution.status).toBe('unsupported');
+    expect(session.snapshot().mode).toBe('original');
   });
 });

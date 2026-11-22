@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { NativeCompanion, NATIVE_CHUNK_BYTES, normalizeNativePage, nativeCommand, type NativePage, type NativePort } from '../extension/native-bridge';
+import { NativeBridgeError, NativeCompanion, NATIVE_CHUNK_BYTES, normalizeNativePage, nativeCommand, type NativePage, type NativePort } from '../extension/native-bridge';
 import type { MirrorSession } from '../extension/controller';
 
 const session: MirrorSession = { sourceTabId: 3, viewerTabId: 90, documentUrl: 'https://example.test/report', pdfUrl: 'https://example.test/report.pdf' };
 const page = normalizeNativePage({ page: 2, fraction: 0.25, zoom: 1.5 });
-function harness(onCommand?: (session: MirrorSession, page: NativePage) => Promise<void>) {
+function harness(onCommand?: (session: MirrorSession, page: NativePage) => Promise<void>, onProgress?: (progress: { state: string; percent: number }) => void) {
   const messages: Record<string, any>[] = [];
   const listeners: ((message: unknown) => void)[] = [];
   const disconnects: (() => void)[] = [];
@@ -16,13 +16,14 @@ function harness(onCommand?: (session: MirrorSession, page: NativePage) => Promi
     postMessage: vi.fn(message => {
       const request = message as Record<string, any>; messages.push(request);
       const reply = request.type === 'hello' ? { ok: true, protocol: 1, status: 'ready' }
-        : request.type === 'chunk' ? { ok: true, binding: request.binding, next_index: request.index + 1 }
+        : request.type === 'begin' ? { ok: true, binding: request.binding, status: 'receiving', next_index: 0 }
+        : request.type === 'chunk' ? { ok: true, binding: request.binding, status: 'receiving', next_index: request.index + 1 }
         : { ok: true, binding: request.binding, status: request.type === 'commit' ? 'complete' : 'receiving' };
       queueMicrotask(() => { if (!disconnected) listeners.forEach(listener => listener(reply)); });
     }),
   };
   const connect = vi.fn(() => port);
-  return { companion: new NativeCompanion(connect, onCommand), messages, port, connect, reply: (message: unknown) => listeners.forEach(listener => listener(message)) };
+  return { companion: new NativeCompanion(connect, onCommand, onProgress), messages, port, connect, reply: (message: unknown) => listeners.forEach(listener => listener(message)) };
 }
 function pdf(size = 400_000): Uint8Array { const bytes = new Uint8Array(size); bytes.set(new TextEncoder().encode('%PDF-1.7\nsynthetic')); return bytes; }
 
@@ -42,13 +43,22 @@ describe('opt-in native PDF companion', () => {
       { ...command, sequence: 0 }, { ...command, sequence: Number.MAX_SAFE_INTEGER + 1 },
       { ...command, page: { ...page, fraction: NaN } }, { ...command, page: { ...page, fraction: 1.01 } },
       { ...command, page: { ...page, page: -1 } }, { ...command, page: { ...page, page_count: 1 } },
-    ]) expect(() => nativeCommand(changed, binding)).toThrow(/Invalid/);
+    ]) expect(() => nativeCommand(changed, binding)).toThrowError(new NativeBridgeError('invalid-response', 'Invalid desktop navigation command.'));
   });
   it('probes only availability without reading or transferring document bytes', async () => {
     const h = harness();
     expect(await h.companion.probe()).toBe(true);
     expect(h.messages).toEqual([{ type: 'hello' }]);
     expect(h.port.disconnect).toHaveBeenCalledOnce(); expect(h.companion.following).toBe(false);
+  });
+  it('reports transfer and following progress without making UI callbacks authoritative', async () => {
+    const progress: { state: string; percent: number }[] = [];
+    const h = harness(undefined, value => progress.push({ state: value.state, percent: value.percent }));
+    await h.companion.open(session, async () => pdf(100), async () => {}, page, 'Synthetic');
+    expect(progress.map(value => value.state)).toEqual(['transferring', 'transferring', 'following']);
+    expect(progress.at(-1)?.percent).toBe(100);
+    await h.companion.stop();
+    expect(progress.at(-1)?.state).toBe('stopped');
   });
   it('shares the initial hello when status probing overlaps an explicit desktop transfer', async () => {
     const h = harness();
@@ -66,6 +76,18 @@ describe('opt-in native PDF companion', () => {
     const acquire = vi.fn(async () => pdf());
     await expect(companion.open(session, acquire, async () => {}, page, 'Synthetic')).rejects.toThrow(/unavailable/);
     expect(acquire).not.toHaveBeenCalled(); expect(companion.following).toBe(false);
+  });
+  it('preserves typed rejection codes from the native host', async () => {
+    const h = harness(); const original = h.port.postMessage;
+    h.port.postMessage = message => {
+      const request = message as Record<string, unknown>;
+      if (request.type === 'begin') {
+        h.messages.push(request);
+        queueMicrotask(() => h.reply({ ok: false, error: 'Upload already active.' }));
+      } else original(message);
+    };
+    await expect(h.companion.open(session, async () => pdf(100), async () => {}, page, 'Synthetic')).rejects.toMatchObject({ code: 'rejected' });
+    expect(h.companion.following).toBe(false);
   });
   it('uses ordered bounded chunks bound to source, nonce, session and whole-PDF digest', async () => {
     const h = harness(); const bytes = pdf(); const authorize = vi.fn(async () => {});
@@ -141,6 +163,34 @@ describe('opt-in native PDF companion', () => {
       await vi.advanceTimersByTimeAsync(1000); await pageTask;
       expect(h.companion.following).toBe(false); expect(h.connect).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(5000); expect(h.connect).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
+  it('reconnects after a native port drop and resumes the bound local session', async () => {
+    vi.useFakeTimers();
+    try {
+      const requests: Array<{ port: number; type: string }> = [];
+      const ports: Array<{ port: NativePort; drop(): void }> = [];
+      const connect = vi.fn(() => {
+        const index = ports.length; const listeners: ((message: unknown) => void)[] = []; const disconnects: (() => void)[] = []; let closed = false;
+        const port: NativePort = {
+          onMessage: { addListener: listener => { listeners.push(listener); } }, onDisconnect: { addListener: listener => { disconnects.push(listener); } },
+          disconnect: vi.fn(() => { if (!closed) { closed = true; disconnects.forEach(listener => listener()); } }),
+          postMessage: vi.fn(message => {
+            const request = message as Record<string, any>; requests.push({ port: index, type: request.type });
+            const reply = request.type === 'hello' ? { ok: true, protocol: 1, status: 'ready' } : request.type === 'resume' ? { ok: true, binding: request.binding, status: 'resumed', sequence: 0 } : request.type === 'poll' ? { ok: true, binding: request.binding, status: 'following', command: null } : request.type === 'begin' ? { ok: true, binding: request.binding, status: 'receiving', next_index: 0 } : request.type === 'chunk' ? { ok: true, binding: request.binding, status: 'receiving', next_index: request.index + 1 } : { ok: true, binding: request.binding, status: request.type === 'commit' ? 'complete' : request.type === 'end' ? 'ended' : 'receiving' };
+            queueMicrotask(() => { if (!closed) listeners.forEach(listener => listener(reply)); });
+          }),
+        };
+        const item = { port, drop: () => port.disconnect() }; ports.push(item); return port;
+      });
+      const companion = new NativeCompanion(connect);
+      await companion.open(session, async () => pdf(100), async () => {}, page, 'Synthetic');
+      ports[0]!.drop();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(requests.filter(request => request.port === 1).map(request => request.type)).toEqual(['hello', 'resume', 'poll']);
+      expect(companion.following).toBe(true);
+      await companion.stop();
     } finally { vi.useRealTimers(); }
   });
   it('waits for an in-flight poll before starting another explicit upload', async () => {

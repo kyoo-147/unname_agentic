@@ -14,7 +14,7 @@ const targetLanguage = document.querySelector<HTMLSelectElement>('#target-langua
 localeSwitch.innerHTML = LOCALES.map(locale => `<button type="button" data-locale="${locale}" aria-pressed="${locale === getLocale()}">${localeLabel(locale)}</button>`).join('');
 
 type DesktopKind = 'checking' | 'ready' | 'following' | 'unavailable' | 'no-source' | 'sending' | 'delivered' | 'stopped' | 'error';
-interface DesktopView { kind: DesktopKind; message?: string }
+interface DesktopView { kind: DesktopKind; message?: string; progress?: number }
 let desktopView: DesktopView = { kind: 'checking' };
 let enabled = false;
 let statusView: (() => string) | null = null;
@@ -30,13 +30,23 @@ function desktopMessage(view: DesktopView): string {
     case 'following': return t('desktopFollowing');
     case 'unavailable': return t('desktopUnavailable');
     case 'no-source': return t('desktopNoSource');
-    case 'sending': return t('desktopSending');
+    case 'sending': return view.progress === undefined ? t('desktopSending') : `${t('desktopSending')} ${view.progress}%`;
     case 'delivered': return t('desktopDelivered');
     case 'stopped': return t('desktopStopped');
     case 'error': return view.message ?? t('desktopUnavailable');
   }
 }
 function renderDesktop(): void { desktopStatus.textContent = desktopMessage(desktopView); }
+chrome.runtime.onMessage?.addListener((message: unknown) => {
+  if (!message || typeof message !== 'object' || (message as Record<string, unknown>).type !== 'mirror:desktop-progress') return;
+  const progress = (message as { progress?: { state?: string; percent?: unknown; detail?: unknown } }).progress;
+  if (!progress) return;
+  if (progress.state === 'error') desktopView = { kind: 'error', message: typeof progress.detail === 'string' ? progress.detail : undefined };
+  else if (progress.state === 'transferring' || progress.state === 'reconnecting') desktopView = { kind: 'sending', progress: typeof progress.percent === 'number' ? Math.max(0, Math.min(100, Math.round(progress.percent))) : undefined };
+  else if (progress.state === 'following') desktopView = { kind: 'following' };
+  else if (progress.state === 'stopped') desktopView = { kind: 'stopped' };
+  renderDesktop();
+});
 function renderStatus(): void { if (statusView) status.textContent = statusView(); }
 function setStatus(text: () => string): void { statusView = text; renderStatus(); }
 function errorMessage(error: unknown): void { setStatus(() => error instanceof Error ? error.message : String(error)); }

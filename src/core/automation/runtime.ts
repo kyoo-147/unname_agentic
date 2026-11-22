@@ -40,6 +40,8 @@ export interface DurableAutomationJob {
   readonly sourcePath: string;
   readonly sourceName: string;
   readonly sourceSha256: string;
+  /** Immutable byte-for-byte snapshot used by all later stages. */
+  readonly sourceArtifactPath: string;
   readonly outputDir: string;
   readonly schema: readonly FieldSchema[] | null;
   readonly rules: readonly AutomationRule[];
@@ -76,6 +78,7 @@ export interface LocalAutomationRuntimeOptions {
   readonly ocr?: (runtime: RuntimeDocument, signal: AbortSignal) => Promise<RuntimeDocument>;
   readonly translate?: (document: DocumentIR, signal: AbortSignal) => Promise<DocumentIR>;
   readonly importPdf?: typeof importPdfFile;
+  readonly concurrency?: number;
 }
 
 export interface EnqueueJobInput {
@@ -91,6 +94,23 @@ export interface EnqueueJobInput {
 export interface AutomationStatus {
   readonly generation: number;
   readonly jobs: readonly Pick<DurableAutomationJob, 'id' | 'sourcePath' | 'state' | 'stage' | 'completedStages' | 'attempt' | 'error' | 'reviews' | 'artifacts'>[];
+}
+
+export interface AutomationJobView {
+  readonly id: string;
+  readonly state: DurableJobState;
+  readonly currentStage: DurableAutomationStage | null;
+  readonly progress: number;
+  readonly completedStages: readonly DurableAutomationStage[];
+  readonly pendingReviewCount: number;
+  readonly error: string | null;
+}
+
+export interface AutomationView {
+  readonly generation: number;
+  readonly active: boolean;
+  readonly paused: boolean;
+  readonly jobs: readonly AutomationJobView[];
 }
 
 export class AutomationRuntimeError extends Error {
@@ -110,10 +130,12 @@ export class LocalAutomationRuntime {
   private readonly ocr?: LocalAutomationRuntimeOptions['ocr'];
   private readonly translate?: LocalAutomationRuntimeOptions['translate'];
   private readonly versions: ImmutableVersionStore;
+  private readonly concurrency: number;
   private state!: AutomationState;
   private active = false;
   private paused = false;
-  private controller: AbortController | undefined;
+  private readonly controllers = new Map<string, AbortController>();
+  private runPromise: Promise<AutomationStatus> | undefined;
   private commitChain: Promise<void> = Promise.resolve();
 
   constructor(options: LocalAutomationRuntimeOptions) {
@@ -121,9 +143,12 @@ export class LocalAutomationRuntime {
     if (!Array.isArray(options.authorizedRoots) || options.authorizedRoots.length === 0) throw new AutomationRuntimeError('invalid-input', 'at least one authorized folder is required.');
     const threshold = options.reviewThreshold ?? 0.8;
     if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) throw new AutomationRuntimeError('invalid-input', 'reviewThreshold must be between 0 and 1.');
+    const concurrency = options.concurrency ?? 1;
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) throw new AutomationRuntimeError('invalid-input', 'concurrency must be an integer between 1 and 16.');
     this.now = options.now ?? (() => new Date().toISOString());
     this.actor = options.actor ?? 'app';
     this.reviewThreshold = threshold;
+    this.concurrency = concurrency;
     this.authorizedRoots = options.authorizedRoots.map(root => resolve(root));
     this.importPdf = options.importPdf ?? importPdfFile;
     this.ocr = options.ocr;
@@ -152,12 +177,15 @@ export class LocalAutomationRuntime {
       if (existing.sourceSha256 === sourceSha256 && existing.sourcePath === realSourcePath) return clone(existing);
       throw new AutomationRuntimeError('duplicate', `job ${id} already exists with a different source.`);
     }
+    const sourceArtifactPath = join(outputDir, '.automation', 'sources', `${sourceSha256}.pdf`);
+    await writeImmutableSource(sourceArtifactPath, bytes, sourceSha256);
     const schema = input.schema === undefined ? null : normalizeSchema(input.schema);
     const job: DurableAutomationJob = {
       id,
       sourcePath: realSourcePath,
       sourceName: basename(realSourcePath),
       sourceSha256,
+      sourceArtifactPath,
       outputDir,
       schema,
       rules: [...(input.rules ?? [])],
@@ -184,19 +212,28 @@ export class LocalAutomationRuntime {
 
   async run(): Promise<AutomationStatus> {
     await this.ensureOpen();
-    if (this.active) return this.status();
-    this.active = true;
+    if (this.runPromise) return this.runPromise;
     this.paused = false;
+    const promise = this.executeRun();
+    this.runPromise = promise;
+    try {
+      return await promise;
+    } finally {
+      if (this.runPromise === promise) this.runPromise = undefined;
+    }
+  }
+
+  private async executeRun(): Promise<AutomationStatus> {
+    this.active = true;
     try {
       while (!this.paused) {
-        const job = Object.values(this.state.jobs).find(candidate => candidate.state === 'queued');
-        if (!job) break;
-        await this.process(job.id);
+        const queued = Object.values(this.state.jobs).filter(job => job.state === 'queued').slice(0, this.concurrency);
+        if (queued.length === 0) break;
+        await Promise.all(queued.map(job => this.process(job.id)));
       }
       return this.status();
     } finally {
       this.active = false;
-      this.controller = undefined;
     }
   }
 
@@ -233,7 +270,7 @@ export class LocalAutomationRuntime {
       }
       return { ...current, jobs };
     }, 'cancel', jobId ?? 'batch');
-    this.controller?.abort();
+    for (const controller of this.controllers.values()) controller.abort();
   }
 
   async retry(jobId?: string): Promise<string[]> {
@@ -289,6 +326,19 @@ export class LocalAutomationRuntime {
     };
   }
 
+  view(): AutomationView {
+    const jobs = Object.values(this.state?.jobs ?? {}).map(job => ({
+      id: job.id,
+      state: job.state,
+      currentStage: job.stage,
+      progress: job.state === 'done' ? 100 : Math.floor((job.completedStages.length / AUTOMATION_STAGE_ORDER.length) * 100),
+      completedStages: [...job.completedStages],
+      pendingReviewCount: job.reviews.filter(review => review.status === 'pending').length,
+      error: job.error,
+    }));
+    return { generation: this.state?.generation ?? 0, active: this.active, paused: this.paused, jobs };
+  }
+
   getJob(jobId: string): DurableAutomationJob {
     return clone(this.requireJob(jobId));
   }
@@ -310,7 +360,8 @@ export class LocalAutomationRuntime {
 
   private async process(jobId: string): Promise<void> {
     let job = this.requireJob(jobId);
-    this.controller = new AbortController();
+    const controller = new AbortController();
+    this.controllers.set(jobId, controller);
     await this.commit(current => ({ ...current, jobs: { ...current.jobs, [jobId]: { ...current.jobs[jobId]!, state: 'running', attempt: current.jobs[jobId]!.attempt + 1, error: null, cancelRequested: false } } }), 'start', jobId);
     job = this.requireJob(jobId);
     try {
@@ -318,7 +369,7 @@ export class LocalAutomationRuntime {
         job = this.requireJob(jobId);
         if (job.completedStages.includes(stage)) continue;
         this.throwIfStopped(job);
-        await this.runStage(job, stage, this.controller.signal);
+        await this.runStage(job, stage, controller.signal);
         job = this.requireJob(jobId);
         if (job.pauseRequested || this.paused) {
           await this.commit(current => ({ ...current, jobs: { ...current.jobs, [jobId]: { ...current.jobs[jobId]!, state: 'paused' } } }), 'pause', jobId);
@@ -332,12 +383,14 @@ export class LocalAutomationRuntime {
       await this.commit(current => ({ ...current, jobs: { ...current.jobs, [jobId]: { ...current.jobs[jobId]!, state: 'done', stage: null } } }), 'done', jobId);
     } catch (error) {
       const current = this.requireJob(jobId);
-      if (current.cancelRequested || this.controller.signal.aborted || error instanceof AutomationRuntimeError && error.code === 'cancelled') {
+      if (current.cancelRequested || controller.signal.aborted || error instanceof AutomationRuntimeError && error.code === 'cancelled') {
         await this.commit(state => ({ ...state, jobs: { ...state.jobs, [jobId]: { ...state.jobs[jobId]!, state: 'cancelled', stage: null } } }), 'cancel', jobId);
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
       await this.commit(state => ({ ...state, jobs: { ...state.jobs, [jobId]: { ...state.jobs[jobId]!, state: 'failed', error: message, stage: null } } }), 'failure', jobId);
+    } finally {
+      this.controllers.delete(jobId);
     }
   }
 
@@ -345,7 +398,7 @@ export class LocalAutomationRuntime {
     await this.commit(current => ({ ...current, jobs: { ...current.jobs, [job.id]: { ...current.jobs[job.id]!, stage } } }), 'stage-start', job.id);
     let next = this.requireJob(job.id);
     if (stage === 'import') {
-      const imported = await this.importPdf(next.sourcePath, { signal });
+      const imported = await this.importPdf(next.sourceArtifactPath ?? next.sourcePath, { signal });
       if (imported.runtime.source.sha256 !== next.sourceSha256) throw new Error('source changed after enqueue; refusing a mixed-revision job.');
       this.throwIfStopped(this.requireJob(job.id));
       const sourceVersion = await this.versions.put({ id: `${next.id}-source-attempt-${next.attempt}`, documentId: imported.runtime.ir.documentId, sourceSha256: next.sourceSha256, parentId: null, stage: 'import', attempt: next.attempt, document: imported.runtime.ir });
@@ -450,7 +503,7 @@ export class LocalAutomationRuntime {
   }
 
   private throwIfStopped(job: DurableAutomationJob): void {
-    if (job.cancelRequested || this.controller?.signal.aborted) throw new AutomationRuntimeError('cancelled', 'automation was cancelled.');
+    if (job.cancelRequested || this.controllers.get(job.id)?.signal.aborted) throw new AutomationRuntimeError('cancelled', 'automation was cancelled.');
   }
 }
 
@@ -462,7 +515,6 @@ function normalizeSchema(value: unknown): FieldSchema[] {
   const module = value as { fields?: unknown };
   const fields = Array.isArray(value) ? value : module && Array.isArray(module.fields) ? module.fields : null;
   if (!fields) throw new AutomationRuntimeError('invalid-input', 'schema must be an array or an object with fields.');
-  return defineSchema(fields);
   return defineSchema(fields);
 }
 
@@ -478,6 +530,18 @@ function reviewItems(jobId: string, extraction: FieldExtractionResult, threshold
   }
   for (const missing of extraction.missing) items.push({ id: `review:${jobId}:${missing.id}:missing-required`, fieldId: missing.id, stage: 'extract', reason: 'missing-required', confidence: 0, detail: 'required-field-missing', status: 'pending' });
   return items;
+}
+
+async function writeImmutableSource(path: string, bytes: Uint8Array, expectedSha256: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  try {
+    await writeFile(path, bytes, { flag: 'wx', mode: 0o600 });
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  const existing = new Uint8Array(await readFile(path));
+  if (sha256Hex(existing) !== expectedSha256) throw new AutomationRuntimeError('invalid-input', `immutable source snapshot is corrupted: ${path}`);
 }
 
 async function writeArtifact(outputDir: string, name: string, content: string): Promise<DurableAutomationArtifact> {

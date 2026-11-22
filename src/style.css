@@ -79,3 +79,15 @@ form>label,.form-row label{color:#576553}
 @media (prefers-reduced-motion: reduce){
   .splitter,.splitter::after,.reading-scroll,.page-pair,.status-bar,.skip-link,button,a{transition:none!important;animation:none!important;scroll-behavior:auto!important}
 }
+
+/* Reading modes are layout states, not labels. The mode class is published by the core planner. */
+#pages.reading-mode--overlay .page-pair { display: block; }
+#pages.reading-mode--overlay .page-slot { width: 100%; }
+#pages.reading-mode--overlay .translated-slot { position: absolute; inset: 0; opacity: var(--reading-overlay-opacity, .74); pointer-events: none; }
+#pages.reading-mode--overlay .splitter { display: none; }
+#pages.reading-mode--interleaved .page-pair { grid-template-columns: 1fr; gap: 14px; }
+#pages.reading-mode--interleaved .splitter { display: none; }
+#pages.reading-mode--interleaved .page-slot { width: 100%; }
+#pages.reading-mode--reflow .page-pair { grid-template-columns: minmax(180px, var(--reading-rail, 35%)) minmax(0, 1fr); gap: 18px; }
+#pages.reading-mode--reflow .splitter { display: none; }
+#pages.reading-mode--reflow .page-slot { width: 100%; }

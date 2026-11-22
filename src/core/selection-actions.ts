@@ -630,3 +630,96 @@ export function orderedGroups(actions: readonly SelectionAction[]): SelectionAct
 export function filterEnabled(actions: readonly SelectionAction[]): SelectionAction[] {
   return actions.filter(action => action.enabled);
 }
+
+export interface SelectionActionAudit {
+  readonly kind: 'selection-action';
+  readonly actionId: SelectionActionId;
+  readonly page: number;
+  readonly blockId?: string;
+  readonly outcome: 'executed' | 'blocked';
+  readonly reason?: SelectionReasonKey;
+}
+
+export interface SelectionActionMenuSnapshot {
+  readonly open: boolean;
+  readonly selectedIndex: number;
+  readonly actions: readonly SelectionAction[];
+  readonly empty: boolean;
+}
+
+export interface SelectionActionKeyEvent {
+  readonly key: string;
+}
+
+/**
+ * Keyboard-ready selection menu state. Hosts render this model however they like;
+ * execution returns an audit record and never invokes a disabled action.
+ */
+export class SelectionActionMenu {
+  private openState = false;
+  private selected = 0;
+
+  constructor(
+    private readonly selection: Pick<TextSelection, 'page' | 'blockId'>,
+    private readonly actions: readonly SelectionAction[],
+    private readonly execute: (action: SelectionActionId) => void,
+  ) {}
+
+  open(): SelectionActionMenuSnapshot {
+    this.openState = true;
+    this.selected = 0;
+    return this.snapshot();
+  }
+
+  close(): SelectionActionMenuSnapshot {
+    this.openState = false;
+    return this.snapshot();
+  }
+
+  move(delta: number): SelectionActionMenuSnapshot {
+    if (this.actions.length === 0) return this.snapshot();
+    const step = Number.isFinite(delta) ? Math.trunc(delta) : 0;
+    this.selected = (this.selected + step + this.actions.length) % this.actions.length;
+    return this.snapshot();
+  }
+
+  handleKey(event: SelectionActionKeyEvent): SelectionActionAudit | SelectionActionMenuSnapshot {
+    if (event.key === 'Escape') return this.close();
+    if (event.key === 'ArrowDown') return this.move(1);
+    if (event.key === 'ArrowUp') return this.move(-1);
+    if (event.key === 'Home') { this.selected = 0; return this.snapshot(); }
+    if (event.key === 'End') { this.selected = Math.max(0, this.actions.length - 1); return this.snapshot(); }
+    if (event.key === 'Enter' || event.key === ' ') return this.executeSelected();
+    return this.snapshot();
+  }
+
+  executeSelected(): SelectionActionAudit {
+    const action = this.actions[this.selected];
+    if (!action) return { kind: 'selection-action', actionId: 'copy', page: this.selection.page, outcome: 'blocked', reason: 'selectionReasonNoText' };
+    if (!action.enabled) {
+      return {
+        kind: 'selection-action',
+        actionId: action.id,
+        page: this.selection.page,
+        ...(this.selection.blockId ? { blockId: this.selection.blockId } : {}),
+        outcome: 'blocked',
+        ...(action.reason ? { reason: action.reason } : {}),
+      };
+    }
+    this.execute(action.id);
+    this.openState = false;
+    return {
+      kind: 'selection-action',
+      actionId: action.id,
+      page: this.selection.page,
+      ...(this.selection.blockId ? { blockId: this.selection.blockId } : {}),
+      outcome: 'executed',
+    };
+  }
+
+  snapshot(): SelectionActionMenuSnapshot {
+    const selectedIndex = this.actions.length === 0 ? 0 : Math.min(this.selected, this.actions.length - 1);
+    this.selected = selectedIndex;
+    return { open: this.openState, selectedIndex, actions: [...this.actions], empty: this.actions.length === 0 };
+  }
+}

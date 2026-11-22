@@ -451,3 +451,104 @@ function numberOr(value: unknown, fallback: number): number {
   const parsed = finiteOrNull(value);
   return parsed === null ? fallback : parsed;
 }
+
+/** Semantic reader modes consumed by desktop and browser hosts. */
+export type ReaderMode = 'original' | 'translation' | 'bilingual' | 'interleave';
+export const READER_MODES: readonly ReaderMode[] = ['original', 'translation', 'bilingual', 'interleave'];
+
+export type ReaderModeAvailability = 'available' | 'missing-source' | 'missing-translation' | 'unsupported';
+
+export interface ReaderContentState {
+  readonly sourceAvailable: boolean;
+  readonly translation: 'available' | 'missing' | 'unsupported';
+  readonly interleaveSupported?: boolean;
+}
+
+export interface ReaderModeResolution {
+  readonly requested: ReaderMode;
+  readonly available: boolean;
+  readonly status: ReaderModeAvailability;
+  readonly reason?: string;
+}
+
+export interface ReaderPosition {
+  readonly page: number;
+  readonly progress: number;
+  /** Stable block/anchor id, retained when a host can provide one. */
+  readonly anchorId?: string;
+}
+
+export interface ReaderModeState {
+  readonly documentId: string;
+  readonly sourceSha256: string;
+  readonly generation: number;
+  readonly mode: ReaderMode;
+  readonly position: ReaderPosition;
+}
+
+export function isReaderMode(value: unknown): value is ReaderMode {
+  return value === 'original' || value === 'translation' || value === 'bilingual' || value === 'interleave';
+}
+
+/** Resolves availability without falling back to a different reading mode. */
+export function resolveReaderMode(mode: ReaderMode, content: ReaderContentState): ReaderModeResolution {
+  if (!isReaderMode(mode)) return { requested: mode, available: false, status: 'unsupported', reason: 'Unknown reading mode.' };
+  if (!content.sourceAvailable) return { requested: mode, available: false, status: 'missing-source', reason: 'The original document is unavailable.' };
+  if (mode === 'original') return { requested: mode, available: true, status: 'available' };
+  if (content.translation === 'unsupported') return { requested: mode, available: false, status: 'unsupported', reason: 'This content cannot be rendered in translation mode.' };
+  if (content.translation !== 'available') return { requested: mode, available: false, status: 'missing-translation', reason: 'A translation is not available yet.' };
+  if (mode === 'interleave' && content.interleaveSupported === false) return { requested: mode, available: false, status: 'unsupported', reason: 'Interleave is not supported for this content.' };
+  return { requested: mode, available: true, status: 'available' };
+}
+
+/** Keeps page, in-page progress and an optional stable anchor across a mode change. */
+export function preserveReadingPosition(position: ReaderPosition): ReaderPosition {
+  const page = Number.isFinite(position?.page) ? Math.max(1, Math.trunc(position.page)) : 1;
+  const progress = Number.isFinite(position?.progress) ? Math.min(1, Math.max(0, position.progress)) : 0;
+  const anchorId = typeof position?.anchorId === 'string' && position.anchorId.trim() ? position.anchorId.trim() : undefined;
+  return { page, progress, ...(anchorId ? { anchorId } : {}) };
+}
+
+/** Maps semantic modes to the existing geometry planner without pretending they are equivalent content. */
+export function geometryModeForReaderMode(mode: ReaderMode): ReadingMode {
+  switch (mode) {
+    case 'original':
+    case 'translation':
+      return 'reflow';
+    case 'bilingual':
+      return 'side-by-side';
+    case 'interleave':
+      return 'interleaved';
+  }
+}
+
+export interface ReaderModeChange {
+  readonly state: ReaderModeState;
+  readonly resolution: ReaderModeResolution;
+  readonly changed: boolean;
+}
+
+/** Small host-neutral state machine used by the desktop bridge and reader adapters. */
+export class ReaderModeSession {
+  private current: ReaderModeState;
+
+  constructor(initial: ReaderModeState, private readonly content: ReaderContentState) {
+    if (!isReaderMode(initial.mode)) throw new ReadingModeError('unknown-mode', `Unknown reading mode: ${String(initial.mode)}.`);
+    this.current = Object.freeze({ ...initial, position: preserveReadingPosition(initial.position) });
+  }
+
+  snapshot(): ReaderModeState { return this.current; }
+
+  setPosition(position: ReaderPosition): ReaderModeState {
+    this.current = Object.freeze({ ...this.current, position: preserveReadingPosition(position) });
+    return this.current;
+  }
+
+  setMode(mode: ReaderMode): ReaderModeChange {
+    const resolution = resolveReaderMode(mode, this.content);
+    if (!resolution.available) return { state: this.current, resolution, changed: false };
+    const changed = mode !== this.current.mode;
+    if (changed) this.current = Object.freeze({ ...this.current, mode, position: preserveReadingPosition(this.current.position) });
+    return { state: this.current, resolution, changed };
+  }
+}

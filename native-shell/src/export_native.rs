@@ -1,7 +1,7 @@
 //! Writing a document where the reader chooses.
 //!
 //! C22: the native reader could only write Markdown into its own library. This
-//! module turns a document into Markdown, plain text or JSON and puts it at any
+//! module turns a document into Markdown, plain text, HTML, DOCX or JSON and puts it at any
 //! path, atomically, refusing to replace a file the caller did not agree to
 //! replace. Nothing here needs a window: `app.rs` asks for the path with the
 //! system save panel and calls [`write_export_path`].
@@ -10,6 +10,11 @@
 //!   block as its quoted source with the translation under it; a block with no
 //!   translation keeps its source and says it is not translated yet.
 //! - Plain text keeps the translation alone, pages separated by a form feed.
+//! - HTML is a self-contained text/geometry view. It does not claim image,
+//!   vector, bookmark or hyperlink preservation because the native IR does not
+//!   carry those source objects yet.
+//! - DOCX is a real, minimal Office Open XML package containing text, formulas
+//!   and tables. It is deliberately text-only and does not claim PDF fidelity.
 //! - JSON keeps everything, as
 //!   `{document, pages, blocks: [{id, page, type, source, translation,
 //!   untranslated}]}`: a title, the page count, and every block with its 1-based
@@ -35,6 +40,10 @@ pub enum ExportFormat {
     Markdown,
     /// The translation alone.
     Text,
+    /// A self-contained HTML reading view.
+    Html,
+    /// A minimal Office Open XML document with text, formulas and tables.
+    Docx,
     /// The document as data.
     Json,
 }
@@ -46,6 +55,8 @@ impl ExportFormat {
             Self::Pdf => "pdf",
             Self::Markdown => "md",
             Self::Text => "txt",
+            Self::Html => "html",
+            Self::Docx => "docx",
             Self::Json => "json",
         }
     }
@@ -60,9 +71,11 @@ impl ExportFormat {
     /// interface language names for itself.
     pub fn label(self) -> &'static str {
         match self {
-            Self::Pdf => "PDF",
+            Self::Pdf => tr3("原始 PDF", "Original PDF", "PDF gốc"),
             Self::Markdown => "Markdown",
             Self::Text => tr3("纯文本", "Plain text", "Văn bản thuần"),
+            Self::Html => "HTML",
+            Self::Docx => "DOCX",
             Self::Json => "JSON",
         }
     }
@@ -75,8 +88,23 @@ impl ExportFormat {
         match extension.trim().trim_start_matches('.').to_ascii_lowercase().as_str() {
             "pdf" => Self::Pdf,
             "txt" | "text" => Self::Text,
+            "html" | "htm" => Self::Html,
+            "docx" => Self::Docx,
             "json" => Self::Json,
             _ => Self::Markdown,
+        }
+    }
+
+    /// Whether this format can be generated from the native snapshot without
+    /// pretending to be a translated-PDF writer.
+    pub fn can_generate(self) -> bool { !matches!(self, Self::Pdf) }
+
+    /// The preservation promise shown by provider/export UX and reports.
+    pub fn preservation(self) -> &'static str {
+        match self {
+            Self::Pdf => "source bytes, fonts, images, vectors, bookmarks and hyperlinks preserved exactly",
+            Self::Markdown | Self::Text | Self::Html | Self::Docx => "text, formulas, tables and native coordinates only; PDF objects are not preserved",
+            Self::Json => "IR metadata, polygons, formulas and tables preserved; PDF objects are not embedded",
         }
     }
 }
@@ -89,6 +117,27 @@ pub enum BlockKind {
     Text,
     /// A formula the reader never rewrites; its source is the formula itself.
     Formula,
+    /// A structured table whose cells retain row/column spans.
+    Table,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ExportCell {
+    pub source: String,
+    pub translation: Option<String>,
+    pub row_span: u16,
+    pub col_span: u16,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExportTable {
+    pub rows: Vec<Vec<ExportCell>>,
+}
+
+impl ExportCell {
+    pub fn new(source: impl Into<String>, translation: Option<String>) -> Self {
+        Self { source: source.into(), translation, row_span: 1, col_span: 1 }
+    }
 }
 
 /// One region of a page: its source and the translation when one exists.
@@ -99,15 +148,24 @@ pub struct ExportBlock {
     pub source: String,
     pub translation: Option<String>,
     pub polygon: Option<[[f32; 2]; 4]>,
+    pub table: Option<ExportTable>,
 }
 impl ExportBlock {
     pub fn text(id: impl Into<String>, source: impl Into<String>, translation: Option<String>) -> Self {
-        Self { id: id.into(), kind: BlockKind::Text, source: source.into(), translation, polygon: None }
+        Self { id: id.into(), kind: BlockKind::Text, source: source.into(), translation, polygon: None, table: None }
     }
 
     pub fn with_polygon(mut self, polygon: [[f32; 2]; 4]) -> Self {
         self.polygon = Some(polygon);
         self
+    }
+
+    pub fn formula(id: impl Into<String>, latex: impl Into<String>) -> Self {
+        Self { id: id.into(), kind: BlockKind::Formula, source: latex.into(), translation: None, polygon: None, table: None }
+    }
+
+    pub fn table(id: impl Into<String>, table: ExportTable) -> Self {
+        Self { id: id.into(), kind: BlockKind::Table, source: String::new(), translation: None, polygon: None, table: Some(table) }
     }
 
     /// The translation when it says something: an empty string is a block that
@@ -223,6 +281,8 @@ struct JsonBlock {
     translation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     polygon: Option<[[f32; 2]; 4]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    table: Option<ExportTable>,
     /// True when `translation` is null: the source is what this block falls back
     /// to, and a consumer that shows one side should say it is untranslated.
     untranslated: bool,
@@ -233,9 +293,10 @@ pub fn export_document(document: &ExportDocument, format: ExportFormat) -> Strin
     match format {
         // PDF is handled by `write_export_bytes_path`: a text snapshot cannot
         // preserve the original PDF's objects, fonts or source hash.
-        ExportFormat::Pdf => String::new(),
+        ExportFormat::Pdf | ExportFormat::Docx => String::new(),
         ExportFormat::Markdown => markdown(document),
         ExportFormat::Text => plain_text(document),
+        ExportFormat::Html => html(document),
         ExportFormat::Json => json(document),
     }
 }
@@ -260,6 +321,15 @@ fn markdown(document: &ExportDocument) -> String {
     for (index, page) in document.pages.iter().enumerate() {
         out.push_str(&format!("\n## {}\n\n", tr3_fill("第 {} 页", "Page {}", "Trang {}", index + 1)));
         for block in &page.blocks {
+            if let Some(table) = &block.table {
+                for row in &table.rows {
+                    out.push('|');
+                    for cell in row { out.push(' '); out.push_str(&cell_text(cell).replace('|', "\\|")); out.push_str(" | "); }
+                    out.push('\n');
+                }
+                out.push('\n');
+                continue;
+            }
             for line in block.source.trim().lines() {
                 out.push_str("> ");
                 out.push_str(line);
@@ -284,6 +354,11 @@ fn plain_text(document: &ExportDocument) -> String {
             out.push('\n');
         }
         for block in &page.blocks {
+            if let Some(table) = &block.table {
+                let cells = table.rows.iter().flat_map(|row| row.iter().map(cell_text)).collect::<Vec<_>>().join(" | ");
+                if !cells.is_empty() { out.push('\n'); out.push_str(&cells); out.push('\n'); }
+                continue;
+            }
             if let Some(translation) = block.translated_text() {
                 out.push('\n');
                 out.push_str(translation);
@@ -304,12 +379,108 @@ fn json(document: &ExportDocument) -> String {
             .blocks()
             .map(|(page, block)| {
                 let translation = block.translated_text().map(str::to_string);
-                JsonBlock { id: block.id.clone(), page, kind: block.kind, source: block.source.clone(), translation: translation.clone(), polygon: block.polygon, untranslated: translation.is_none() }
+                JsonBlock { id: block.id.clone(), page, kind: block.kind, source: block.source.clone(), translation: translation.clone(), polygon: block.polygon, table: block.table.clone(), untranslated: translation.is_none() }
             })
             .collect(),
     };
     // A string, a count and a list: serialising this cannot fail.
     serde_json::to_string_pretty(&export).unwrap_or_default()
+}
+
+/// Return bytes for every genuinely supported export. PDF is intentionally
+/// rejected here: the only native PDF path is an exact copy of retained source
+/// bytes, never a translated-PDF writer.
+pub fn export_document_bytes(document: &ExportDocument, format: ExportFormat) -> Result<Vec<u8>> {
+    match format {
+        ExportFormat::Pdf => anyhow::bail!("Translated PDF writing is not implemented; use Save As on the retained source PDF."),
+        ExportFormat::Docx => Ok(docx(document)),
+        ExportFormat::Html => Ok(html(document).into_bytes()),
+        ExportFormat::Markdown | ExportFormat::Text | ExportFormat::Json => Ok(export_document(document, format).into_bytes()),
+    }
+}
+
+fn escape_xml(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
+}
+
+fn escape_html(text: &str) -> String { escape_xml(text).replace('\n', "<br>") }
+
+fn cell_text(cell: &ExportCell) -> String {
+    cell.translation.as_deref().map(str::trim).filter(|text| !text.is_empty()).unwrap_or(cell.source.trim()).to_string()
+}
+
+fn html(document: &ExportDocument) -> String {
+    let mut out = format!("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>{}</title><style>body{{font:16px system-ui;max-width:900px;margin:2rem auto;line-height:1.5}}section{{break-after:page}}.source{{color:#555}}.translation{{margin:.25rem 0 1rem}}.formula{{font-family:ui-monospace}}table{{border-collapse:collapse;width:100%}}td,th{{border:1px solid #bbb;padding:.35rem;vertical-align:top}}</style></head><body><h1>{}</h1><p data-preservation=\"{}\">{}</p>", escape_html(title(document)), escape_html(title(document)), escape_html(ExportFormat::Html.preservation()), escape_html(ExportFormat::Html.preservation()));
+    for (page_index, page) in document.pages.iter().enumerate() {
+        out.push_str(&format!("<section data-page=\"{}\"><h2>{}</h2>", page_index + 1, escape_html(&tr3_fill("第 {} 页", "Page {}", "Trang {}", page_index + 1))));
+        for block in &page.blocks {
+            if let Some(table) = &block.table {
+                out.push_str("<table><tbody>");
+                for row in &table.rows {
+                    out.push_str("<tr>");
+                    for cell in row { out.push_str(&format!("<td rowspan=\"{}\" colspan=\"{}\">{}</td>", cell.row_span.max(1), cell.col_span.max(1), escape_html(&cell_text(cell)))); }
+                    out.push_str("</tr>");
+                }
+                out.push_str("</tbody></table>");
+                continue;
+            }
+            let class = if block.kind == BlockKind::Formula { "formula" } else { "" };
+            out.push_str(&format!("<article id=\"{}\" class=\"{}\"><div class=\"source\">{}</div><div class=\"translation\">{}</div></article>", escape_html(&block.id), class, escape_html(&block.source), escape_html(block.translated_text().unwrap_or(tr3("（尚未翻译）", "(not translated yet)", "(chưa dịch)")))));
+        }
+        out.push_str("</section>");
+    }
+    out.push_str("</body></html>");
+    out
+}
+
+fn docx_paragraph(text: &str, style: Option<&str>) -> String {
+    let style = style.map(|name| format!("<w:pPr><w:pStyle w:val=\"{name}\"/></w:pPr>")).unwrap_or_default();
+    format!("<w:p>{style}<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>", escape_xml(text))
+}
+
+fn docx_table(table: &ExportTable) -> String {
+    let mut out = String::from("<w:tbl>");
+    for row in &table.rows {
+        out.push_str("<w:tr>");
+        for cell in row { out.push_str(&format!("<w:tc><w:tcPr><w:gridSpan w:val=\"{}\"/></w:tcPr>{}</w:tc>", cell.col_span.max(1), docx_paragraph(&cell_text(cell), None))); }
+        out.push_str("</w:tr>");
+    }
+    out.push_str("</w:tbl>");
+    out
+}
+
+fn docx(document: &ExportDocument) -> Vec<u8> {
+    let mut body = String::new();
+    body.push_str(&docx_paragraph(title(document), Some("Title")));
+    for (page_index, page) in document.pages.iter().enumerate() {
+        body.push_str(&docx_paragraph(&tr3_fill("第 {} 页", "Page {}", "Trang {}", page_index + 1), Some("Heading1")));
+        for block in &page.blocks {
+            if let Some(table) = &block.table { body.push_str(&docx_table(table)); continue; }
+            body.push_str(&docx_paragraph(&block.source, None));
+            body.push_str(&docx_paragraph(block.translated_text().unwrap_or(tr3("（尚未翻译）", "(not translated yet)", "(chưa dịch)")), None));
+        }
+        if page_index + 1 < document.pages.len() { body.push_str("<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>"); }
+    }
+    let document_xml = format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>{body}<w:sectPr/></w:body></w:document>");
+    let content_types = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>";
+    let rels = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>";
+    zip_store(&[("[Content_Types].xml", content_types.as_bytes().to_vec()), ("_rels/.rels", rels.as_bytes().to_vec()), ("word/document.xml", document_xml.into_bytes())])
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffff;
+    for byte in bytes { crc ^= u32::from(*byte); for _ in 0..8 { crc = if crc & 1 == 1 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 }; } }
+    !crc
+}
+
+fn zip_store(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    let mut out = Vec::new(); let mut central = Vec::new();
+    for (name, data) in entries {
+        let offset = out.len() as u32; let name = name.as_bytes(); let size = data.len() as u32; let crc = crc32(data);
+        out.extend_from_slice(&0x04034b50u32.to_le_bytes()); out.extend_from_slice(&20u16.to_le_bytes()); out.extend_from_slice(&0u16.to_le_bytes()); out.extend_from_slice(&0u16.to_le_bytes()); out.extend_from_slice(&0u16.to_le_bytes()); out.extend_from_slice(&0u16.to_le_bytes()); out.extend_from_slice(&crc.to_le_bytes()); out.extend_from_slice(&size.to_le_bytes()); out.extend_from_slice(&size.to_le_bytes()); out.extend_from_slice(&(name.len() as u16).to_le_bytes()); out.extend_from_slice(&0u16.to_le_bytes()); out.extend_from_slice(name); out.extend_from_slice(data);
+        central.extend_from_slice(&0x02014b50u32.to_le_bytes()); central.extend_from_slice(&20u16.to_le_bytes()); central.extend_from_slice(&20u16.to_le_bytes()); central.extend_from_slice(&0u16.to_le_bytes()); central.extend_from_slice(&0u16.to_le_bytes()); central.extend_from_slice(&0u16.to_le_bytes()); central.extend_from_slice(&0u16.to_le_bytes()); central.extend_from_slice(&crc.to_le_bytes()); central.extend_from_slice(&size.to_le_bytes()); central.extend_from_slice(&size.to_le_bytes()); central.extend_from_slice(&(name.len() as u16).to_le_bytes()); central.extend_from_slice(&0u16.to_le_bytes()); central.extend_from_slice(&0u16.to_le_bytes()); central.extend_from_slice(&0u16.to_le_bytes()); central.extend_from_slice(&0u16.to_le_bytes()); central.extend_from_slice(&0u32.to_le_bytes()); central.extend_from_slice(&offset.to_le_bytes()); central.extend_from_slice(name);
+    }
+    let central_offset = out.len() as u32; out.extend_from_slice(&central); out.extend_from_slice(&0x06054b50u32.to_le_bytes()); out.extend_from_slice(&0u16.to_le_bytes()); out.extend_from_slice(&0u16.to_le_bytes()); out.extend_from_slice(&(entries.len() as u16).to_le_bytes()); out.extend_from_slice(&(entries.len() as u16).to_le_bytes()); out.extend_from_slice(&(central.len() as u32).to_le_bytes()); out.extend_from_slice(&central_offset.to_le_bytes()); out.extend_from_slice(&0u16.to_le_bytes()); out
 }
 
 /// Write `content` as `dir/name` and return the path written.
@@ -481,11 +652,38 @@ mod tests {
         assert_eq!(parsed.document, "Quarterly report");
         assert_eq!(parsed.pages, 2);
         assert_eq!(parsed.blocks.len(), 3);
-        assert_eq!(parsed.blocks[0], JsonBlock { id: "p1-b1".into(), page: 1, kind: BlockKind::Text, source: "Revenue rose".into(), translation: Some("Doanh thu tăng".into()), polygon: None, untranslated: false });
+        assert_eq!(parsed.blocks[0], JsonBlock { id: "p1-b1".into(), page: 1, kind: BlockKind::Text, source: "Revenue rose".into(), translation: Some("Doanh thu tăng".into()), polygon: None, table: None, untranslated: false });
         assert_eq!(parsed.blocks[1].translation, None, "an untranslated block is exported, without a translation");
         assert!(parsed.blocks[1].untranslated, "and it is marked as untranslated");
         assert_eq!(parsed.blocks[2].page, 2, "each block names its own page");
         assert!(text.contains("\"type\": \"text\""), "a consumer reads the block type from the key named type: {text}");
+    }
+
+    #[test]
+    fn format_capabilities_and_binary_exports_are_truthful() {
+        assert!(!ExportFormat::Pdf.can_generate());
+        assert!(ExportFormat::Docx.can_generate() && ExportFormat::Html.can_generate());
+        assert!(ExportFormat::Pdf.preservation().contains("preserved exactly"));
+        assert!(ExportFormat::Docx.preservation().contains("not preserved"));
+        assert!(export_document_bytes(&sample(), ExportFormat::Pdf).is_err());
+        let html = export_document_bytes(&sample(), ExportFormat::Html).expect("HTML export");
+        assert!(html.starts_with(b"<!doctype html>"));
+        assert!(String::from_utf8_lossy(&html).contains("Revenue rose"));
+        let docx = export_document_bytes(&sample(), ExportFormat::Docx).expect("DOCX export");
+        assert!(docx.starts_with(b"PK\x03\x04"), "DOCX must be a ZIP package");
+        assert!(docx.windows(b"[Content_Types].xml".len()).any(|window| window == b"[Content_Types].xml"));
+    }
+
+    #[test]
+    fn tables_and_formulas_survive_structured_exports() {
+        let table = ExportTable { rows: vec![vec![ExportCell::new("Revenue", Some("Doanh thu".into())), ExportCell::new("x^2", Some("x²".into()))]] };
+        let document = ExportDocument::from_pages("Structured", [(1, vec![ExportBlock::formula("formula", "E=mc^2"), ExportBlock::table("table", table)])]);
+        let markdown = export_document(&document, ExportFormat::Markdown);
+        assert!(markdown.contains("E=mc^2") && markdown.contains("Doanh thu") && markdown.contains("x²"));
+        let json = export_document(&document, ExportFormat::Json);
+        assert!(json.contains("formula") && json.contains("table") && json.contains("row_span"));
+        let docx = export_document_bytes(&document, ExportFormat::Docx).expect("structured DOCX export");
+        assert!(docx.windows(b"E=mc^2".len()).any(|window| window == b"E=mc^2"));
     }
 
     #[test]
@@ -567,6 +765,8 @@ mod tests {
         assert_eq!(ExportFormat::Markdown.label(), "Markdown");
         assert_eq!(ExportFormat::Text.label(), tr3("纯文本", "Plain text", "Văn bản thuần"));
         assert_eq!(ExportFormat::Json.label(), "JSON");
+        assert_eq!(ExportFormat::Html.label(), "HTML");
+        assert_eq!(ExportFormat::Docx.label(), "DOCX");
     }
 
     #[test]
@@ -642,7 +842,7 @@ mod tests {
                 }
                 ExportFormat::Markdown => assert!(written.starts_with("# Empty report")),
                 ExportFormat::Text => assert!(written.starts_with("Empty report")),
-                ExportFormat::Pdf => unreachable!("PDF Save As copies source bytes instead of text export"),
+                ExportFormat::Pdf | ExportFormat::Html | ExportFormat::Docx => unreachable!("binary formats use export_document_bytes or retained PDF Save As"),
             }
         }
         assert_eq!(files(&dir).len(), 3, "each format is its own file, and no temporary survives: {:?}", files(&dir));

@@ -35,6 +35,15 @@ export interface ReflowedPaperBlock extends CleanPaperBlock {
 export interface ReflowedPaper extends Omit<CleanPaper, 'blocks'> {
   blocks: ReflowedPaperBlock[];
   lineCount: number;
+  safety: ReflowSafety;
+}
+
+export interface ReflowSafety {
+  status: 'safe' | 'unsafe';
+  warnings: string[];
+  preservedFormulaIds: string[];
+  preservedFootnoteIds: string[];
+  preservedCitationTokens: string[];
 }
 
 export function cleanPaper(blocks: readonly EvidenceBlock[], paperId: string, options: { includeReferences?: boolean } = {}): CleanPaper {
@@ -72,8 +81,9 @@ export function cleanPaper(blocks: readonly EvidenceBlock[], paperId: string, op
 
 export function reflowPaper(paper: CleanPaper, options: ReflowOptions = {}): ReflowedPaper {
   const width = Number.isFinite(options.maxCharsPerLine) && (options.maxCharsPerLine ?? 0) > 0 ? Math.floor(options.maxCharsPerLine as number) : 88;
-  const blocks = paper.blocks.map(block => ({ ...block, lines: wrapWithoutLoss(block.text, width) }));
-  return { version: RESEARCH_SCHEMA_VERSION, paperId: paper.paperId, blocks, preserved: clonePreserved(paper.preserved), lineCount: blocks.reduce((total, block) => total + block.lines.length, 0) };
+  const blocks = paper.blocks.map(block => ({ ...block, lines: block.type === 'formula' ? [block.sourceText] : wrapWithoutLoss(block.text, width) }));
+  const safety = verifySafety(paper, blocks);
+  return { version: RESEARCH_SCHEMA_VERSION, paperId: paper.paperId, blocks, preserved: clonePreserved(paper.preserved), lineCount: blocks.reduce((total, block) => total + block.lines.length, 0), safety };
 }
 
 export function reflowToMarkdown(paper: ReflowedPaper): string {
@@ -138,6 +148,35 @@ function extractCitations(value: string): string[] {
   return found;
 }
 
+function verifySafety(paper: CleanPaper, blocks: readonly ReflowedPaperBlock[]): ReflowSafety {
+  const warnings: string[] = [];
+  const byId = new Map(blocks.map(block => [block.id, block]));
+  const preservedFormulaIds: string[] = [];
+  const preservedFootnoteIds: string[] = [];
+  const preservedCitationTokens = new Set<string>();
+  for (const original of paper.blocks) {
+    const result = byId.get(original.id);
+    if (result === undefined) {
+      warnings.push(`missing-block:${original.id}`);
+      continue;
+    }
+    if (original.type === 'formula') {
+      if (result.lines.length === 1 && result.lines[0] === original.sourceText) preservedFormulaIds.push(original.id);
+      else warnings.push(`formula-changed:${original.id}`);
+    }
+    if (original.type === 'footnote') {
+      const joined = result.lines.join(' ');
+      if (joined.replace(/\s+/gu, ' ').trim() === original.text.replace(/\s+/gu, ' ').trim()) preservedFootnoteIds.push(original.id);
+      else warnings.push(`footnote-changed:${original.id}`);
+    }
+    const joined = result.lines.join(' ');
+    for (const citation of original.citations) {
+      if (joined.includes(citation)) preservedCitationTokens.add(citation);
+      else warnings.push(`citation-changed:${original.id}:${citation}`);
+    }
+  }
+  return { status: warnings.length === 0 ? 'safe' : 'unsafe', warnings, preservedFormulaIds, preservedFootnoteIds, preservedCitationTokens: [...preservedCitationTokens] };
+}
 function clonePreserved(preserved: CleanPaper['preserved']): CleanPaper['preserved'] {
   return { formulas: [...preserved.formulas], footnotes: [...preserved.footnotes], citations: [...preserved.citations] };
 }

@@ -23,8 +23,8 @@
  *   run must use `--e2e`.
  * - the build output — `dist/web/index.html` and its assets, produced by `pnpm build`
  *   (`--build` runs that command first; without it the row is the output already on disk).
- * - the release package — a `dist/pdf-workspace-*-release-*` directory or archive, newest
- *   by modification time.
+ * - the release package — the newest commit-bound `dist/pdf-workspace-*-release-*` directory
+ *   with its sibling archive and required native files.
  * - the third-party notices — every runtime dependency in `package.json` must be named in
  *   one of the notice/licence documents under `public/`. pdf-lib and @pdf-lib/fontkit are
  *   bundled into the web reader, so they are dependencies a shipped notice must cover.
@@ -234,7 +234,7 @@ function failureLines(runResult) {
  * and `null` when no such line exists — a suite that crashed prints no summary, and that
  * must read as no count, never as zero passing tests.
  */
-function parseVitest(outputText) {
+export function parseVitest(outputText) {
   const line = outputText
     .split('\n')
     .filter(candidate => /^\s*Tests\s+\d/u.test(candidate))
@@ -242,12 +242,31 @@ function parseVitest(outputText) {
   if (line === undefined) return null;
 
   const counts = { passed: 0, failed: 0, skipped: 0, todo: 0 };
+  let parsed = 0;
   for (const match of line.matchAll(/(\d+)\s+(passed|failed|skipped|todo)\b/gu)) {
     const kind = match[2];
     const value = Number(match[1]);
-    if (kind in counts && Number.isSafeInteger(value)) counts[kind] = value;
+    if (kind in counts && Number.isSafeInteger(value)) {
+      counts[kind] = value;
+      parsed += 1;
+    }
   }
-  return counts;
+  return parsed === 0 ? null : counts;
+}
+
+/** A green process without a readable non-empty Vitest summary is not test evidence. */
+export function unitTestEvidence(result, outputText) {
+  const counts = parseVitest(outputText);
+  const processPassed = result?.code === 0 && result?.error == null;
+  const summaryPresent = counts !== null;
+  const passing = processPassed && summaryPresent ? counts.passed : 0;
+  return {
+    counts,
+    processPassed,
+    summaryPresent,
+    passing,
+    ok: processPassed && summaryPresent && counts.passed >= 1 && counts.failed === 0,
+  };
 }
 
 /** The count `playwright test --list` prints: `Total: 49 tests in 15 files`. */
@@ -303,8 +322,9 @@ function checkTypecheck() {
  */
 function checkUnitTests() {
   const result = run('pnpm', ['test'], TIMEOUTS.test);
-  const counts = parseVitest(output(result));
-  const recorded = result.code === 0 && counts !== null ? counts.passed : 0;
+  const evidence = unitTestEvidence(result, output(result));
+  const { counts } = evidence;
+  const recorded = evidence.ok ? evidence.passing : 0;
 
   let observed;
   if (counts === null) {
@@ -314,10 +334,10 @@ function checkUnitTests() {
     const failed = counts.failed > 0 ? `${counts.failed} failed | ` : '';
     observed = `${failed}${counts.passed} passed${skipped}, exit ${result.code} `
       + `(${duration(result.elapsedMs)})`;
-    if (recorded === 0) observed += ' - recorded 0, run was not green';
+    if (!evidence.ok) observed += ' - recorded 0, run was not green';
   }
 
-  return { observed, recorded, run: result };
+  return { observed, recorded, summaryPresent: evidence.summaryPresent, evidenceOk: evidence.ok, run: result };
 }
 
 /** `node scripts/check-committed-imports.mjs`. */
@@ -464,30 +484,48 @@ function checkNotices(pkg) {
  * packaged with `scripts/package-native.ps1`, so only a `-release-` artifact counts.
  */
 function checkPackageArtifact() {
-  if (!existsSync(distDir)) {
-    return { observed: 'dist/ is missing', artifact: null };
-  }
+  if (!existsSync(distDir)) return { observed: 'dist/ is missing', artifact: null, state: 'fail' };
 
   const candidates = [];
   for (const entry of readdirSync(distDir, { withFileTypes: true })) {
-    if (!/^pdf-workspace-.*-release-/u.test(entry.name)) continue;
-    if (!entry.isDirectory() && !/\.(zip|7z)$/iu.test(entry.name)) continue;
+    if (!/^pdf-workspace-.*-release-/u.test(entry.name) || !entry.isDirectory()) continue;
     const full = path.join(distDir, entry.name);
     candidates.push({ full, mtimeMs: statSync(full).mtimeMs, size: sizeOf(full) });
   }
-
-  if (candidates.length === 0) {
-    return { observed: 'no dist/pdf-workspace-*-release-* package', artifact: null };
-  }
+  if (candidates.length === 0) return { observed: 'no native release package directory', artifact: null, state: 'fail' };
 
   candidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
   const newest = candidates[0];
+  const required = [
+    'MANIFEST.json',
+    'CHECKSUMS.sha256',
+    'pdf_workspace.exe',
+    'pdfium.dll',
+    'pdf-workspace-host.exe',
+    'install-native-host.ps1',
+    'native-messaging/com.pdfworkspace.bridge.template.json',
+    'third-party-notices/OCR-MODEL-NOTICE.txt',
+  ];
+  const missing = required.filter(item => !existsSync(path.join(newest.full, ...item.split('/'))));
+  const zip = `${newest.full}.zip`;
+  if (!existsSync(zip)) missing.push(`${path.basename(zip)} (archive)`);
+  if (missing.length > 0) {
+    return {
+      observed: `${relative(newest.full)} incomplete: missing ${missing.join(', ')}`,
+      artifact: null,
+      state: 'fail',
+    };
+  }
+  try {
+    const manifest = JSON.parse(readFileSync(path.join(newest.full, 'MANIFEST.json'), 'utf8'));
+    if (manifest.schema !== 1 || manifest.profile !== 'release' || typeof manifest.source?.commit !== 'string' || manifest.source.commit.trim() === '') {
+      return { observed: `${relative(newest.full)} has invalid provenance manifest`, artifact: null, state: 'fail' };
+    }
+  } catch (error) {
+    return { observed: `${relative(newest.full)} MANIFEST.json is unreadable: ${error.message}`, artifact: null, state: 'fail' };
+  }
   const size = newest.size === null ? '' : ` (${bytes(newest.size)})`;
-  // The stamp is already in the artifact name, so the row does not repeat it.
-  return {
-    observed: `${relative(newest.full)}${size}`,
-    artifact: relative(newest.full),
-  };
+  return { observed: `${relative(newest.full)}${size}; manifest and archive present`, artifact: relative(newest.full), state: 'pass' };
 }
 
 /** Bytes for a file or the sum of a directory's files; null when it cannot be read. */
@@ -522,8 +560,12 @@ function checkChangelog(version) {
   };
 }
 
+function vitestEvidenceOk(result) {
+  return unitTestEvidence(result, output(result)).ok;
+}
+
 function checkQualityEvidence(unit, options, e2e) {
-  const trustRun = run('pnpm', ['vitest', 'run', 'tests/quality-gates.test.ts', 'tests/privacy.test.ts', 'tests/network-guard.test.ts', 'tests/crypto.test.ts', 'tests/audit.test.ts', 'tests/capabilities.test.ts'], TIMEOUTS.test);
+  const trustRun = run('pnpm', ['vitest', 'run', 'tests/quality-gates.test.ts', 'tests/network-guard.test.ts', 'tests/crypto.test.ts', 'tests/audit.test.ts', 'tests/capabilities.test.ts', 'tests/security-policy.test.ts', 'tests/resource-limits.test.ts', 'tests/evidence-contract.test.ts'], TIMEOUTS.test);
   const translationRun = run('pnpm', ['vitest', 'run', 'tests/translation-core.test.ts', 'tests/translation-batch.test.ts', 'tests/translation-service-batch.test.ts'], TIMEOUTS.test);
   const exportRun = run('pnpm', ['vitest', 'run', 'tests/export-bilingual.test.ts', 'tests/export-check.test.ts', 'tests/pdf-export.test.ts'], TIMEOUTS.test);
   const accessibilityRun = options.e2e ? e2e.run : run('pnpm', ['vitest', 'run', 'tests/a11y.test.ts'], TIMEOUTS.test);
@@ -535,18 +577,10 @@ function checkQualityEvidence(unit, options, e2e) {
   };
   const ocr = parseJson(ocrRun);
   const perf = parseJson(perfRun);
-  const sbomPath = path.join(root, 'public', 'third-party', 'SBOM.json');
-  let sbomPass = false;
-  if (existsSync(sbomPath)) {
-    try {
-      const sbom = JSON.parse(readFileSync(sbomPath, 'utf8'));
-      sbomPass = sbom?.bomFormat === 'CycloneDX'
-        && Array.isArray(sbom.components)
-        && sbom.components.length > 0
-        && !JSON.stringify(sbom).match(/AGPL/iu);
-    } catch { sbomPass = false; }
-  }
-  const core = trustRun.code === 0 && unit.run.code === 0 ? 'pass' : 'fail';
+  const licenseRun = run(process.execPath, ['scripts/dependency-license-check.mjs'], TIMEOUTS.test);
+  const license = parseJson(licenseRun);
+  const sbomPass = license?.ok === true && licenseRun.code === 0;
+  const core = vitestEvidenceOk(trustRun) && unit.evidenceOk ? 'pass' : 'fail';
   return {
     evidence: {
       privacy: core,
@@ -556,23 +590,25 @@ function checkQualityEvidence(unit, options, e2e) {
       retention: core,
       goldenDataset: ocr?.measured > 0 ? 'pass' : 'fail',
       ocrBenchmark: ocr?.measured > 0 && ocrRun.code === 0 ? 'pass' : 'fail',
-      translationBenchmark: translationRun.code === 0 ? 'pass' : 'fail',
-      exportBenchmark: exportRun.code === 0 ? 'pass' : 'fail',
+      translationBenchmark: vitestEvidenceOk(translationRun) ? 'pass' : 'fail',
+      exportBenchmark: vitestEvidenceOk(exportRun) ? 'pass' : 'fail',
       performanceBenchmark: perf?.violations?.length === 0 && perf?.bundle?.built === true && perfRun.code === 0 ? 'pass' : 'fail',
       i18n: i18nRun.code === 0 ? 'pass' : 'fail',
-      accessibility: accessibilityRun.code === 0 && (!options.e2e || e2e.recorded > 0) ? 'pass' : 'fail',
+      accessibility: options.e2e
+        ? accessibilityRun.code === 0 && e2e.recorded > 0 ? 'pass' : 'fail'
+        : vitestEvidenceOk(accessibilityRun) ? 'pass' : 'fail',
       sbom: sbomPass ? 'pass' : 'fail',
     },
     observed: {
       ocr: ocrRun,
       performance: perfRun,
       i18n: i18nRun,
-      i18n: i18nRun,
       trust: trustRun,
       translation: translationRun,
       export: exportRun,
       accessibility: accessibilityRun,
-      sbom: sbomPass ? 'CycloneDX present, no AGPL text' : 'missing, malformed, or AGPL-containing SBOM',
+      licenses: licenseRun,
+      sbom: sbomPass ? 'CycloneDX dependency/license check passed' : 'dependency/license check failed',
     },
   };
 }
@@ -609,17 +645,37 @@ function checkFeaturesDoc() {
   };
 }
 
-/** The native count, when a person ran the native gate and passed it in. */
-function readNativeCount() {
-  const raw = process.env.RELEASE_NATIVE_TESTS;
-  if (raw === undefined || raw.trim() === '') {
-    return { count: null, observed: 'not recorded (set RELEASE_NATIVE_TESTS after a native run)' };
+function evidenceStatus(raw, fallback = 'unknown') {
+  const value = raw?.trim().toLowerCase();
+  return value === 'pass' || value === 'blocked' || value === 'unknown' ? value : fallback;
+}
+
+/** Native evidence is pass only when a positive count came from a real native run. */
+function readNativeEvidence() {
+  const rawCount = process.env.RELEASE_NATIVE_TESTS;
+  const count = rawCount === undefined || rawCount.trim() === '' ? null : Number(rawCount);
+  const validCount = Number.isFinite(count) && count >= 1 ? Math.floor(count) : null;
+  const explicit = evidenceStatus(process.env.RELEASE_NATIVE_STATUS);
+  if (explicit === 'blocked') {
+    return { status: 'blocked', count: null, observed: process.env.RELEASE_NATIVE_BLOCKER?.trim() || 'native run is blocked; no native pass is claimed' };
   }
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value < 0) {
-    return { count: null, observed: `RELEASE_NATIVE_TESTS="${raw}" is not a count` };
+  if (explicit === 'pass') {
+    if (validCount === null) return { status: 'blocked', count: null, observed: 'RELEASE_NATIVE_STATUS=pass requires RELEASE_NATIVE_TESTS >= 1' };
+    return { status: 'pass', count: validCount, observed: `${validCount} passing native tests recorded from a native run` };
   }
-  return { count: Math.floor(value), observed: `${Math.floor(value)} recorded from RELEASE_NATIVE_TESTS` };
+  if (explicit === 'unknown') return { status: 'unknown', count: null, observed: 'native evidence explicitly marked unknown' };
+  if (validCount !== null) return { status: 'pass', count: validCount, observed: `${validCount} recorded from RELEASE_NATIVE_TESTS (legacy pass evidence)` };
+  if (rawCount !== undefined && rawCount.trim() !== '') return { status: 'unknown', count: null, observed: `RELEASE_NATIVE_TESTS="${rawCount}" is not a positive count` };
+  return { status: 'unknown', count: null, observed: 'not recorded; native build/test did not execute or its evidence was not supplied' };
+}
+
+/** CI evidence is reported separately so a billing/runner lock is never printed as green. */
+function readCiEvidence() {
+  const status = evidenceStatus(process.env.RELEASE_CI_STATUS);
+  if (status === 'pass') return { status, observed: 'CI pass explicitly recorded' };
+  if (status === 'blocked') return { status, observed: process.env.RELEASE_CI_BLOCKER?.trim() || 'CI is blocked' };
+  if (status === 'unknown') return { status, observed: 'CI evidence explicitly marked unknown' };
+  return { status: 'unknown', observed: 'CI status not recorded; no green CI claim is made' };
 }
 
 // --- Loading the gate module ----------------------------------------------
@@ -667,7 +723,7 @@ async function loadGate() {
 
 // --- Reporting -------------------------------------------------------------
 
-const USAGE = `Usage: node scripts/release-check.mjs [--build] [--e2e] [--json] [--help]
+const USAGE = `Usage: node scripts/release-check.mjs [--build] [--e2e] [--require-native] [--require-ci] [--json] [--help]
 
 Reads the evidence a release needs — typecheck, unit suite, committed imports, the e2e
 suite, the build output, the release package, the third-party notices, the changelog and
@@ -676,10 +732,14 @@ the feature inventory — and asks src/core/release-gate.ts whether the release 
   --build   run \`pnpm build\` before reading the build output (otherwise the output already
             on disk is read, and the row says when it was built)
   --e2e     run the Playwright suite; without it the suite is listed and the row says so
+  --require-native  fail unless a positive native test count is explicitly recorded
+  --require-ci      fail unless CI status is explicitly recorded as pass
   --json    machine-readable report
   --help    this text
 
 Environment: RELEASE_NATIVE_TESTS records the native count from a separate Rust run.
+RELEASE_NATIVE_STATUS may be pass, blocked or unknown; RELEASE_NATIVE_BLOCKER records the reason.
+RELEASE_CI_STATUS may be pass, blocked or unknown; RELEASE_CI_BLOCKER records the reason.
 
 Floors: at least one passing unit test, at least E2E_TEST_FLOOR declared or passing e2e tests
 (see src/core/release-gate.ts and docs/release-checklist.md).
@@ -687,10 +747,12 @@ Floors: at least one passing unit test, at least E2E_TEST_FLOOR declared or pass
 Exit codes: 0 no blocker, 1 at least one blocker, 2 the runner could not run.`;
 
 function parseArgs(argv) {
-  const options = { build: false, e2e: false, json: false };
+  const options = { build: false, e2e: false, requireNative: false, requireCi: false, json: false };
   for (const argument of argv) {
     if (argument === '--build') options.build = true;
     else if (argument === '--e2e') options.e2e = true;
+    else if (argument === '--require-native') options.requireNative = true;
+    else if (argument === '--require-ci') options.requireCi = true;
     else if (argument === '--json') options.json = true;
     else if (argument === '--help' || argument === '-h') {
       console.log(USAGE);
@@ -760,7 +822,8 @@ async function main() {
   const changelog = checkChangelog(version);
   const features = checkFeaturesDoc();
   const quality = checkQualityEvidence(unit, options, e2e);
-  const native = readNativeCount();
+  const native = readNativeEvidence();
+  const ci = readCiEvidence();
 
   const input = {
     version,
@@ -777,9 +840,20 @@ async function main() {
     packageArtifact: artifact.artifact,
   };
   const report = gate.evaluate(input);
+  const webBlockerCodes = new Set(report.blockers.map(blocker => blocker.code).filter(code => code !== 'package-artifact-missing' && code !== 'license-notice-missing'));
+  const releaseStatus = {
+    web: webBlockerCodes.size === 0 ? 'pass' : 'blocked',
+    native: native.status,
+    license: notices.missing.length === 0 ? 'pass' : 'blocked',
+    ci: ci.status,
+  };
+  const requiredEvidenceFailures = [];
+  if (options.requireNative && native.status !== 'pass') requiredEvidenceFailures.push(`native evidence is ${native.status}`);
+  if (options.requireCi && ci.status !== 'pass') requiredEvidenceFailures.push(`CI evidence is ${ci.status}`);
 
   // --- The table: what was checked, what was seen, what it means.
   const rows = [
+    { check: 'web surface', observed: `typecheck/build/imports/evidence: ${releaseStatus.web}`, codes: [], fixedVerdict: releaseStatus.web === 'pass' ? 'PASS' : 'BLOCKED' },
     { check: 'version', observed: version, codes: ['version-missing'] },
     { check: 'changelog', observed: changelog.observed, codes: ['changelog-missing-version'] },
     { check: 'unit suite', observed: unit.observed, codes: ['unit-tests-empty'], run: unit.run },
@@ -789,7 +863,7 @@ async function main() {
       codes: ['e2e-tests-below-floor'],
       run: e2e.run,
     },
-    { check: 'native suite', observed: native.observed, codes: ['native-tests-unknown'] },
+    { check: 'native suite', observed: native.observed, codes: ['native-tests-unknown'], fixedVerdict: native.status === 'pass' ? 'PASS' : native.status.toUpperCase() },
     { check: 'typecheck', observed: typecheck.observed, codes: ['gate-typecheck-failed'], run: typecheck.run },
     { check: 'build output', observed: build.observed, codes: ['gate-build-failed'], run: build.run },
     {
@@ -798,9 +872,10 @@ async function main() {
       codes: ['gate-imports-failed'],
       run: imports.run,
     },
-    { check: 'third-party notices', observed: notices.observed, codes: ['license-notice-missing'] },
+    { check: 'third-party notices', observed: notices.observed, codes: ['license-notice-missing'], fixedVerdict: releaseStatus.license === 'pass' ? 'PASS' : 'BLOCKED' },
     { check: 'release package', observed: artifact.observed, codes: ['package-artifact-missing'] },
     { check: 'feature inventory', observed: features.observed, codes: ['features-doc-stale'] },
+    { check: 'CI evidence', observed: ci.observed, codes: [], fixedVerdict: ci.status === 'pass' ? 'PASS' : ci.status.toUpperCase() },
     { check: 'quality evidence', observed: quality.observed.sbom, codes: [
       'quality-privacy-failed', 'quality-secret-boundary-failed', 'quality-resource-limits-failed',
       'quality-consent-audit-failed', 'quality-retention-failed', 'quality-golden-dataset-failed',
@@ -816,12 +891,13 @@ async function main() {
   for (const row of rows) {
     const blocked = row.codes.some(code => blockerCodes.has(code));
     const warned = row.codes.some(code => warningCodes.has(code));
-    row.verdict = blocked ? 'BLOCKED' : warned ? 'WARN' : 'ok';
+    row.verdict = row.fixedVerdict ?? (blocked ? 'BLOCKED' : warned ? 'WARN' : 'ok');
     if (row.run !== undefined && row.run !== null && row.run.code !== 0) {
       failed.push({ check: row.check, run: row.run });
     }
   }
 
+  const exitCode = report.ok && requiredEvidenceFailures.length === 0 ? 0 : 1;
   if (options.json) {
     console.log(JSON.stringify({
       name: pkg.name ?? null,
@@ -837,10 +913,12 @@ async function main() {
       })),
       input,
       report,
+      releaseStatus,
+      requiredEvidenceFailures,
       quality: quality.observed,
-      exitCode: report.ok ? 0 : 1,
+      exitCode,
     }, null, 2));
-    process.exit(report.ok ? 0 : 1);
+    process.exit(exitCode);
   }
 
   console.log(heading);
@@ -854,9 +932,14 @@ async function main() {
 
   printFailures(failed);
   printFindings(report);
+  if (requiredEvidenceFailures.length > 0) {
+    console.log('');
+    console.log(`required evidence failures (${requiredEvidenceFailures.length})`);
+    for (const failure of requiredEvidenceFailures) console.log(`  ${failure}`);
+  }
 
   console.log('');
-  if (report.ok) {
+  if (exitCode === 0) {
     console.log(
       report.warnings.length === 0
         ? 'PASS: no blocker, no warning.'
@@ -870,19 +953,21 @@ async function main() {
     }
   } else {
     console.log(
-      `FAIL: ${countOf(report.blockers.length, 'blocker')}`
+      `FAIL: ${countOf(report.blockers.length + requiredEvidenceFailures.length, 'blocker')}`
       + `${report.warnings.length === 0 ? '' : `, ${countOf(report.warnings.length, 'warning')}`}`
       + '. Each code is an item in docs/release-checklist.md.',
     );
   }
 
-  process.exit(report.ok ? 0 : 1);
+  process.exit(exitCode);
 }
 
-main().catch(error => {
-  console.error(
-    'release-check run failed:',
-    error instanceof Error ? (error.stack ?? error.message) : error,
-  );
-  process.exit(2);
-});
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  main().catch(error => {
+    console.error(
+      'release-check run failed:',
+      error instanceof Error ? (error.stack ?? error.message) : error,
+    );
+    process.exit(2);
+  });
+}

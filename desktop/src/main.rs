@@ -112,7 +112,7 @@ impl MirrorApp {
                         self.pending_ocr = Some((generation, image, title)); self.status = "Source changed · detecting document and recognizing locally…".into();
                     }
                 }
-                Err(error) => { self.invalidate(); self.frame = None; self.textures = None; self.pending_ocr = None; self.error = Some(format!("Source disconnected: {error}")); }
+                Err(error) => { self.capture = None; self.invalidate(); self.frame = None; self.textures = None; self.pending_ocr = None; self.error = Some(format!("Source disconnected: {error}")); }
             } }
         }
         if !self.ocr_busy && !self.paused { if let Some((generation, image, title)) = self.pending_ocr.take() {

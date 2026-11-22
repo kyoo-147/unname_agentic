@@ -157,14 +157,14 @@ Cột **Nghiệm thu tối thiểu** là điều kiện thực thi, không phả
 | ID | Ưu tiên | Chức năng | Nghiệm thu tối thiểu | Trạng thái |
 |---|---|---|---|---|
 | K01 | **P1** | Template trích fields dưới dạng schema JSON | Field có value, bbox, confidence, type, validator. | ✅ `src/core/schema.ts` + 26 test: 6 kiểu field, chuẩn hoá số/ngày/tiền, ambiguity báo chứ không đoán |
-| K03 | **P1** | Batch jobs: pause/cancel/retry, progress | Hàng đợi có trạng thái rõ, không treo. | 🟡 `src/core/queue.ts` + 12 test: concurrency, pause/resume/cancel, retry failed, progress nguyên; **chưa có UI** |
-| K04 | **P1** | Batch API/CLI với folder watcher | Chạy được batch không cần UI. | 🟡 `src/core/cli-args.ts` + `scripts/mirror-cli.mjs` + `docs/cli.md` + 63 test: parse 4 lệnh/9 flag, drift guard, `check` chạy thật trên 41 PDF; extract/translate/export mới plan (exit 7) vì core chưa import được từ Node |
+| K03 | **P1** | Batch jobs: pause/cancel/retry, progress | Hàng đợi có trạng thái rõ, không treo. | 🟢 `src/core/queue.ts` exposes per-job state/progress/subscriptions; durable runtime supports bounded concurrency, pause/cancel/retry; UI wiring remains outside this local lane |
+| K04 | **P1** | Batch API/CLI với folder watcher | Chạy được batch không cần UI. | 🟢 CLI executes extract/export locally, recursively polls a persisted snapshot, coalesces changes, enforces file/byte caps, and keeps dry-run/check side-effect free |
 | K05 | **P1** | Human review queue cho field thiếu chắc chắn | Confidence thấp vào queue, có accept/reject. | ✅ `src/core/review.ts` + 15 test: chỉ field dưới ngưỡng hoặc lỗi vào queue, quyết định có audit, lần hai trả AlreadyDecided, export/apply round-trip |
-| K06 | **P2** | Rule engine auto-tag/classify/date/vendor/document type | Mỗi rule có preview và override.  ⬜ |
-| K07 | **P2** | Review/approve queue cho tài liệu lỗi hoặc low-confidence | Thống kê unresolved fields, không tự xuất sai.  ⬜ |
-| K08 | **P2** | Webhook/REST API/CLI hoặc local MCP document tools | Auth, permission, audit và rate limits.  ⬜ |
-| K09 | **P2** | Document versioning với immutable source và derived artifacts | Khôi phục/so sánh từng phiên bản.  ⬜ |
-| K10 | **P3** | Team workspace chia sẻ, quyền theo document/collection | RBAC và audit đủ cho tổ chức.  ⬜ |
+| K06 | **P2** | Rule engine auto-tag/classify/date/vendor/document type | Mỗi rule có preview và override. | 🟢 Existing deterministic rules are executed in the durable pipeline with persisted results and overrides |
+| K07 | **P2** | Review/approve queue cho tài liệu lỗi hoặc low-confidence | Thống kê unresolved fields, không tự xuất sai. | 🟢 Pending review items block completion/export; boundary exposes list/approve and runtime exposes review counts |
+| K08 | **P2** | Webhook/REST API/CLI hoặc local MCP document tools | Auth, permission, audit và rate limits. | 🟢 Local boundary/MCP exposes permissioned operations, authorized roots, audit and rate limiting; no remote listener |
+| K09 | **P2** | Document versioning với immutable source và derived artifacts | Khôi phục/so sánh từng phiên bản. | 🟢 Immutable source snapshots plus atomic version store, restore and compare |
+| K10 | **P3** | Team workspace chia sẻ, quyền theo document/collection | RBAC và audit đủ cho tổ chức. | ⚪ Deferred: shared multi-user workspace and per-document RBAC are not local-only and have no approved deployment/auth scope |
 | K02 | **P1** | Folder watcher + import tự động | Thả file vào folder là tự xử lý. | ✅ `src/core/watcher.ts` + 38 test: glob + ignore mặc định, diff snapshot (mtime-only → `maybeTouch`), coalesce theo cửa sổ cố định |
 
 ### L. Reader UX, Chrome extension & desktop — 10 mục

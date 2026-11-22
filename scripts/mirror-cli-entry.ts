@@ -1,15 +1,20 @@
-import { mkdir, readdir } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { parseArgs, exitCodeFor } from '../src/core/cli-args';
 import { addTranslation, type DocumentIR } from '../src/core/ir';
 import { createTranslationTransport, TranslationService } from '../src/core/translation';
 import { defaultSettings, type ProviderKind } from '../src/core/types';
 import { LocalAutomationRuntime } from '../src/core/automation/runtime';
+import { PersistentFolderWatcher } from '../src/core/automation/folder-state';
+
+const MAX_BATCH_FILES = 5_000;
+const MAX_PDF_BYTES = 256 * 1024 * 1024;
+const MAX_BATCH_BYTES = 512 * 1024 * 1024;
 
 const parsed = parseArgs(process.argv.slice(2));
 if (parsed.errors.length > 0) {
   for (const error of parsed.errors) process.stderr.write(`mirror-cli: ${error.message}\n`);
-  process.exitCode = exitCodeFor(parsed);
+  process.exitCode = exitCodeFor(parsed.errors);
 } else if (!parsed.command || !parsed.options.input) {
   process.stderr.write('mirror-cli: an executable command requires --in <dir>.\n');
   process.exitCode = 3;
@@ -17,7 +22,13 @@ if (parsed.errors.length > 0) {
   process.stderr.write('mirror-cli: only the local translation provider is available in this local-only boundary.\n');
   process.exitCode = 5;
 } else {
-  await run(parsed.command, parsed.options.input, parsed.options.output, parsed.options.lang, parsed.options.provider);
+  try {
+    await run(parsed.command, parsed.options.input, parsed.options.output, parsed.options.lang, parsed.options.provider);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`mirror-cli: ${message}\n`);
+    process.exitCode = 6;
+  }
 }
 
 async function run(command: string, input: string, requestedOutput: string | null, lang: string | null, provider: ProviderKind | null): Promise<void> {
@@ -31,10 +42,25 @@ async function run(command: string, input: string, requestedOutput: string | nul
     translate: command === 'translate' ? createTranslator(lang ?? 'vi', provider ?? 'local') : undefined,
   });
   await runtime.open();
-  const entries = (await readdir(sourceDir, { withFileTypes: true })).filter(entry => entry.isFile() && /\.pdf$/iu.test(entry.name));
-  for (const entry of entries) {
-    await runtime.enqueue({ sourcePath: join(sourceDir, entry.name), outputDir, translate: command === 'translate' });
+  const watcher = new PersistentFolderWatcher(
+    join(outputDir, '.automation', 'watch.json'),
+    sourceDir,
+    { authorizedRoots: [sourceDir, outputDir], recursive: true, maxFiles: MAX_BATCH_FILES, maxFileBytes: MAX_PDF_BYTES, stableForMs: 100 },
+  );
+  const poll = await watcher.poll();
+  if (poll.rejected.length > 0) {
+    throw new Error(`${poll.rejected.length} input file(s) were rejected by the local safety limits or could not be read.`);
   }
+  const work = poll.work.filter(change => change.kind === 'added' || change.kind === 'modified');
+  let totalBytes = 0;
+  for (const change of work) {
+    const sourcePath = join(sourceDir, change.path);
+    const details = await stat(sourcePath);
+    totalBytes += details.size;
+    if (totalBytes > MAX_BATCH_BYTES) throw new Error(`batch exceeds the ${MAX_BATCH_BYTES} byte local safety cap.`);
+    await runtime.enqueue({ sourcePath, outputDir, translate: command === 'translate' });
+  }
+  await runtime.retry();
   const status = await runtime.run();
   const unresolved = status.jobs.filter(job => job.state !== 'done');
   process.stdout.write(`${JSON.stringify({ command, input: sourceDir, output: outputDir, status }, null, 2)}\n`);

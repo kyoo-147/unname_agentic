@@ -106,6 +106,31 @@ export function recordConsentDecision(log: AuditLog, input: ConsentAuditInput): 
   });
 }
 
+/** Inputs for the single enforcement path that also records the route decision. */
+export interface AuditedConsentInput extends Omit<ConsentAuditInput, 'allowed'> {
+  readonly log: AuditLog;
+}
+
+/**
+ * Enforces a provider route and records allow/deny evidence before a caller may send text.
+ * The audit entry contains no endpoint, credential, payload or document content.
+ */
+export function assertCanSendAndRecord(input: AuditedConsentInput): void {
+  const settings: PrivacySettings = {
+    provider: input.provider,
+    endpoint: input.endpoint,
+    allowCloud: input.allowCloud,
+  };
+  const policy = privacyPolicy(input.mode, effectiveEndpoint(settings));
+  try {
+    assertCanSend(policy, settings);
+  } catch (error) {
+    recordConsentDecision(input.log, { ...input, allowed: false });
+    throw error;
+  }
+  recordConsentDecision(input.log, { ...input, allowed: true });
+}
+
 /**
  * A request the privacy policy refused. It is a {@link TranslationError} with
  * kind `invalid`, so existing error handling shows it to the user and never

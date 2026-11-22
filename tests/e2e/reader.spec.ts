@@ -48,6 +48,8 @@ test('imports a real PDF, translates anchored regions and keeps vector artwork',
   await page.locator('.source-region').filter({ hasText: 'Reading without boundaries' }).first().click();
   await expect(page.locator('#selected-source')).toHaveText('Reading without boundaries');
   await expect(page.locator('#selected-translation')).toHaveText('Đọc không còn rào cản');
+  await expect(page.locator('#selected-translation')).toHaveText('Đọc không còn rào cản');
+  await expect(page.locator('#selected-result')).toContainText('Translation');
   await page.locator('#selection-close').click();
   const separator = page.getByRole('separator').first();
   await separator.press('ArrowRight');
@@ -74,4 +76,14 @@ test('defaults to Vietnamese on a fresh profile', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Phòng đọc của bạn.' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Thêm tài liệu' })).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('lang', 'vi');
+});
+
+test('opens the command palette and executes a bound reader action', async ({ page }) => {
+  await page.goto('/');
+  await page.keyboard.press('Control+k');
+  await expect(page.locator('#command-palette')).toBeVisible();
+  await page.locator('#command-palette-input').fill('settings');
+  await page.getByRole('option', { name: 'Translation settings' }).click();
+  await expect(page.locator('#settings-dialog')).toBeVisible();
+  await page.locator('#settings-close').click();
 });

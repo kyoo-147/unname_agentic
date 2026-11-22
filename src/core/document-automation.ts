@@ -34,6 +34,36 @@ import {
 export const AUTOMATION_STAGES = ['import', 'classify', 'ocr', 'translate', 'extract', 'export'] as const;
 export type AutomationStage = (typeof AUTOMATION_STAGES)[number];
 
+export type AutomationPipelineId = 'import-to-export' | 'extract-review-export' | 'translate-extract-export';
+
+export interface AutomationPipeline {
+  readonly id: AutomationPipelineId;
+  readonly stages: readonly AutomationStage[];
+}
+
+export const PREDEFINED_AUTOMATION_PIPELINES: Readonly<Record<AutomationPipelineId, AutomationPipeline>> = {
+  'import-to-export': { id: 'import-to-export', stages: ['import', 'classify', 'export'] },
+  'extract-review-export': { id: 'extract-review-export', stages: ['import', 'classify', 'extract', 'export'] },
+  'translate-extract-export': { id: 'translate-extract-export', stages: AUTOMATION_STAGES },
+};
+
+function resolvePipeline(pipeline: AutomationPipeline | AutomationPipelineId | undefined): AutomationPipeline {
+  if (pipeline === undefined) return PREDEFINED_AUTOMATION_PIPELINES['translate-extract-export'];
+  if (typeof pipeline === 'string') {
+    const predefined = PREDEFINED_AUTOMATION_PIPELINES[pipeline];
+    if (!predefined) throw new DocumentAutomationError('invalid-stage-output', `unknown pipeline "${pipeline}".`);
+    return predefined;
+  }
+  if (!pipeline || !Array.isArray(pipeline.stages) || pipeline.stages.length === 0) {
+    throw new DocumentAutomationError('invalid-stage-output', 'pipeline must contain at least one stage.');
+  }
+  const stages = [...new Set(pipeline.stages)];
+  if (stages.some(stage => !(AUTOMATION_STAGES as readonly string[]).includes(stage))) {
+    throw new DocumentAutomationError('invalid-stage-output', 'pipeline contains an unknown stage.');
+  }
+  return { id: pipeline.id, stages };
+}
+
 export type AutomationJobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 export type AutomationStageState = 'done' | 'skipped' | 'failed' | 'cancelled';
 export type AutomationReviewReason =
@@ -99,6 +129,7 @@ export interface DocumentAutomationOptions {
   readonly reviewThreshold?: number;
   readonly handlers?: AutomationHandlers;
   readonly audit?: AutomationAuditOptions;
+  readonly pipeline?: AutomationPipeline | AutomationPipelineId;
 }
 
 export interface SourceRevisionRecord {
@@ -148,6 +179,7 @@ export interface AutomationStageRecord {
 
 export interface AutomationJobResult {
   readonly jobId: string;
+  readonly pipelineId: AutomationPipelineId;
   readonly state: AutomationJobState;
   readonly attempt: number;
   readonly sourceRevisionId: string;
@@ -208,6 +240,7 @@ interface JobRecord {
   readonly dryRun: boolean;
   readonly privacy?: AutomationPrivacy;
   readonly sourceRevision: SourceRevisionRecord;
+  readonly pipeline: AutomationPipeline;
   state: AutomationJobState;
   attempt: number;
   currentStage: AutomationStage | null;
@@ -261,6 +294,7 @@ export class DocumentAutomationRuntime {
   private readonly reviewThreshold: number;
   private readonly handlers: AutomationStageMap;
   private readonly auditOptions?: AutomationAuditOptions;
+  private readonly pipeline: AutomationPipeline;
   private readonly records = new Map<string, JobRecord>();
   private readonly queue: BatchQueue<JobRecord>;
   private readonly waiters: Array<(status: DocumentAutomationStatus) => void> = [];
@@ -277,6 +311,7 @@ export class DocumentAutomationRuntime {
     this.reviewThreshold = threshold;
     this.handlers = options.handlers ?? {};
     this.auditOptions = options.audit;
+    this.pipeline = resolvePipeline(options.pipeline);
     this.queue = new BatchQueue<JobRecord>({
       concurrency: options.concurrency,
       run: async (job, signal) => this.process(job.payload, signal),
@@ -308,6 +343,7 @@ export class DocumentAutomationRuntime {
       dryRun: input.dryRun === true,
       privacy: input.privacy,
       sourceRevision,
+      pipeline: this.pipeline,
       state: 'queued',
       attempt: 0,
       currentStage: null,
@@ -421,7 +457,7 @@ export class DocumentAutomationRuntime {
     delete record.error;
 
     try {
-      for (const stage of AUTOMATION_STAGES) {
+      for (const stage of record.pipeline.stages) {
         this.ensureActive(record, signal);
         record.currentStage = stage;
         const execution = await this.executeStage(record, stage, signal);
@@ -769,6 +805,7 @@ function clamp01(value: number): number {
 function cloneResult(record: JobRecord): AutomationJobResult {
   return freezeValue({
     jobId: record.id,
+    pipelineId: record.pipeline.id,
     state: record.state,
     attempt: record.attempt,
     sourceRevisionId: record.sourceRevision.revisionId,

@@ -26,6 +26,14 @@ export interface ResearchNoteStoreOptions {
   now?: () => string;
 }
 
+export interface ResearchBacklinkQuery {
+  paperId?: string;
+  page?: number;
+  blockId?: string;
+  citationId?: string;
+  hasPolygon?: boolean;
+}
+
 export class ResearchNoteStore {
   private readonly records = new Map<string, ResearchNote>();
   private readonly clock: () => string;
@@ -88,7 +96,7 @@ export class ResearchNoteStore {
     return this.records.delete(noteId);
   }
 
-  backlinks(query: { paperId?: string; blockId?: string; citationId?: string }): ResearchNote[] {
+  backlinks(query: ResearchBacklinkQuery): ResearchNote[] {
     return this.list().filter(note => noteMatches(note, query));
   }
 
@@ -166,10 +174,12 @@ function compareNotes(left: ResearchNote, right: ResearchNote): number {
   return left.paperId < right.paperId ? -1 : left.paperId > right.paperId ? 1 : left.noteId < right.noteId ? -1 : left.noteId > right.noteId ? 1 : 0;
 }
 
-function noteMatches(note: ResearchNote, query: { paperId?: string; blockId?: string; citationId?: string }): boolean {
+function noteMatches(note: ResearchNote, query: ResearchBacklinkQuery): boolean {
   if (query.paperId !== undefined && note.paperId !== query.paperId) return false;
   if (query.citationId !== undefined && !note.citationIds.includes(query.citationId)) return false;
+  if (query.page !== undefined && !note.anchors.some(anchor => anchor.anchor?.page === query.page)) return false;
   if (query.blockId !== undefined && !note.anchors.some(anchor => anchor.anchor?.blockId === query.blockId)) return false;
+  if (query.hasPolygon !== undefined && !note.anchors.some(anchor => (anchor.anchor?.polygon !== undefined) === query.hasPolygon)) return false;
   return true;
 }
 
