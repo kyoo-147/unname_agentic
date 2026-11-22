@@ -234,7 +234,7 @@ function failureLines(runResult) {
  * and `null` when no such line exists — a suite that crashed prints no summary, and that
  * must read as no count, never as zero passing tests.
  */
-function parseVitest(outputText) {
+export function parseVitest(outputText) {
   const line = outputText
     .split('\n')
     .filter(candidate => /^\s*Tests\s+\d/u.test(candidate))
@@ -242,12 +242,31 @@ function parseVitest(outputText) {
   if (line === undefined) return null;
 
   const counts = { passed: 0, failed: 0, skipped: 0, todo: 0 };
+  let parsed = 0;
   for (const match of line.matchAll(/(\d+)\s+(passed|failed|skipped|todo)\b/gu)) {
     const kind = match[2];
     const value = Number(match[1]);
-    if (kind in counts && Number.isSafeInteger(value)) counts[kind] = value;
+    if (kind in counts && Number.isSafeInteger(value)) {
+      counts[kind] = value;
+      parsed += 1;
+    }
   }
-  return counts;
+  return parsed === 0 ? null : counts;
+}
+
+/** A green process without a readable non-empty Vitest summary is not test evidence. */
+export function unitTestEvidence(result, outputText) {
+  const counts = parseVitest(outputText);
+  const processPassed = result?.code === 0 && result?.error == null;
+  const summaryPresent = counts !== null;
+  const passing = processPassed && summaryPresent ? counts.passed : 0;
+  return {
+    counts,
+    processPassed,
+    summaryPresent,
+    passing,
+    ok: processPassed && summaryPresent && counts.passed >= 1 && counts.failed === 0,
+  };
 }
 
 /** The count `playwright test --list` prints: `Total: 49 tests in 15 files`. */
@@ -303,8 +322,9 @@ function checkTypecheck() {
  */
 function checkUnitTests() {
   const result = run('pnpm', ['test'], TIMEOUTS.test);
-  const counts = parseVitest(output(result));
-  const recorded = result.code === 0 && counts !== null ? counts.passed : 0;
+  const evidence = unitTestEvidence(result, output(result));
+  const { counts } = evidence;
+  const recorded = evidence.ok ? evidence.passing : 0;
 
   let observed;
   if (counts === null) {
@@ -314,10 +334,10 @@ function checkUnitTests() {
     const failed = counts.failed > 0 ? `${counts.failed} failed | ` : '';
     observed = `${failed}${counts.passed} passed${skipped}, exit ${result.code} `
       + `(${duration(result.elapsedMs)})`;
-    if (recorded === 0) observed += ' - recorded 0, run was not green';
+    if (!evidence.ok) observed += ' - recorded 0, run was not green';
   }
 
-  return { observed, recorded, run: result };
+  return { observed, recorded, summaryPresent: evidence.summaryPresent, evidenceOk: evidence.ok, run: result };
 }
 
 /** `node scripts/check-committed-imports.mjs`. */
@@ -540,6 +560,10 @@ function checkChangelog(version) {
   };
 }
 
+function vitestEvidenceOk(result) {
+  return unitTestEvidence(result, output(result)).ok;
+}
+
 function checkQualityEvidence(unit, options, e2e) {
   const trustRun = run('pnpm', ['vitest', 'run', 'tests/quality-gates.test.ts', 'tests/network-guard.test.ts', 'tests/crypto.test.ts', 'tests/audit.test.ts', 'tests/capabilities.test.ts', 'tests/security-policy.test.ts', 'tests/resource-limits.test.ts', 'tests/evidence-contract.test.ts'], TIMEOUTS.test);
   const translationRun = run('pnpm', ['vitest', 'run', 'tests/translation-core.test.ts', 'tests/translation-batch.test.ts', 'tests/translation-service-batch.test.ts'], TIMEOUTS.test);
@@ -556,7 +580,7 @@ function checkQualityEvidence(unit, options, e2e) {
   const licenseRun = run(process.execPath, ['scripts/dependency-license-check.mjs'], TIMEOUTS.test);
   const license = parseJson(licenseRun);
   const sbomPass = license?.ok === true && licenseRun.code === 0;
-  const core = trustRun.code === 0 && unit.run.code === 0 ? 'pass' : 'fail';
+  const core = vitestEvidenceOk(trustRun) && unit.evidenceOk ? 'pass' : 'fail';
   return {
     evidence: {
       privacy: core,
@@ -566,11 +590,13 @@ function checkQualityEvidence(unit, options, e2e) {
       retention: core,
       goldenDataset: ocr?.measured > 0 ? 'pass' : 'fail',
       ocrBenchmark: ocr?.measured > 0 && ocrRun.code === 0 ? 'pass' : 'fail',
-      translationBenchmark: translationRun.code === 0 ? 'pass' : 'fail',
-      exportBenchmark: exportRun.code === 0 ? 'pass' : 'fail',
+      translationBenchmark: vitestEvidenceOk(translationRun) ? 'pass' : 'fail',
+      exportBenchmark: vitestEvidenceOk(exportRun) ? 'pass' : 'fail',
       performanceBenchmark: perf?.violations?.length === 0 && perf?.bundle?.built === true && perfRun.code === 0 ? 'pass' : 'fail',
       i18n: i18nRun.code === 0 ? 'pass' : 'fail',
-      accessibility: accessibilityRun.code === 0 && (!options.e2e || e2e.recorded > 0) ? 'pass' : 'fail',
+      accessibility: options.e2e
+        ? accessibilityRun.code === 0 && e2e.recorded > 0 ? 'pass' : 'fail'
+        : vitestEvidenceOk(accessibilityRun) ? 'pass' : 'fail',
       sbom: sbomPass ? 'pass' : 'fail',
     },
     observed: {
@@ -936,10 +962,12 @@ async function main() {
   process.exit(exitCode);
 }
 
-main().catch(error => {
-  console.error(
-    'release-check run failed:',
-    error instanceof Error ? (error.stack ?? error.message) : error,
-  );
-  process.exit(2);
-});
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  main().catch(error => {
+    console.error(
+      'release-check run failed:',
+      error instanceof Error ? (error.stack ?? error.message) : error,
+    );
+    process.exit(2);
+  });
+}
