@@ -1768,6 +1768,7 @@ impl Render for Workspace {
             .children(trash_menu)
             .children(home_menus)
             .children(theme_menu)
+            .children(export_menu)
             .children(confirm)
             .children(move_dlg)
             .children(search)

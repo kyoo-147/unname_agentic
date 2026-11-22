@@ -84,6 +84,7 @@ const MIN_NOTICE_BYTES = 200;
 
 /** Files newer than `docs/features.md` make the feature inventory stale. */
 const SOURCE_DIRS = ['extension', 'native-shell', 'scripts'];
+const IGNORED_WALK_DIRS = new Set(['.git', 'node_modules', 'target', 'dist']);
 
 /** How much of a command's output is kept for parsing and for showing a failure. */
 const OUTPUT_TAIL_CHARS = 400_000;
@@ -165,7 +166,7 @@ function walk(dir) {
   const files = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) files.push(...walk(full));
+    if (entry.isDirectory() && !IGNORED_WALK_DIRS.has(entry.name)) files.push(...walk(full));
     else if (entry.isFile()) files.push(full);
   }
   return files.sort();
