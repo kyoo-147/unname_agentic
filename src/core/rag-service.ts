@@ -570,7 +570,14 @@ function blocksForChunk(chunk: Chunk, ir: DocumentIR): Block[] {
 
 function pagesForChunk(chunk: Chunk, ir: DocumentIR): number[] {
   const pages = new Set<number>();
-  for (const block of blocksForChunk(chunk, ir)) pages.add(block.page);
+  const blocks = blocksForChunk(chunk, ir);
+  for (const block of blocks) pages.add(block.page);
+  if (chunk.headingPath.length > 0) {
+    const headings = new Set(chunk.headingPath.map(normalizeMetadata));
+    for (const block of Array.isArray(ir.blocks) ? ir.blocks : []) {
+      if (block.type === 'heading' && headings.has(normalizeMetadata(block.raw))) pages.add(block.page);
+    }
+  }
   if (pages.size === 0 && Number.isFinite(chunk.page)) pages.add(chunk.page);
   return [...pages].sort((left, right) => left - right);
 }
@@ -756,12 +763,12 @@ function rankChunks(
     const fusedScore = semantic.status === 'available' && semantic.hits.length > 0
       ? reciprocalRankScore(lexicalRank.get(id), semanticRank.get(id))
       : base.fusedScore;
-    const retrievalMethod: RankedRetrievalMethod = semanticHit && lexicalHit
-      ? 'hybrid'
-      : semanticHit
-        ? 'semantic'
-        : selected && !lexicalHit
-          ? 'selection'
+    const retrievalMethod: RankedRetrievalMethod = selected
+      ? 'selection'
+      : semanticHit && lexicalHit
+        ? 'hybrid'
+        : semanticHit
+          ? 'semantic'
           : base.retrievalMethod;
     hits.push({
       ...base,
@@ -832,27 +839,29 @@ function selectContext(
       || compareText(left.hit.chunk.blockIds[0] ?? '', right.hit.chunk.blockIds[0] ?? ''),
   );
 
-  return selected.map((entry, index) => ({
-    documentId: entry.hit.chunk.documentId,
-    title: titles.get(entry.hit.chunk.documentId) ?? entry.hit.chunk.documentId,
-    page: entry.hit.chunk.page,
-    sourcePages: pagesForChunk(
-      entry.hit.chunk,
-      documents.find(document => document.id === entry.hit.chunk.documentId)?.ir ?? { blocks: [] } as DocumentIR,
-    ),
-    blockIds: [...entry.hit.chunk.blockIds],
-    excerpt: entry.excerpt,
-    rank: index + 1,
-    chunkId: entry.hit.chunk.id,
-    kind: entry.hit.chunk.kind,
-    headingPath: [...entry.hit.chunk.headingPath],
-    revisionId: documents.find(document => document.id === entry.hit.chunk.documentId)?.ir.revisionId,
-    sourceSha256: documents.find(document => document.id === entry.hit.chunk.documentId)?.ir.sourceSha256,
-    lexicalScore: entry.hit.lexicalScore,
-    vectorScore: entry.hit.vectorScore,
-    fusedScore: entry.hit.fusedScore,
-    retrievalMethod: entry.hit.retrievalMethod,
-  }));
+  return selected.map((entry, index) => {
+    const sourceDocument = documents.find(document => document.id === entry.hit.chunk.documentId);
+    return {
+      documentId: entry.hit.chunk.documentId,
+      title: titles.get(entry.hit.chunk.documentId) ?? entry.hit.chunk.documentId,
+      page: entry.hit.chunk.page,
+      sourcePages: sourceDocument
+        ? pagesForChunk(entry.hit.chunk, sourceDocument.ir)
+        : [entry.hit.chunk.page],
+      blockIds: [...entry.hit.chunk.blockIds],
+      excerpt: entry.excerpt,
+      rank: index + 1,
+      chunkId: entry.hit.chunk.id,
+      kind: entry.hit.chunk.kind,
+      headingPath: [...entry.hit.chunk.headingPath],
+      revisionId: sourceDocument?.ir.revisionId,
+      sourceSha256: sourceDocument?.ir.sourceSha256,
+      lexicalScore: entry.hit.lexicalScore,
+      vectorScore: entry.hit.vectorScore,
+      fusedScore: entry.hit.fusedScore,
+      retrievalMethod: entry.hit.retrievalMethod,
+    };
+  });
 }
 
 function fencedContext(context: readonly ContextBlock[]): ContextBlock[] {
