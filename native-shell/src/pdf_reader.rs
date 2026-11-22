@@ -1,4 +1,4 @@
-mod document;
+pub(crate) mod document;
 mod export;
 mod geometry;
 pub mod ocr_markup;
@@ -188,6 +188,7 @@ pub struct PdfReader {
     native_scroll_input: Rc<Cell<bool>>,
     external_position: Option<f32>,
     selected: Option<usize>,
+    pending_citation: Option<String>,
     source_text: Entity<TextField>,
     target_text: Entity<TextField>,
     source_full: String,
@@ -381,7 +382,7 @@ impl PdfReader {
             scrolls: [ScrollHandle::new(), ScrollHandle::new()], scrollbars: [Rc::default(), Rc::default()],
             viewport: Rc::new(Cell::new(Bounds::new(point(px(0.), px(0.)), size(px(800.), px(650.))))),
             panes: [geometry::Pane::default(); 2], layout_split: true, reflow_frames: 0, linked_scroll: geometry::LinkedScroll::default(), last_input: Rc::new(Cell::new(1)), native_scroll_input: Rc::new(Cell::new(false)),
-            external_position: None, selected: None, source_text, target_text, source_full: String::new(), target_full: String::new(),
+            external_position: None, selected: None, pending_citation: None, source_text, target_text, source_full: String::new(), target_full: String::new(),
             status: tr3("正在打开原始像素…", "Opening original pixels…", "Đang mở ảnh gốc…").into(), error: None, last_digest: String::new(), document_generation: 1, document_model: RefCell::new(None), tick: None, _subscriptions: subscriptions,
         };
         let task = cx.background_executor().spawn(async {
@@ -476,6 +477,10 @@ impl PdfReader {
                         reader.epoch.source(); reader.prepared = Some(prepared); reader.selected = None; reader.translate_all = false; reader.selected_request = false;
                         reader.source_full.clear(); reader.target_full.clear();
                         reader.source_text.update(cx, |f, cx| f.set_text("", cx)); reader.target_text.update(cx, |f, cx| f.set_text("", cx));
+                        if let Some(block_id) = reader.pending_citation.take() {
+                            reader.selected = reader.prepared.as_ref().and_then(|page| page.frame.blocks.iter().enumerate().find_map(|(rank, _)| (format!("p{}-r{rank}", usize::from(reader.page) + 1) == block_id).then_some(rank)));
+                            if reader.selected.is_some() { reader.refresh_selection(cx); }
+                        }
                         reader.status = if reader.failed { tr3("原始文件已刷新 · 翻译需要重试", "Original refreshed · translation needs Retry", "Đã làm mới bản gốc · bản dịch cần thử lại") } else if reader.paused { tr3("翻译已暂停 · 原始文件已刷新", "Translation paused · original refreshed", "Đã tạm dừng dịch · bản gốc đã làm mới") } else { tr3("原始文件已就绪 · 正在翻译可见区域", "Original ready · translating visible regions", "Bản gốc đã sẵn sàng · đang dịch các vùng hiển thị") }.into();
                         if !reader.failed { reader.error = None; }
                         if let Some(error) = ocr_error { if matches!(reader.source, Source::Capture(_)) { reader.capture_live = false; } reader.fail(error, cx); }
@@ -598,6 +603,18 @@ impl PdfReader {
         self.load_needed = true; self.failed = false; self.error = None; self.external_position = None; self.linked_scroll = geometry::LinkedScroll::default();
         for scroll in &self.scrolls { scroll.set_offset(point(px(0.), px(0.))); }
         self.status = tr3("正在打开原始像素…", "Opening original pixels…", "Đang mở ảnh gốc…").into(); self.pump(cx); cx.notify();
+    }
+    pub fn navigate_to_citation(&mut self, page: usize, block_id: &str, cx: &mut Context<Self>) {
+        let Ok(page) = u16::try_from(page) else { return; };
+        if page >= self.page_count { return; }
+        self.pending_citation = Some(block_id.to_string());
+        self.goto_page(page, cx);
+        if self.prepared.is_some() {
+            if let Some(index) = self.prepared.as_ref().and_then(|prepared| prepared.frame.blocks.iter().enumerate().find_map(|(rank, _)| (format!("p{}-r{rank}", usize::from(self.page) + 1) == block_id).then_some(rank))) {
+                self.pending_citation = None;
+                self.select(index, cx);
+            }
+        }
     }
     /// 页码跳转: turn the page pill into an editable field with the current page selected.
     fn begin_page_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {

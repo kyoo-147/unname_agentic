@@ -484,6 +484,14 @@ impl Workspace {
             editor_sub: None,
             _subs: subs,
         };
+        let chat = ws.chat.clone();
+        ws._subs.push(cx.subscribe(&chat, |workspace, _, event: &crate::chat::ChatEvent, cx| {
+            if let crate::chat::ChatEvent::Navigate(target) = event {
+                if let Some(reader) = &workspace.pdf_reader {
+                    reader.update(cx, |reader, cx| reader.navigate_to_citation(target.page, &target.block_id, cx));
+                }
+            }
+        }));
         ws.sort();
         ws.load_home();
         // A fresh window always lands on the library, never the chat greeting.
@@ -914,11 +922,12 @@ impl Workspace {
 
     /// Switch the main pane to 主页 or 回收站 (or back to the document).
     pub fn show_chat(&mut self, cx: &mut Context<Self>) {
-        let context = self.pdf_reader.as_ref().and_then(|reader| reader.read(cx).document_context()).map(|(fallback, text)| {
+        let context = self.pdf_reader.as_ref().map(|reader| {
+            let fallback = reader.read(cx).document_context().map(|(title, _)| title).unwrap_or_else(|| "PDF".to_string());
             let title = self.current.as_ref().and_then(|id| self.entries.iter().find(|entry| &entry.id == id)).map(|entry| entry.title.clone()).unwrap_or(fallback);
-            (title, text)
+            (title, reader.read(cx).document_pages())
         });
-        self.chat.update(cx, |chat, cx| chat.set_context(context, cx));
+        self.chat.update(cx, |chat, cx| chat.set_document_context(context, cx));
         self.home.chat = true;
         self.home.recent_view = false;
         self.show_view(View::Chat, cx);
