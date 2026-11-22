@@ -53,6 +53,28 @@ describe('durable local automation runtime', () => {
     expect((await runtime.listVersions(documentId)).length).toBe(2);
   }, 20_000);
 
+  it('serializes immutable version commits when jobs run concurrently', async () => {
+    const { root, source } = await makeRuntime();
+    const secondSource = join(root, 'second-invoice.pdf');
+    await writeFile(secondSource, await readFile(source));
+    const runtime = new LocalAutomationRuntime({
+      statePath: join(root, 'parallel-state.json'),
+      authorizedRoots: [root],
+      concurrency: 2,
+      now: () => '2026-01-01T00:00:00.000Z',
+    });
+    await runtime.open();
+    await runtime.enqueue({ id: 'invoice-a', sourcePath: source, outputDir: join(root, 'out-a') });
+    await runtime.enqueue({ id: 'invoice-b', sourcePath: secondSource, outputDir: join(root, 'out-b') });
+
+    const status = await runtime.run();
+
+    expect(status.jobs.map(job => [job.id, job.state, job.error])).toEqual([
+      ['invoice-a', 'done', null],
+      ['invoice-b', 'done', null],
+    ]);
+  }, 20_000);
+
   it('holds low-confidence or missing extraction for review, then resumes after a decision', async () => {
     const { runtime, source, output } = await makeRuntime();
     const job = await runtime.enqueue({ sourcePath: source, outputDir: output, schema: [{ id: 'missing', label: 'Missing', type: 'text', required: true }] });
