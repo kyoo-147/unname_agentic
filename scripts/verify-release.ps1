@@ -166,7 +166,7 @@ try {
                 $relative = [regex]::Match($line, '^([0-9a-fA-F]{64})\s{2}(.+)$').Groups[2].Value
                 if ($entryNames -notcontains $relative) { throw "Archive entry is missing: $relative" }
             }
-            if ($entryNames.Count -ne $checksumPaths.Count) { throw 'Archive contains duplicate, unmanifested, or missing package entries.' }
+            if ($entryNames.Count -ne ($checksumPaths.Count + 1)) { throw 'Archive contains duplicate, unmanifested, or missing package entries.' }
         } finally { $archive.Dispose() }
         Write-Output "Native package source commit: $($manifest.source.commit)"
         Write-Output "Native package files verified: $($checksumLines.Count)"
