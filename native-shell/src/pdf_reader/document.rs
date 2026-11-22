@@ -88,6 +88,16 @@ impl DocumentPages {
     pub fn snapshot(&self) -> Vec<DocumentPage> {
         self.pages.clone()
     }
+
+    /// Resolves a citation only when the named page was loaded and contains the exact block id.
+    /// Page numbers use the reader's 1-based citation form; no nearby block is substituted.
+    pub fn resolve_block(&self, page_number: usize, block_id: &str) -> Option<&DocumentBlock> {
+        let page = page_number.checked_sub(1)?;
+        if !self.is_loaded(page) {
+            return None;
+        }
+        self.pages.get(page)?.blocks.iter().find(|block| block.id == block_id)
+    }
 }
 
 pub fn page_from_blocks(
@@ -102,7 +112,7 @@ pub fn page_from_blocks(
         .iter()
         .enumerate()
         .map(|(index, block)| DocumentBlock {
-            id: format!("p{}-r{}", page + 1, index + 1),
+            id: format!("p{}-r{}", page + 1, index),
             source: block.source.clone(),
             translation: block.translated.clone(),
             polygon: polygon(
@@ -180,9 +190,12 @@ mod tests {
             pages[0].blocks[0].polygon,
             [[0.1, 0.2], [0.4, 0.2], [0.4, 0.6], [0.1, 0.6]]
         );
-        assert_eq!(pages[2].blocks[0].id, "p3-r1");
+        assert_eq!(pages[2].blocks[0].id, "p3-r0");
         assert_eq!(pages[0].source_id, "sha256:doc");
         assert!(!document.is_complete());
+        assert_eq!(document.resolve_block(1, "p1-r0").map(|block| block.source.as_str()), Some("first"));
+        assert!(document.resolve_block(1, "p1-r1").is_none(), "unknown ids must not snap to the only block");
+        assert!(document.resolve_block(2, "p2-r0").is_none(), "unloaded pages cannot resolve citations");
     }
 
     #[test]
@@ -224,5 +237,6 @@ mod tests {
         )));
         assert!(document.insert(page_from_blocks("new-source", 8, 0, 2, &[block("current")])));
         assert_eq!(document.snapshot()[0].blocks[0].source, "current");
+        assert_eq!(document.snapshot()[0].blocks[0].id, "p1-r0");
     }
 }

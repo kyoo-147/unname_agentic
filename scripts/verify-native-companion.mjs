@@ -35,7 +35,7 @@ async function snapshot(name) {
 let app; let appLog = '';
 try {
   await request({ type: 'hello' });
-  const bytes = await readFile(join(root, 'tests/fixtures/mirror-field-notes.pdf'));
+  const bytes = await readFile(join(root, 'extension/tests/fixtures/mirror-field-notes.pdf'));
   const binding = { session_id: randomUUID(), source_id: 'a'.repeat(64), request_nonce: randomUUID(), generation: Date.now() };
   const page = { page: 2, page_count: 4, fraction: 0, zoom: 1 };
   await request({ type: 'begin', binding, total_bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), title: 'Chrome transfer verification', page });

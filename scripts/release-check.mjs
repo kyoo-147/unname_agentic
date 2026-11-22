@@ -2,7 +2,7 @@
 /**
  * Release gate runner (backlog N08).
  *
- * The checklist in `docs/release-checklist.md` says what a release needs; `src/core/
+ * The checklist in `docs/release-checklist.md` says what a release needs; `extension/viewer/src/core/
  * release-gate.ts` says what happens when one is missing. This script is the third part:
  * it goes and looks. Every fact it hands the gate was observed — a command's exit code, a
  * count in a suite's own summary, a file on disk, a modification time — and when a command
@@ -12,33 +12,31 @@
  *
  * - `pnpm typecheck` — the sources compile. A release built from sources that do not
  *   typecheck is not the artifact anybody reviewed.
- * - `pnpm test` — the unit suite. Its passing count is parsed from vitest's own summary;
+ * - `pnpm test:extension` - the extension-owned unit suite. Its passing count is parsed from vitest's own summary;
  *   a red run is recorded as 0 passing tests *for the release* and the real numbers are
  *   printed beside it, because a release does not rest on a suite that failed.
  * - `node scripts/check-committed-imports.mjs` — every relative import resolves against the
  *   files committed at HEAD. This gate exists because a green local build cannot catch a
  *   module that was imported but never added.
- * - the end-to-end suite — listed by default (`playwright test --list`, seconds, no
- *   browser), run for real with `--e2e`. The row says which of the two it is; a release
- *   run must use `--e2e`.
- * - the build output — `dist/web/index.html` and its assets, produced by `pnpm build`
+ * - externally recorded Chrome/extension browser E2E evidence. The row remains blocked
+ *   until `RELEASE_BROWSER_E2E_TESTS` records a real run; this checker never invents it.
+ * - the build output — `dist/extension/index.html` and its assets, produced by `pnpm build`
  *   (`--build` runs that command first; without it the row is the output already on disk).
  * - the release package — the newest commit-bound `dist/pdf-workspace-*-release-*` directory
  *   with its sibling archive and required native files.
- * - the third-party notices — every runtime dependency in `package.json` must be named in
- *   one of the notice/licence documents under `public/`. pdf-lib and @pdf-lib/fontkit are
- *   bundled into the web reader, so they are dependencies a shipped notice must cover.
+ * - the third-party notices - every runtime dependency in `package.json` must be named in
+ *   one of the notice/licence documents under `extension/viewer/public/`.
  * - the changelog — `CHANGELOG.md` must name the version being shipped.
  * - the feature inventory — a timestamp proxy: `docs/features.md` versus the newest source
  *   file. The gate warns on it, never blocks: only a person can confirm the content.
  *
- * Node loads `src/core/release-gate.ts` directly (type stripping since 22.18); the resolve
+ * Node loads `extension/viewer/src/core/release-gate.ts` directly (type stripping since 22.18); the resolve
  * hook below adds the extension Node's ESM resolver insists on, because the repository's
  * imports are extensionless by convention — the same trick `scripts/perf-budget.mjs` uses.
  *
  * Usage:
- *   node scripts/release-check.mjs                preflight, no build, e2e listed
- *   node scripts/release-check.mjs --build --e2e  the release run
+ *   node scripts/release-check.mjs                preflight, no build
+ *   node scripts/release-check.mjs --build       the release run
  *   node scripts/release-check.mjs --json         machine-readable report
  *   node scripts/release-check.mjs --help
  *
@@ -55,9 +53,10 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
+const releaseGatePath = path.join(root, 'extension', 'viewer', 'src', 'core', 'release-gate.ts');
 const distDir = path.join(root, 'dist');
-const webIndex = path.join(distDir, 'web', 'index.html');
-const webAssets = path.join(distDir, 'web', 'assets');
+const extensionIndex = path.join(distDir, 'extension', 'index.html');
+const extensionAssets = path.join(distDir, 'extension', 'assets');
 const changelogPath = path.join(root, 'CHANGELOG.md');
 const featuresDoc = path.join(root, 'docs', 'features.md');
 
@@ -76,14 +75,14 @@ const NOTICE_ALIASES = Object.freeze({
   '@pdf-lib/fontkit': ['@pdf-lib/fontkit', 'fontkit'],
 });
 
-/** Files under `public/` whose name marks them as a notice or a licence text. */
+/** Files under `extension/viewer/public/` whose name marks them as a notice or a licence text. */
 const NOTICE_FILE = /(NOTICE|LICEN[CS]E|COPYING|OFL)/iu;
 
 /** A notice document smaller than this is a placeholder, not a licence. */
 const MIN_NOTICE_BYTES = 200;
 
 /** Files newer than `docs/features.md` make the feature inventory stale. */
-const SOURCE_DIRS = ['src', 'extension', 'tests'];
+const SOURCE_DIRS = ['extension', 'native-shell', 'scripts'];
 
 /** How much of a command's output is kept for parsing and for showing a failure. */
 const OUTPUT_TAIL_CHARS = 400_000;
@@ -95,8 +94,6 @@ const TIMEOUTS = Object.freeze({
   test: 15 * 60_000,
   imports: 2 * 60_000,
   build: 10 * 60_000,
-  e2eList: 3 * 60_000,
-  e2eRun: 45 * 60_000,
 });
 
 /** Table width for the "observed" column, so one long path cannot break the layout. */
@@ -269,25 +266,18 @@ export function unitTestEvidence(result, outputText) {
   };
 }
 
-/** The count `playwright test --list` prints: `Total: 49 tests in 15 files`. */
-function parsePlaywrightList(outputText) {
-  const match = /Total:\s+(\d+)\s+tests?/u.exec(outputText);
-  if (match?.[1] === undefined) return null;
-  return Number(match[1]);
-}
-
-/**
- * The passing count of a real Playwright run.
- *
- * Playwright prints a per-status summary at the end (`49 passed (2.3m)`, `1 failed`), so the
- * last `N passed` occurrence is the total. `flaky` lines count as passed only when the run
- * exited 0, which the caller decides.
- */
-function parsePlaywrightRun(outputText) {
-  const matches = [...outputText.matchAll(/(\d+)\s+passed\b/gu)];
-  const last = matches[matches.length - 1];
-  if (last?.[1] === undefined) return null;
-  return Number(last[1]);
+/** Positive externally recorded browser E2E count; missing evidence stays missing. */
+function readBrowserE2eEvidence(floor) {
+  const raw = process.env.RELEASE_BROWSER_E2E_TESTS;
+  const count = raw === undefined || raw.trim() === '' ? null : Number(raw);
+  const valid = Number.isFinite(count) && count >= 1 ? Math.floor(count) : null;
+  return {
+    observed: valid === null
+      ? 'not recorded; real Chrome/extension browser E2E remains unverified'
+      : `${valid} externally recorded browser E2E tests, floor ${floor}`,
+    recorded: valid ?? 0,
+    run: null,
+  };
 }
 
 // --- Observing each check --------------------------------------------------
@@ -315,13 +305,13 @@ function checkTypecheck() {
 }
 
 /**
- * `pnpm test`, and the passing count it reported.
+ * `pnpm test:extension`, and the passing count it reported.
  *
  * The count recorded for the release is 0 unless the run was green: the row keeps the real
  * numbers either way, so nothing is hidden behind that decision.
  */
 function checkUnitTests() {
-  const result = run('pnpm', ['test'], TIMEOUTS.test);
+  const result = run('pnpm', ['test:extension'], TIMEOUTS.test);
   const evidence = unitTestEvidence(result, output(result));
   const { counts } = evidence;
   const recorded = evidence.ok ? evidence.passing : 0;
@@ -365,7 +355,7 @@ function checkCommittedImports() {
 /**
  * The build output, and with `--build` the command that produces it.
  *
- * The gate is about the artifact a release ships, so the output is what is read: `dist/web`
+ * The gate is about the artifact a release ships, so the output is what is read: `dist/extension`
  * must hold an index and at least one asset. Rebuilding is a flag rather than the default
  * because a preflight should not rewrite `dist/` under a running review.
  */
@@ -382,10 +372,10 @@ function checkBuild(options) {
     };
   }
 
-  const built = existsSync(webIndex) ? statSync(webIndex) : null;
-  const assets = existsSync(webAssets) ? walk(webAssets) : [];
+  const built = existsSync(extensionIndex) ? statSync(extensionIndex) : null;
+  const assets = existsSync(extensionAssets) ? walk(extensionAssets) : [];
   if (built === null || assets.length === 0) {
-    const reason = built === null ? 'dist/web/index.html is missing' : 'dist/web/assets is empty';
+    const reason = built === null ? 'dist/extension/index.html is missing' : 'dist/extension/assets is empty';
     return {
       state: 'fail',
       observed: command === null ? reason : `${reason} after pnpm build`,
@@ -397,41 +387,8 @@ function checkBuild(options) {
   const prefix = command === null ? '' : `rebuilt in ${duration(command.elapsedMs)}; `;
   return {
     state: 'pass',
-    observed: `${prefix}dist/web built ${stamp}Z, ${countOf(assets.length, 'asset')}`,
+    observed: `${prefix}dist/extension built ${stamp}Z, ${countOf(assets.length, 'asset')}`,
     run: command,
-  };
-}
-
-/** The end-to-end suite: listed by default, run for real with `--e2e`. */
-function checkEndToEnd(options, floor) {
-  if (!options.e2e) {
-    const result = run('pnpm', ['exec', 'playwright', 'test', '--list'], TIMEOUTS.e2eList);
-    const declared = result.code === 0 ? parsePlaywrightList(output(result)) : null;
-    return {
-      observed: result.code === 0
-        ? (declared === null
-          ? 'listed, but no total line was found'
-          : `${declared} declared, floor ${floor} (list only; pass --e2e)`)
-        : `playwright --list exited ${result.code}`,
-      recorded: result.code === 0 && declared !== null ? declared : 0,
-      run: result,
-    };
-  }
-
-  const result = run(
-    'pnpm',
-    ['exec', 'playwright', 'test', '--retries=0'],
-    TIMEOUTS.e2eRun,
-  );
-  const passed = result.code === 0 ? parsePlaywrightRun(output(result)) : null;
-  return {
-    observed: result.code === 0
-      ? (passed === null
-        ? 'ran, but no passing count was found'
-        : `${passed} passed in ${duration(result.elapsedMs)}, floor ${floor}`)
-      : `playwright test exited ${result.code} (${duration(result.elapsedMs)})`,
-    recorded: passed ?? 0,
-    run: result,
   };
 }
 
@@ -439,15 +396,15 @@ function checkEndToEnd(options, floor) {
  * Third-party notices, and which bundled dependencies no notice names.
  *
  * The set of components is the runtime `dependencies` in `package.json` — those are the
- * packages that can be bundled into the reader; `devDependencies` are build tools and ship
- * nowhere. The documents are every notice/licence file under `public/`, which is what the
- * build copies into `dist/web` and `dist/extension`. A component is covered when one
+ * packages that can be bundled into the extension viewer; `devDependencies` are build tools and ship
+ * nowhere. The documents are every notice/licence file under `extension/viewer/public/`, which is what the
+ * build copies into `dist/extension`. A component is covered when one
  * document names it (or a documented alias); a file that exists but is a stub does not
  * count.
  */
 function checkNotices(pkg) {
   const documents = [];
-  for (const file of walk(path.join(root, 'public'))) {
+  for (const file of walk(path.join(root, 'extension', 'viewer', 'public'))) {
     if (!NOTICE_FILE.test(path.basename(file))) continue;
     if (statSync(file).size < MIN_NOTICE_BYTES) continue;
     documents.push(file);
@@ -564,11 +521,12 @@ function vitestEvidenceOk(result) {
   return unitTestEvidence(result, output(result)).ok;
 }
 
-function checkQualityEvidence(unit, options, e2e) {
-  const trustRun = run('pnpm', ['vitest', 'run', 'tests/quality-gates.test.ts', 'tests/network-guard.test.ts', 'tests/crypto.test.ts', 'tests/audit.test.ts', 'tests/capabilities.test.ts', 'tests/security-policy.test.ts', 'tests/resource-limits.test.ts', 'tests/evidence-contract.test.ts'], TIMEOUTS.test);
-  const translationRun = run('pnpm', ['vitest', 'run', 'tests/translation-core.test.ts', 'tests/translation-batch.test.ts', 'tests/translation-service-batch.test.ts'], TIMEOUTS.test);
-  const exportRun = run('pnpm', ['vitest', 'run', 'tests/export-bilingual.test.ts', 'tests/export-check.test.ts', 'tests/pdf-export.test.ts'], TIMEOUTS.test);
-  const accessibilityRun = options.e2e ? e2e.run : run('pnpm', ['vitest', 'run', 'tests/a11y.test.ts'], TIMEOUTS.test);
+function checkQualityEvidence(unit) {
+  const testArgs = files => ['vitest', 'run', '--config', 'extension/vitest.config.ts', ...files.map(file => `extension/tests/${file}`)];
+  const trustRun = run('pnpm', testArgs(['quality-gates.test.ts', 'network-guard.test.ts', 'crypto.test.ts', 'audit.test.ts', 'capabilities.test.ts', 'security-policy.test.ts', 'resource-limits.test.ts', 'evidence-contract.test.ts']), TIMEOUTS.test);
+  const translationRun = run('pnpm', testArgs(['translation-core.test.ts', 'translation-batch.test.ts', 'translation-service-batch.test.ts']), TIMEOUTS.test);
+  const exportRun = run('pnpm', testArgs(['export-bilingual.test.ts', 'export-check.test.ts', 'pdf-export.test.ts']), TIMEOUTS.test);
+  const accessibilityRun = run('pnpm', testArgs(['a11y.test.ts']), TIMEOUTS.test);
   const ocrRun = run(process.execPath, ['scripts/ocr-benchmark.mjs', '--json'], TIMEOUTS.test);
   const perfRun = run(process.execPath, ['scripts/perf-budget.mjs', '--json'], TIMEOUTS.test);
   const i18nRun = run(process.execPath, ['scripts/i18n-matrix.mjs'], TIMEOUTS.test);
@@ -594,9 +552,7 @@ function checkQualityEvidence(unit, options, e2e) {
       exportBenchmark: vitestEvidenceOk(exportRun) ? 'pass' : 'fail',
       performanceBenchmark: perf?.violations?.length === 0 && perf?.bundle?.built === true && perfRun.code === 0 ? 'pass' : 'fail',
       i18n: i18nRun.code === 0 ? 'pass' : 'fail',
-      accessibility: options.e2e
-        ? accessibilityRun.code === 0 && e2e.recorded > 0 ? 'pass' : 'fail'
-        : vitestEvidenceOk(accessibilityRun) ? 'pass' : 'fail',
+      accessibility: vitestEvidenceOk(accessibilityRun) ? 'pass' : 'fail',
       sbom: sbomPass ? 'pass' : 'fail',
     },
     observed: {
@@ -651,7 +607,7 @@ function evidenceStatus(raw, fallback = 'unknown') {
 }
 
 /** Native evidence is pass only when a positive count came from a real native run. */
-function readNativeEvidence() {
+export function readNativeEvidence() {
   const rawCount = process.env.RELEASE_NATIVE_TESTS;
   const count = rawCount === undefined || rawCount.trim() === '' ? null : Number(rawCount);
   const validCount = Number.isFinite(count) && count >= 1 ? Math.floor(count) : null;
@@ -663,8 +619,8 @@ function readNativeEvidence() {
     if (validCount === null) return { status: 'blocked', count: null, observed: 'RELEASE_NATIVE_STATUS=pass requires RELEASE_NATIVE_TESTS >= 1' };
     return { status: 'pass', count: validCount, observed: `${validCount} passing native tests recorded from a native run` };
   }
-  if (explicit === 'unknown') return { status: 'unknown', count: null, observed: 'native evidence explicitly marked unknown' };
-  if (validCount !== null) return { status: 'pass', count: validCount, observed: `${validCount} recorded from RELEASE_NATIVE_TESTS (legacy pass evidence)` };
+  if (explicit === 'unknown' && validCount === null) return { status: 'unknown', count: null, observed: 'native evidence explicitly marked unknown' };
+  if (validCount !== null) return { status: 'blocked', count: null, observed: 'positive RELEASE_NATIVE_TESTS is insufficient without RELEASE_NATIVE_STATUS=pass from a real native run' };
   if (rawCount !== undefined && rawCount.trim() !== '') return { status: 'unknown', count: null, observed: `RELEASE_NATIVE_TESTS="${rawCount}" is not a positive count` };
   return { status: 'unknown', count: null, observed: 'not recorded; native build/test did not execute or its evidence was not supplied' };
 }
@@ -706,13 +662,13 @@ function installTypeScriptResolver() {
 }
 
 async function loadGate() {
-  const file = path.join(root, 'src', 'core', 'release-gate.ts');
+  const file = releaseGatePath;
   try {
     return await import(pathToFileURL(file).href);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     fail(
-      `release-check: cannot import src/core/release-gate.ts.\n`
+      `release-check: cannot import ${relative(releaseGatePath)}.\n`
       + 'The runner loads the shipped TypeScript directly, which needs Node 22.18 or newer '
       + `(type stripping) and 22.15 or newer (module.registerHooks). This is Node ${process.version}.\n`
       + `Cause: ${reason}`,
@@ -723,34 +679,36 @@ async function loadGate() {
 
 // --- Reporting -------------------------------------------------------------
 
-const USAGE = `Usage: node scripts/release-check.mjs [--build] [--e2e] [--require-native] [--require-ci] [--json] [--help]
+const USAGE = `Usage: node scripts/release-check.mjs [--build] [--require-native] [--require-ci] [--json] [--help]
 
-Reads the evidence a release needs — typecheck, unit suite, committed imports, the e2e
-suite, the build output, the release package, the third-party notices, the changelog and
-the feature inventory — and asks src/core/release-gate.ts whether the release may ship.
+Reads the evidence a release needs - typecheck, extension unit suite, committed imports,
+the externally recorded browser E2E count, the build output, the release package, the
+third-party notices, the changelog and the feature inventory - and asks
+extension/viewer/src/core/release-gate.ts whether the release may ship.
 
   --build   run \`pnpm build\` before reading the build output (otherwise the output already
             on disk is read, and the row says when it was built)
-  --e2e     run the Playwright suite; without it the suite is listed and the row says so
-  --require-native  fail unless a positive native test count is explicitly recorded
+  --require-native  accepted for compatibility; native pass evidence is always required
   --require-ci      fail unless CI status is explicitly recorded as pass
   --json    machine-readable report
   --help    this text
 
-Environment: RELEASE_NATIVE_TESTS records the native count from a separate Rust run.
-RELEASE_NATIVE_STATUS may be pass, blocked or unknown; RELEASE_NATIVE_BLOCKER records the reason.
+Environment: RELEASE_NATIVE_TESTS records the positive native test count from a separate Rust run.
+RELEASE_NATIVE_STATUS=pass is also required; a count alone is not evidence. Status may be blocked or unknown;
+RELEASE_NATIVE_BLOCKER records the reason.
+RELEASE_BROWSER_E2E_TESTS records a real Chrome/extension browser E2E count; without it the
+browser E2E gate remains blocked.
 RELEASE_CI_STATUS may be pass, blocked or unknown; RELEASE_CI_BLOCKER records the reason.
 
-Floors: at least one passing unit test, at least E2E_TEST_FLOOR declared or passing e2e tests
-(see src/core/release-gate.ts and docs/release-checklist.md).
+Floors: at least one passing unit test and at least E2E_TEST_FLOOR externally recorded browser
+E2E tests (see extension/viewer/src/core/release-gate.ts and docs/release-checklist.md).
 
 Exit codes: 0 no blocker, 1 at least one blocker, 2 the runner could not run.`;
 
 function parseArgs(argv) {
-  const options = { build: false, e2e: false, requireNative: false, requireCi: false, json: false };
+  const options = { build: false, requireNative: false, requireCi: false, json: false };
   for (const argument of argv) {
     if (argument === '--build') options.build = true;
-    else if (argument === '--e2e') options.e2e = true;
     else if (argument === '--require-native') options.requireNative = true;
     else if (argument === '--require-ci') options.requireCi = true;
     else if (argument === '--json') options.json = true;
@@ -815,13 +773,13 @@ async function main() {
   const typecheck = checkTypecheck();
   const unit = checkUnitTests();
   const imports = checkCommittedImports();
-  const e2e = checkEndToEnd(options, gate.E2E_TEST_FLOOR);
+  const e2e = readBrowserE2eEvidence(gate.E2E_TEST_FLOOR);
   const build = checkBuild(options);
   const notices = checkNotices(pkg);
   const artifact = checkPackageArtifact();
   const changelog = checkChangelog(version);
   const features = checkFeaturesDoc();
-  const quality = checkQualityEvidence(unit, options, e2e);
+  const quality = checkQualityEvidence(unit);
   const native = readNativeEvidence();
   const ci = readCiEvidence();
 
@@ -840,20 +798,20 @@ async function main() {
     packageArtifact: artifact.artifact,
   };
   const report = gate.evaluate(input);
-  const webBlockerCodes = new Set(report.blockers.map(blocker => blocker.code).filter(code => code !== 'package-artifact-missing' && code !== 'license-notice-missing'));
+  const extensionBlockerCodes = new Set(report.blockers.map(blocker => blocker.code).filter(code => code !== 'package-artifact-missing' && code !== 'license-notice-missing'));
   const releaseStatus = {
-    web: webBlockerCodes.size === 0 ? 'pass' : 'blocked',
+    extension: extensionBlockerCodes.size === 0 ? 'pass' : 'blocked',
     native: native.status,
     license: notices.missing.length === 0 ? 'pass' : 'blocked',
     ci: ci.status,
   };
   const requiredEvidenceFailures = [];
-  if (options.requireNative && native.status !== 'pass') requiredEvidenceFailures.push(`native evidence is ${native.status}`);
+  if (native.status !== 'pass') requiredEvidenceFailures.push(`native evidence is ${native.status}`);
   if (options.requireCi && ci.status !== 'pass') requiredEvidenceFailures.push(`CI evidence is ${ci.status}`);
 
   // --- The table: what was checked, what was seen, what it means.
   const rows = [
-    { check: 'web surface', observed: `typecheck/build/imports/evidence: ${releaseStatus.web}`, codes: [], fixedVerdict: releaseStatus.web === 'pass' ? 'PASS' : 'BLOCKED' },
+    { check: 'extension surface', observed: `typecheck/build/imports/evidence: ${releaseStatus.extension}`, codes: [], fixedVerdict: releaseStatus.extension === 'pass' ? 'PASS' : 'BLOCKED' },
     { check: 'version', observed: version, codes: ['version-missing'] },
     { check: 'changelog', observed: changelog.observed, codes: ['changelog-missing-version'] },
     { check: 'unit suite', observed: unit.observed, codes: ['unit-tests-empty'], run: unit.run },
@@ -945,9 +903,6 @@ async function main() {
         ? 'PASS: no blocker, no warning.'
         : `PASS: no blocker; ${countOf(report.warnings.length, 'warning')} to weigh.`,
     );
-    if (!options.e2e) {
-      console.log('The e2e row is the declared count, not a run: release with --e2e.');
-    }
     if (!options.build) {
       console.log('The build row is the output already on disk: release with --build.');
     }

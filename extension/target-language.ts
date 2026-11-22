@@ -1,4 +1,4 @@
-import { SUPPORTED_TARGETS } from '../src/core/language';
+import { SUPPORTED_TARGETS } from './viewer/src/core/language';
 
 export const TARGET_LANGUAGE_KEY = 'mirror:targetLanguage';
 export const DEFAULT_TARGET_LANGUAGE = 'vi';

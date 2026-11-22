@@ -499,13 +499,8 @@ pub fn write_export(dir: &Path, name: &str, content: &str, overwrite: bool) -> R
     let target = dir.join(name);
     anyhow::ensure!(overwrite || !target.exists(), "{}", tr3_fill("已存在同名文件，未覆盖：{}", "A file with this name already exists and was not replaced: {}", "Đã có tệp cùng tên, không ghi đè: {}", target.display()));
     let temp = Temp::new(dir, name);
-    std::fs::write(&temp.path, content).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", temp.path.display()))?;
-    // Windows refuses to rename onto an existing file, and an overwriting caller
-    // is the one a save panel has already confirmed the replacement with.
-    if overwrite && target.exists() {
-        std::fs::remove_file(&target).with_context(|| tr3_fill("无法替换 {}", "Cannot replace {}", "Không thay được {}", target.display()))?;
-    }
-    std::fs::rename(&temp.path, &target).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", target.display()))?;
+    write_temp(&temp.path, content.as_bytes())?;
+    publish_temp(&temp.path, &target, overwrite)?;
     Ok(target)
 }
 
@@ -528,13 +523,31 @@ pub fn write_export_bytes_path(path: &Path, bytes: &[u8], overwrite: bool) -> Re
     anyhow::ensure!(overwrite || !target.exists(), "{}", tr3_fill("已存在同名文件，未覆盖：{}", "A file with this name already exists and was not replaced: {}", "Đã có tệp cùng tên, không ghi đè: {}", target.display()));
     let temporary = dir.join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| -> Result<PathBuf> {
-        std::fs::write(&temporary, bytes).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", temporary.display()))?;
-        if overwrite && target.exists() { std::fs::remove_file(&target).with_context(|| tr3_fill("无法替换 {}", "Cannot replace {}", "Không thay được {}", target.display()))?; }
-        std::fs::rename(&temporary, &target).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", target.display()))?;
+        write_temp(&temporary, bytes)?;
+        publish_temp(&temporary, &target, overwrite)?;
         Ok(target)
     })();
     if result.is_err() { let _ = std::fs::remove_file(&temporary); }
     result
+}
+
+fn write_temp(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(path)
+        .with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", path.display()))?;
+    file.write_all(bytes).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", path.display()))
+}
+
+fn publish_temp(temporary: &Path, target: &Path, overwrite: bool) -> Result<()> {
+    if overwrite {
+        if target.exists() { std::fs::remove_file(target).with_context(|| tr3_fill("无法替换 {}", "Cannot replace {}", "Không thay được {}", target.display()))?; }
+        std::fs::rename(temporary, target).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", target.display()))
+    } else {
+        // A same-directory hard link publishes atomically and fails if another
+        // writer created the destination after the initial existence check.
+        std::fs::hard_link(temporary, target).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", target.display()))?;
+        std::fs::remove_file(temporary).with_context(|| tr3_fill("无法写入 {}", "Cannot write {}", "Không ghi được {}", temporary.display()))
+    }
 }
 
 /// The name the save panel starts with: the title as a file name, plus the
@@ -785,6 +798,20 @@ mod tests {
         let nested = dir.join("exports").join("2026");
         let path = write_export(&nested, "report.json", "{}", false).expect("write into a folder that did not exist");
         assert!(path.is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_no_overwrite_publish_rejects_a_destination_created_after_the_check() {
+        let dir = temp_dir();
+        let temporary = dir.join(".notes.txt.tmp");
+        let target = dir.join("notes.txt");
+        write_temp(&temporary, b"new").expect("write the temporary export");
+        std::fs::write(&target, b"racing writer").expect("simulate a destination created after preflight");
+
+        assert!(publish_temp(&temporary, &target, false).is_err(), "exclusive publication must refuse the racing destination");
+        assert_eq!(std::fs::read(&target).expect("read the winner"), b"racing writer");
+        assert_eq!(std::fs::read(&temporary).expect("the failed publish keeps its temporary for cleanup"), b"new");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

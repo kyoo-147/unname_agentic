@@ -2,8 +2,12 @@
 
 This file preserves a historical native receipt, not current-branch evidence.
 The receipt below must not be read as a native pass for a later checkout or wave.
-For the current release, run `scripts/package-native.ps1`, `scripts/verify-release.ps1 -RequireNativePackage`,
-and `node scripts/release-check.mjs --require-native` and attach their fresh output.
+Current audit: native build/tests/package, Chrome/native E2E, trusted signing, Chrome registry/native-host installation,
+CI and independent PDF-reader validation are unverified.
+A historical self-signed preview is not trusted signing, and a packaged host is not proof of Chrome registration.
+For a full current release, run `scripts/package-native.ps1`, `scripts/verify-release.ps1`,
+and `node scripts/release-check.mjs --require-native --require-ci`, then attach fresh evidence for each gate.
+The release checker requires both a positive `RELEASE_NATIVE_TESTS` count and `RELEASE_NATIVE_STATUS=pass` from a real run.
 If Windows SDK, `rc.exe`, linker/paging-file error 1455, or another infrastructure condition blocks
 the run, record `RELEASE_NATIVE_STATUS=blocked` and the exact error instead of changing it to pass.
 

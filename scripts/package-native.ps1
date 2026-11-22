@@ -204,8 +204,8 @@ Any configured provider, model, quota and data-transfer policy remains the user'
     @"
 PDF Workspace - native Windows preview
 
-This package contains the native GPUI executable, its PDFium runtime, the standalone
-Chrome native-messaging host, embedded asset sources for audit, licenses and checksums.
+This package contains the native GPUI executable, its PDFium runtime, the Chrome
+native-messaging host, embedded asset sources for audit, licenses and checksums.
 Open pdf_workspace.exe. No administrator account or login is required.
 
 The optional Chrome companion is not registered automatically. Load the separately

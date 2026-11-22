@@ -13,5 +13,5 @@
     "skipLibCheck": true,
     "types": ["node", "chrome"]
   },
-  "include": ["src", "extension", "tests", "vite.config.ts", "playwright.config.ts"]
+  "include": ["extension", "scripts/*.ts"]
 }

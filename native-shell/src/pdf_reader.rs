@@ -292,22 +292,30 @@ impl PdfReader {
             cx.emit(PdfReaderEvent::Toast(tr3("只有本地 PDF 可以导出", "Only a local PDF can be exported", "Chỉ PDF cục bộ mới xuất được").into()));
             return;
         };
-        let (markdown, output) = {
-            let Some(prepared) = &self.prepared else { return; };
-            let title = path.file_stem().and_then(|name| name.to_str()).unwrap_or("document");
-            (export::page_markdown(title, self.page, self.page_count, &prepared.frame.blocks), export::output_path(&path, self.page, self.page_count))
-        };
-        match std::fs::write(&output, markdown) {
-            Ok(()) => {
-                let message = format!("{} {}", tr3("已导出", "Exported", "Đã xuất"), output.display());
-                self.status = message.clone();
-                cx.emit(PdfReaderEvent::Toast(message));
+        let Some(prepared) = &self.prepared else { return; };
+        let title = path.file_stem().and_then(|name| name.to_str()).unwrap_or("document");
+        let markdown = export::page_markdown(title, self.page, self.page_count, &prepared.frame.blocks);
+        let suggested = export::output_path(&path, self.page, self.page_count);
+        let filename = suggested.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| "document.bilingual.md".into());
+        let directory = dirs::document_dir().or_else(|| std::env::var_os("HOME").map(PathBuf::from)).unwrap_or_default();
+        let picked = crate::devtools::take_pick().and_then(|paths| paths.into_iter().next());
+        let prompt = picked.is_none().then(|| cx.prompt_for_new_path(&directory, Some(&filename)));
+        cx.spawn(async move |this, cx| {
+            let Some(output) = (match prompt {
+                Some(prompt) => prompt.await.ok().and_then(Result::ok).flatten(),
+                None => picked,
+            }) else { return; };
+            let write = cx.background_executor().spawn(async move { export::write_page_as(&output, &markdown) });
+            match write.await {
+                Ok(output) => {
+                    let message = format!("{} {}", tr3("已导出", "Exported", "Đã xuất"), output.display());
+                    let _ = this.update(cx, |reader, cx| { reader.status = message.clone(); cx.emit(PdfReaderEvent::Toast(message)); cx.notify(); });
+                }
+                Err(error) => {
+                    let _ = this.update(cx, |reader, cx| { reader.error = Some(format!("{}: {error:#}", tr3("导出失败", "Export failed", "Xuất thất bại"))); cx.notify(); });
+                }
             }
-            Err(error) => {
-                self.error = Some(format!("{}: {error}", tr3("导出失败", "Export failed", "Xuất thất bại")));
-            }
-        }
-        cx.notify();
+        }).detach();
     }
     pub fn set_browser_linked(&mut self, linked: bool, cx: &mut Context<Self>) { self.browser_linked = linked; if !linked { self.pending_external = None; } cx.notify(); }
     pub fn follow_external_location(&mut self, page: u16, progress: f32, cx: &mut Context<Self>) {
@@ -745,7 +753,7 @@ mod reader_block_tests {
         assert_eq!(page.page_count, 3);
         assert_eq!(page.source_id, "document");
         assert_eq!(page.generation, 4);
-        assert_eq!(page.blocks[0].id, "p3-r1");
+        assert_eq!(page.blocks[0].id, "p3-r0");
         assert_eq!(page.blocks[0].source, "Revenue");
         assert_eq!(page.blocks[0].translation.as_deref(), Some("Doanh thu"));
         assert_eq!(page.blocks[1].translation, None);

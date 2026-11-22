@@ -4,14 +4,14 @@
  *
  * Reports, per fixture: PDF page count, characters recognised, CER and WER
  * against a hand-checked expected transcript. The metric maths is imported from
- * `src/core/ocr-metrics.ts` (Node >= 22.18 loads the TypeScript directly, so the
+ * `extension/viewer/src/core/ocr-metrics.ts` (Node >= 22.18 loads the TypeScript directly, so the
  * report and the tests cannot drift apart).
  *
  * Where the recognised text comes from, in order:
  *   engine     `{name}.pages/*.png` next to the PDF, OCR'd here with tesseract.js
- *              and the vendored `public/ocr` traineddata: the same engine, the
+ *              and the vendored `extension/viewer/public/ocr` traineddata: the same engine, the
  *              same language data and the same `--lang` list as
- *              `src/ocr/engine.ts`, called without the app.
+ *              `extension/viewer/src/ocr/engine.ts`, called without the app.
  *   manual-run `{name}.actual.txt`, the text exported from a real run of the app.
  *   none       neither exists: the row says so, prints dashes, and no rate is
  *              invented.
@@ -27,10 +27,10 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const metricsFile = path.join(root, 'src', 'core', 'ocr-metrics.ts');
-const assetDir = path.join(root, 'public', 'ocr');
+const metricsFile = path.join(root, 'extension', 'viewer', 'src', 'core', 'ocr-metrics.ts');
+const assetDir = path.join(root, 'extension', 'viewer', 'public', 'ocr');
 const standardFonts = path.join(root, 'node_modules', 'pdfjs-dist', 'standard_fonts');
-const defaultFixtures = path.join(root, 'tests', 'fixtures', 'ocr-bench');
+const defaultFixtures = path.join(root, 'extension', 'tests', 'fixtures', 'ocr-bench');
 const pageImagePattern = /\.(png|jpe?g|webp|tiff?)$/i;
 
 function relative(target) {
@@ -57,7 +57,7 @@ be rendered to images first (the app's scan capture or any external rasteriser).
 Page counts are still read from the PDF when nothing else is available.
 
 Options:
-  --fixtures <dir>   fixture directory (default: tests/fixtures/ocr-bench)
+  --fixtures <dir>   fixture directory (default: extension/tests/fixtures/ocr-bench)
   --lang <list>      tesseract language list (default: eng+vie)
   --json             print machine-readable JSON instead of the table
   --metrics <file>   score with another build of the metrics module
@@ -323,7 +323,7 @@ async function main() {
     for (const row of noted) console.log(`${row.name}: ${row.note}`);
     if (noted.length > 0) console.log('');
     console.log(`Measured ${measured.length}/${rows.length}: ${fromEngine} by the engine, ${manual} from a manual run.`);
-    console.log('A dash is not a measurement. "engine" rows use tesseract.js on {name}.pages/*.png with public/ocr traineddata;');
+    console.log('A dash is not a measurement. "engine" rows use tesseract.js on {name}.pages/*.png with extension/viewer/public/ocr traineddata;');
     console.log('"manual-run" rows use {name}.actual.txt exported from the app. See docs/ocr-benchmark.md.');
   }
 

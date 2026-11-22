@@ -209,7 +209,7 @@ impl Payload {
     /// The file size is compared to the published `declared` size first: a
     /// transfer whose file and event disagree is rejected without reading it.
     fn read(path: &Path, sha256: &str, declared: u64) -> Result<Self, BridgeError> {
-        if sha256.len() != 64 || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) { return Err(BridgeError::Invalid("Invalid browser PDF checksum")); }
+        if sha256.len() != 64 || !sha256.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) { return Err(BridgeError::Invalid("Invalid browser PDF checksum")); }
         let size = std::fs::metadata(path).map_err(|error| BridgeError::Io { kind: "PDF", detail: error.to_string() })?.len();
         if size != declared { return Err(BridgeError::Size { expected: declared, actual: size }); }
         let mut body = Vec::new();
@@ -222,6 +222,8 @@ impl Payload {
     /// Hands the verified bytes to `handler`; nothing else can reach them.
     fn dispatch<T>(self, handler: impl FnOnce(&[u8]) -> T) -> T { handler(&self.body) }
 }
+
+fn browser_import_key(sha256: &str) -> String { sha256.to_owned() }
 
 fn write_command_at(root: &Path, name: &str, command: &DesktopCommand) -> Result<()> {
     anyhow::ensure!(name.starts_with("ready-") && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'), "Invalid browser transfer directory");
@@ -282,7 +284,7 @@ fn scan_inbox_at(root: &Path) -> Result<Vec<Update>> {
             anyhow::ensure!(pdf.parent() == Some(path.as_path()) && pdf.is_file(), "Browser PDF escapes its published transfer");
             let hash = ready.sha256.as_deref().ok_or(BridgeError::Invalid("Browser PDF has no checksum"))?;
             let declared = ready.total_bytes.filter(|size| *size > 0 && *size <= crate::store::EXPORT_FILE_LIMIT).ok_or(BridgeError::Invalid("Invalid browser PDF size or checksum"))?;
-            let key = mirror_pdf_desktop::model::digest(format!("{}|{}|{}|{}|{hash}", ready.binding.session_id, ready.binding.source_id, ready.binding.request_nonce, ready.binding.generation).as_bytes());
+            let key = browser_import_key(hash);
             // The digest is checked here, before the library reads or parses the
             // PDF, so a corrupted transfer never reaches a PDF parser. The library
             // re-reads this path and re-verifies its own copy when it imports.
@@ -612,6 +614,11 @@ mod tests {
         assert!(!seen.accepted("ready-a", 2));
         assert!(!seen.accepted("ready-c", 1));
         assert!(seen.accepted("ready-b", 1), "an evicted id counts as new again");
+    }
+    #[test] fn browser_import_key_deduplicates_identical_pdf_bytes_across_sessions() {
+        let digest = mirror_pdf_desktop::model::digest(b"same verified PDF");
+        assert_eq!(super::browser_import_key(&digest), digest);
+        assert_eq!(super::browser_import_key(&digest), digest);
     }
     #[test] fn payload_digest_is_verified_before_the_handler_runs() {
         let root = scratch("payload-ok");

@@ -59,8 +59,7 @@ Everything stays on the machine by default: the library, thumbnails, captured fr
 The workspace layout, the full verification gate, and the current fidelity status live in [docs/development.md](docs/development.md). The browser reader and extension are Vietnamese-first; the desktop app is the native Rust/GPUI workspace in `native-shell`.
 
 ```powershell
-pnpm test
+pnpm test:extension
 pnpm typecheck
 pnpm build
-pnpm test:e2e
 ```

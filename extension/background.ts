@@ -24,10 +24,10 @@
  *                    user's own cookies, into the extension reader.
  */
 import { MirrorController, pdfPath, sourceUrl, type MirrorSession } from './controller';
-import { createTranslationTransport } from '../src/core/translation';
-import type { TranslationSettings } from '../src/core/types';
+import { createTranslationTransport } from './viewer/src/core/translation';
+import type { TranslationSettings } from './viewer/src/core/types';
 import { NativeCompanion, NATIVE_HOST, normalizeNativePage, sameSession, COMPANION_UNAVAILABLE, type NativeAnnotation, type NativeAnnotationKind, type NativeTransferProgress } from './native-bridge';
-import { readCaptureParams } from '../src/ui/capture';
+import { readCaptureParams } from './viewer/src/ui/capture';
 
 const viewerUrl = chrome.runtime.getURL('index.html');
 const popupUrl = chrome.runtime.getURL('popup.html');

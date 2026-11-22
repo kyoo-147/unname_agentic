@@ -25,7 +25,7 @@ Kiểm chứng lại 2026-11-20 09:00 (Asia/Saigon): `pnpm test` **324 pass / 29
 | A05 | Giữ nguyên ảnh, biểu đồ, vector ngoài vùng chữ | [x] | `tests/e2e/reader.spec.ts` (pixel check) |
 | A06 | Hai pane gốc/dịch, kéo chia, reset 50/50 | [x] | `src/main.ts`; `src/style.css` |
 | A07 | Đồng bộ trang/zoom với tab nguồn (linked view) | [x] | `src/ui/bridge.ts`; `tests/browser-bridge.test.ts` |
-| A08 | Dịch ưu tiên vùng nhìn thấy, hàng đợi có priority | [x] | `src/core/scheduler.ts`; `tests/scheduler.test.ts` |
+| A08 | Dịch ưu tiên vùng nhìn thấy, hàng đợi có priority | [x] | `extension/viewer/src/core/scheduler.ts`; `extension/tests/scheduler.test.ts` |
 | A09 | Dịch toàn bộ tài liệu, có thể dừng | [x] | `src/main.ts` nút Translate all |
 | A10 | Tạm dừng / tiếp tục / thử lại lỗi | [x] | `src/main.ts`; e2e provider error |
 | A11 | Chọn vùng, dialog đọc song song theo vùng | [x] | `src/main.ts`; `#selection-dialog` |
@@ -103,7 +103,7 @@ Kiểm chứng lại 2026-11-20 09:00 (Asia/Saigon): `pnpm test` **324 pass / 29
 | | Chức năng | Trạng thái | Bằng chứng / ghi chú |
 |---|---|---|---|
 | D01 | Kiểu dữ liệu chung, block ID ổn định | [x] | `src/core/types.ts` |
-| D02 | Scheduler có priority, dedupe, abort | [x] | `tests/scheduler.test.ts` |
+| D02 | Scheduler có priority, dedupe, abort | [x] | `extension/tests/scheduler.test.ts` |
 | D03 | Retry/backoff, phân loại lỗi provider | [x] | `src/core/retry.ts`, 7 loại lỗi, backoff + abort, test |
 | D04 | Batch request cho tài liệu dài | [~] | có `chunkBlocks` + test; UI vẫn gọi từng block |
 | D05 | Đếm ký tự/chi phí ước tính | [x] | `characterCount` trong kết quả và status bar |

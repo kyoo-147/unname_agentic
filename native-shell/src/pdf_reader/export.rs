@@ -29,6 +29,10 @@ pub fn page_markdown(title: &str, page: u16, page_count: u16, blocks: &[TextBloc
     out
 }
 
+pub fn write_page_as(path: &Path, content: &str) -> anyhow::Result<PathBuf> {
+    crate::export_native::write_export_path(path, content, false)
+}
+
 pub fn output_path(source: &Path, page: u16, page_count: u16) -> PathBuf {
     let stem = source.file_stem().and_then(|name| name.to_str()).unwrap_or("document");
     let suffix = if page_count > 1 { format!("-page-{}.bilingual.md", page.saturating_add(1)) } else { ".bilingual.md".into() };
@@ -60,6 +64,19 @@ mod tests {
         assert!(text.contains("Một"));
         assert!(text.contains("> Second"));
         assert!(text.contains("Đã dịch: 1/2"));
+    }
+
+    #[test]
+    fn page_save_as_refuses_to_replace_an_existing_file() {
+        let dir = std::env::temp_dir().join(format!("mirror-page-export-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("chosen.md");
+        std::fs::write(&path, "keep me").unwrap();
+
+        assert!(write_page_as(&path, "replacement").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep me");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

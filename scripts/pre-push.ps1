@@ -133,24 +133,24 @@ Push-Location $root
 try {
   Step 'typecheck' { pnpm typecheck } | Out-Null
 
-  $testResult = Step 'pnpm test' { pnpm test }
+  $testResult = Step 'pnpm test:extension' { pnpm test:extension }
   $testText = "$($testResult.Stdout)`n$($testResult.Stderr)"
   $testSummary = Get-TestSummary $testText
   if ($testSummary) {
     Write-Host ("[pre-push] " + $testSummary.Line)
   } else {
-    Add-Failure 'pnpm test summary'
-    $artifact = Write-FailureArtifact 'pnpm test summary' 'missing or empty Vitest summary' $testResult.Stdout $testResult.Stderr
-    Write-Host '[pre-push] BLOCKED: pnpm test produced no readable summary' -ForegroundColor Red
+    Add-Failure 'pnpm test:extension summary'
+    $artifact = Write-FailureArtifact 'pnpm test:extension summary' 'missing or empty Vitest summary' $testResult.Stdout $testResult.Stderr
+    Write-Host '[pre-push] BLOCKED: pnpm test:extension produced no readable summary' -ForegroundColor Red
     if ($artifact) { Write-Host "[pre-push] diagnostic artifact: $artifact" }
   }
   if ($testSummary -and $testSummary.Passed -lt 1) {
-    Add-Failure 'pnpm test summary'
-    Write-Host '[pre-push] BLOCKED: pnpm test summary recorded no passing tests' -ForegroundColor Red
+    Add-Failure 'pnpm test:extension summary'
+    Write-Host '[pre-push] BLOCKED: pnpm test:extension summary recorded no passing tests' -ForegroundColor Red
   }
   if ($testSummary -and $testSummary.Failed -gt 0) {
-    Add-Failure 'pnpm test summary'
-    Write-Host '[pre-push] BLOCKED: pnpm test summary recorded failed tests' -ForegroundColor Red
+    Add-Failure 'pnpm test:extension summary'
+    Write-Host '[pre-push] BLOCKED: pnpm test:extension summary recorded failed tests' -ForegroundColor Red
   }
 
   Step 'committed imports' { node scripts/check-committed-imports.mjs } | Out-Null

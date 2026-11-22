@@ -3,19 +3,18 @@
 Run the release gate and print one per-check table.
 
 .DESCRIPTION
-Runs the same phases CI runs (unit, typecheck, build, e2e), then checks the
-build output itself:
+Runs extension tests, typecheck and build, then checks the extension output and, for a full
+release verification, requires a commit-bound native package with checksums and archive.
 
-  * dist/extension carries only bundles this build produced, has a Manifest V3
-    manifest.json, and keeps no stale index-<hash>.js from an earlier build.
-  * dist/web/index.html references only files that exist in dist/web.
-  * -RequireNativePackage verifies a commit-bound native package, its checksums and archive.
+  * dist/extension has a Manifest V3 manifest, the viewer bundles and the PDF worker.
+  * dist/extension/index.html references only files that exist in dist/extension.
+  * Full verification requires a commit-bound native package; -ArtifactsOnly is extension-only.
 
 The first failing check stops the gate, prints the table, and exits 1.
 Runs unchanged in Windows PowerShell 5.1 and PowerShell 7 (CI uses pwsh).
 
 .PARAMETER ArtifactsOnly
-Check the existing dist output without running unit, typecheck, build or e2e.
+Check existing dist/extension output without running tests, typecheck, build or native-package verification.
 
 .PARAMETER RequireNativePackage
 Require and verify the native GPUI package in dist, including MANIFEST.json, checksums and zip.
@@ -64,47 +63,42 @@ try {
 
     function Assert-ExtensionOutput {
         $output = [System.IO.Path]::GetFullPath((Join-Path $root 'dist/extension'))
-        $web = [System.IO.Path]::GetFullPath((Join-Path $root 'dist/web'))
         if (-not (Test-Path -LiteralPath $output)) { throw 'dist/extension is missing; run pnpm build first.' }
         $manifestPath = Join-Path $output 'manifest.json'
         if (-not (Test-Path -LiteralPath $manifestPath)) { throw 'dist/extension/manifest.json is missing.' }
         $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
         if ($manifest.manifest_version -ne 3) { throw "dist/extension/manifest.json is not Chrome MV3 (manifest_version=$($manifest.manifest_version))." }
-        $required = @('manifest.json', 'popup.html', 'background.js', 'content.js', 'popup.js')
+        $required = @('manifest.json', 'popup.html', 'background.js', 'content.js', 'popup.js', 'index.html', 'index.js', 'index.css', 'assets/pdf.worker.min.mjs')
         foreach ($name in $required) {
-            if (-not (Test-Path -LiteralPath (Join-Path $output $name))) { throw "dist/extension/$name is missing." }
+            if (-not (Test-Path -LiteralPath (Join-Path $output $name) -PathType Leaf)) { throw "dist/extension/$name is missing." }
         }
-        $own = $required + @('background.js.map', 'content.js.map', 'popup.js.map')
-        $stale = [System.Collections.Generic.List[string]]::new()
-        $bundles = @(Get-ChildItem -LiteralPath $output -Recurse -File | Where-Object { $_.Extension -in '.js', '.css', '.map' })
-        foreach ($bundle in $bundles) {
-            $relative = Get-RelativePath $output $bundle.FullName
-            if ($own -contains $relative) { continue }
-            # Anything else is a copy of dist/web; a leftover from an earlier build is not.
-            if (-not (Test-Path -LiteralPath (Join-Path $web $relative))) { $stale.Add($relative) }
-        }
-        if ($stale.Count -gt 0) { throw "dist/extension carries assets this build did not produce: $($stale -join ', ')" }
+        $manifestWorker = [string]$manifest.background.service_worker
+        if ($manifestWorker -ne 'background.js') { throw "Manifest background service worker is '$manifestWorker', expected background.js." }
     }
 
-    function Assert-WebReferences {
-        $web = [System.IO.Path]::GetFullPath((Join-Path $root 'dist/web'))
-        $indexPath = Join-Path $web 'index.html'
-        if (-not (Test-Path -LiteralPath $indexPath)) { throw 'dist/web/index.html is missing; run pnpm build first.' }
-        $html = Get-Content -LiteralPath $indexPath -Raw
-        $references = [regex]::Matches($html, '(?:src|href)\s*=\s*"([^"]+)"') | ForEach-Object { $_.Groups[1].Value }
+    function Assert-ExtensionReferences {
+        $output = [System.IO.Path]::GetFullPath((Join-Path $root 'dist/extension'))
+        $files = @(
+            (Join-Path $output 'index.html'),
+            (Join-Path $output 'popup.html')
+        )
         $missing = [System.Collections.Generic.List[string]]::new()
-        $checked = 0
-        foreach ($reference in $references) {
-            # Absolute URLs, protocol-relative URLs and fragments are not build output.
-            if ($reference -match '^(?:[a-z][a-z0-9+.-]*:|//|#)') { continue }
-            $relative = [System.Uri]::UnescapeDataString(($reference -split '[?#]')[0])
-            $resolved = [System.IO.Path]::GetFullPath((Join-Path $web $relative))
-            $null = Get-RelativePath $web $resolved
-            $checked++
-            if (-not (Test-Path -LiteralPath $resolved)) { $missing.Add($reference) }
+        foreach ($htmlPath in $files) {
+            if (-not (Test-Path -LiteralPath $htmlPath -PathType Leaf)) { throw "$(Get-RelativePath $root $htmlPath) is missing." }
+            $html = Get-Content -LiteralPath $htmlPath -Raw
+            $references = [regex]::Matches($html, '(?:src|href)\s*=\s*["'']([^"'']+)["'']') | ForEach-Object { $_.Groups[1].Value }
+            $checked = 0
+            foreach ($reference in $references) {
+                if ($reference -match '^(?:[a-z][a-z0-9+.-]*:|//|#)') { continue }
+                $relative = [System.Uri]::UnescapeDataString(($reference -split '[?#]')[0])
+                $resolved = [System.IO.Path]::GetFullPath((Join-Path $output $relative))
+                $null = Get-RelativePath $output $resolved
+                $checked++
+                if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) { $missing.Add("$(Get-RelativePath $root $htmlPath) -> $reference") }
+            }
+            if ($checked -eq 0) { throw "$(Get-RelativePath $root $htmlPath) references no local files; the extension output looks wrong." }
         }
-        if ($checked -eq 0) { throw 'dist/web/index.html references no local files; the build output looks wrong.' }
-        if ($missing.Count -gt 0) { throw "dist/web/index.html references files that do not exist: $($missing -join ', ')" }
+        if ($missing.Count -gt 0) { throw "dist/extension contains missing HTML references: $($missing -join ', ')" }
     }
 
     function Assert-NativePackage {
@@ -166,21 +160,19 @@ try {
     if ($DryRun) {
         Write-Output 'DRY_RUN=release verification only; no commands or files will be changed.'
         Write-Output "ARTIFACTS_ONLY=$ArtifactsOnly"
-        Write-Output "NATIVE_PACKAGE_REQUIRED=$($RequireNativePackage -or [bool]$PackagePath)"
+        Write-Output "NATIVE_PACKAGE_REQUIRED=$((-not $ArtifactsOnly) -or $RequireNativePackage -or [bool]$PackagePath)"
         exit 0
     }
 
     if (-not $ArtifactsOnly) {
-        Step 'unit' { pnpm test; if ($LASTEXITCODE -ne 0) { throw 'unit tests failed' } }
+        Step 'extension tests' { pnpm test:extension; if ($LASTEXITCODE -ne 0) { throw 'extension tests failed' } }
         Step 'typecheck' { pnpm typecheck; if ($LASTEXITCODE -ne 0) { throw 'typecheck failed' } }
         Step 'build' { pnpm build; if ($LASTEXITCODE -ne 0) { throw 'build failed' } }
-        # Retries stay pinned to 0 so a flaky run cannot buy a green release gate.
-        Step 'e2e' { pnpm exec playwright test --retries=0; if ($LASTEXITCODE -ne 0) { throw 'e2e failed' } }
     }
     Step 'committed imports' { node scripts/check-committed-imports.mjs; if ($LASTEXITCODE -ne 0) { throw 'a committed file imports a module that is not committed'; } }
     Step 'extension artifacts' { Assert-ExtensionOutput }
-    Step 'web references' { Assert-WebReferences }
-    if ($RequireNativePackage -or $PackagePath) { Step 'native package' { Assert-NativePackage } }
+    Step 'extension references' { Assert-ExtensionReferences }
+    if ((-not $ArtifactsOnly) -or $RequireNativePackage -or $PackagePath) { Step 'native package' { Assert-NativePackage } }
 
     $results | Format-Table -AutoSize | Out-String | Write-Output
     Write-Output "Release gate passed: $($results.Count) checks in $([math]::Round(($results | Measure-Object -Property Seconds -Sum).Sum, 1))s."

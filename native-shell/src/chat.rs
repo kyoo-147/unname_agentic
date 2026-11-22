@@ -388,19 +388,31 @@ impl Chat {
         self.messages.push(ChatMessage { user: true, text: question, citations: Vec::new() });
         self.persist();
         self.input.update(cx, |field, cx| field.set_text("", cx));
-        self.busy = true;
         self.error = None;
+        if self.context.is_some() {
+            self.messages.push(ChatMessage {
+                user: false,
+                text: tr3(
+                    "Trò chuyện có căn cứ tài liệu hiện chưa khả dụng: chưa có truy xuất bằng chứng cục bộ và xác minh trích dẫn.",
+                    "Document-grounded chat is unavailable: local evidence retrieval and citation verification are not connected yet.",
+                    "Trò chuyện có căn cứ tài liệu hiện chưa khả dụng: chưa có truy xuất bằng chứng cục bộ và xác minh trích dẫn.",
+                ).to_string(),
+                citations: Vec::new(),
+            });
+            self.persist();
+            cx.notify();
+            return;
+        }
+        self.busy = true;
         cx.notify();
 
-        let history = request_history(&self.messages, self.context.is_some());
+        let history = request_history(&self.messages, false);
         self.messages.push(ChatMessage { user: false, text: String::new(), citations: Vec::new() });
-        let context = self.context.clone();
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             let mut settings = model::load_settings();
             settings.provider.api_key = provider::load_key(settings.provider.kind).unwrap_or_default();
-            let context = context.as_ref().map(|(title, text)| (title.as_str(), text.as_str()));
-            let result = provider::chat_stream(&settings.provider, &history, context, |delta| { let _ = sender.send(StreamEvent::Delta(delta.to_string())); });
+            let result = provider::chat_stream(&settings.provider, &history, None, |delta| { let _ = sender.send(StreamEvent::Delta(delta.to_string())); });
             let _ = match result {
                 Ok(full) => sender.send(StreamEvent::Done(full)),
                 Err(error) => sender.send(StreamEvent::Failed(format!("{error:#}"))),

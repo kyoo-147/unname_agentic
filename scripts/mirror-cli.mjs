@@ -2,13 +2,13 @@
 /**
  * mirror-cli — execute a local durable batch over a folder of PDFs (backlog K04).
  *
- * `src/core/cli-args.ts` decides what a line of flags means. This script keeps the fast
+ * `extension/viewer/src/core/cli-args.ts` decides what a line of flags means. This script keeps the fast
  * plan/check path in plain Node and delegates executable work to the TypeScript bridge through
  * the local `tsx` package. It re-implements the parse table so help and validation work before
  * the bridge starts.
  *
  * The fast help/check parser stays duplicated for a dependency-free startup path, and it is guarded:
- * `tests/cli-args.test.ts` reads both files and compares `CLI_COMMANDS`, `CLI_FLAGS`,
+ * `extension/tests/cli-args.test.ts` reads both files and compares `CLI_COMMANDS`, `CLI_FLAGS`,
  * `CLI_VALUE_FLAGS`, `CLI_FORMATS`, `PROVIDER_KINDS`, `REQUIRED_FLAGS` and `EXIT_CODES`. Add
  * a flag to one file and the test names the other. The tables are on one line each so that
  * comparison is a plain read of the source.
@@ -34,7 +34,7 @@
  * Exit codes: 0 ok (help, version, a dry run, a check that passed), 2 usage error, 3 missing
  * required option, 4 unsupported value, 5 conflicting options, 6 the `--in` folder cannot be
  * used, 7 nothing ran. The numbers come from EXIT_CODES below, which mirrors the table in
- * `src/core/cli-args.ts`.
+ * `extension/viewer/src/core/cli-args.ts`.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -47,7 +47,7 @@ const MAX_BATCH_FILES = 5000;
 const MAX_PDF_BYTES = 256 * 1024 * 1024;
 const MAX_BATCH_BYTES = 512 * 1024 * 1024;
 
-// --- The parse table. Mirrors src/core/cli-args.ts; tests/cli-args.test.ts compares them. ---
+// --- The parse table. Mirrors extension/viewer/src/core/cli-args.ts; extension/tests/cli-args.test.ts compares them. ---
 const CLI_COMMANDS = ['extract', 'translate', 'export', 'check'];
 const CLI_FLAGS = ['--in', '--out', '--lang', '--provider', '--offline', '--format', '--dry-run', '--help', '--version'];
 const CLI_VALUE_FLAGS = ['--in', '--out', '--lang', '--provider', '--format'];
@@ -118,7 +118,7 @@ const VALUE_FLAG_SET = new Set(CLI_VALUE_FLAGS);
 const FORMAT_SET = new Set(CLI_FORMATS);
 const PROVIDER_SET = new Set(PROVIDER_KINDS);
 
-/** Mirror of `isCloudProvider` in src/core/privacy.ts: only `local` stays on this machine. */
+/** Mirror of `isCloudProvider` in extension/viewer/src/core/privacy.ts: only `local` stays on this machine. */
 function isCloudProvider(provider) {
   return provider !== 'local';
 }
@@ -255,7 +255,7 @@ function applyValue(options, flag, value, addError) {
     return;
   }
   if (flag === '--lang') {
-    // Passed through: the alias table belongs to src/core/language.ts.
+    // Passed through: the alias table belongs to extension/viewer/src/core/language.ts.
     options.lang = value;
     return;
   }
@@ -280,7 +280,7 @@ function exitCodeFor(errors) {
   return errors.length === 0 ? EXIT_CODES.ok : EXIT_CODES[errors[0].code];
 }
 
-/** The same line `describe` in src/core/cli-args.ts prints. */
+/** The same line `describe` in extension/viewer/src/core/cli-args.ts prints. */
 function describe(command, options) {
   const parts = [command === null ? '(no command)' : command];
   if (options.input !== null) parts.push('--in', options.input);

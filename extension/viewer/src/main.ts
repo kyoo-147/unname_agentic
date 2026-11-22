@@ -1,0 +1,1488 @@
+import './style.css';
+import './ui/reader.css';
+import './ui/research-workspace.css';
+import type { PDFDocumentProxy } from 'pdfjs-dist';
+import { defaultSettings, type TextBlock, type TranslationSettings } from './core/types';
+import { TranslationService } from './core/translation';
+import { TranslationError } from './core/retry';
+import { parseGlossary, type GlossaryIssueCode, type GlossaryParseResult } from './core/glossary';
+import { detectLanguage, normalizeLanguageCode, SUPPORTED_TARGETS } from './core/language';
+import { ViewportScheduler } from './core/scheduler';
+import { getOutline, getPageText, openPdf, renderPage, renderThumbnail, type OutlineEntry, type RenderedPage } from './pdf/document';
+import { fitText, nextRotation, rotatePageSize, type PageRotation } from './pdf/layout';
+import { browserTransport, fetchPdf, relayView, listenForLinkedView, ViewRelayGuard } from './ui/bridge';
+import {
+  apply, clampPageNumber, documentReadingKey, getLocale, initLocale, languageNativeName, LOCALES, localeLabel,
+  setLocale, subscribe, t, type Locale, type TranslationKey,
+} from './i18n';
+import {
+  fitScale, isAbortError, keyboardIntent, loadReadingState, pageForScroll, readingFraction, READING_STATE_KEY,
+  saveReadingState, searchAllPages, type FitMode, type SearchMatch,
+} from './ui/reader';
+import { isCaptureRequest, mountCaptureReader, type CaptureReaderHandle } from './capture/reader';
+import { createLibraryStore } from './core/library-store';
+import { isRtlLanguage, resolveBlockDirection } from './core/text-direction';
+import { mountResearchWorkspace } from './ui/research-workspace';
+import { toBilingualHtml, toBilingualText, type ExportedPage } from './export/bilingual';
+import { documentTitle, printHtml, PrintTimeoutError, PrintUnavailableError } from './export/print';
+import { buildPdf, canvasToPng, translatedOcrPageNumbers, type PdfPageSource } from './export/pdf';
+import { saveBlob } from './export/download';
+import { estimateCost, formatUsd } from './core/pricing';
+import {
+  BUILT_IN_INTELLIGENCE_SCHEMA_JSON,
+  extractDocumentIntelligence,
+  type DocumentIntelligenceResult,
+  type IntelligenceEvidenceState,
+  type IntelligencePageSource,
+  type IntelligenceSourceKind,
+} from './core/document-intelligence';
+import { ReviewQueue } from './core/review';
+import { createUnifiedProgress, UnifiedProgressStore } from './core/unified-progress';
+import { CommandPaletteModel, readerCommands } from './core/commands';
+import { createStatusModel, renderStatus as renderStatusStrip } from './ui/status-bar';
+import {
+  isReadingMode, layoutFor, positionAfterModeChange, type ModeChange, type ReadingLayout, type ReadingMode,
+} from './core/reading-modes';
+
+initLocale();
+
+const icon = (name: string) => {
+  const paths: Record<string,string> = { book:'<path d="M3 4h6a3 3 0 0 1 3 3v14a4 4 0 0 0-4-3H3zM21 4h-6a3 3 0 0 0-3 3v14a4 4 0 0 1 4-3h5z"/>', plus:'<path d="M12 5v14M5 12h14"/>', settings:'<path d="M4 7h16M4 17h16"/><circle cx="8" cy="7" r="3"/><circle cx="16" cy="17" r="3"/>', arrow:'<path d="m9 5 7 7-7 7"/>', file:'<path d="M14 2H5v20h14V7zM14 2v6h5M8 13h8M8 17h6"/>', upload:'<path d="M12 16V3m-5 5 5-5 5 5M4 15v6h16v-6"/>', close:'<path d="m6 6 12 12M6 18 18 6"/>', check:'<path d="m5 12 4 4L19 6"/>' };
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]??paths.file}</svg>`;
+};
+const root = document.querySelector<HTMLDivElement>('#app')!;
+const targetOptions = (selected?: string) => SUPPORTED_TARGETS.map(target => `<option value="${target.code}"${target.code===selected?' selected':''}>${target.nativeName}</option>`).join('');
+const localeSwitcher = () => `<div class="locale-switch" role="group" data-i18n-aria-label="languageSwitcher" aria-label="Language">${LOCALES.map(locale => `<button type="button" data-locale="${locale}" aria-pressed="${locale === getLocale()}">${localeLabel(locale)}</button>`).join('')}</div>`;
+/** localStorage key for the reading-mode choice; the `mirror.` prefix matches the other settings keys. */
+const READING_MODE_KEY = 'mirror.reading-mode';
+/** Mode a fresh profile starts in: the two-column view the reader has always shown. */
+const DEFAULT_READING_MODE: ReadingMode = 'side-by-side';
+let settings: TranslationSettings = { ...defaultSettings, glossary:{} };
+
+root.innerHTML = `<aside class="sidebar"><a class="brand" href="#" data-i18n-aria-label="libraryAria" aria-label="Mirror library">${icon('book')}<span>mirror<span class="brand-dot">.</span></span></a><button class="open-button" data-open>${icon('plus')} <span data-i18n="openPdf">Open PDF</span> <kbd>Ctrl O</kbd></button><div class="nav-label" data-i18n="workspaceLabel">YOUR WORKSPACE</div><button class="nav-item active" id="library-nav">${icon('book')} <span data-i18n="myLibrary">My library</span> <span id="library-count">0</span></button><div class="sidebar-note"><span class="small-orbit"></span><p><span data-i18n="sidebarNoteLead">A different language.</span><br><span data-i18n="sidebarNoteTail">The same perspective.</span></p></div><button class="nav-item settings-button" id="settings-open">${icon('settings')} <span data-i18n="settingsNav">Translation settings</span></button><div class="privacy-note"><span data-i18n="privacyLead">Documents stay in this session.</span><br><span data-i18n="privacyTail">Cloud translation is opt-in.</span></div></aside>
+<main id="main-content" tabindex="-1"><header class="topbar"><div class="breadcrumb"><span data-i18n="workspace">Workspace</span>${icon('arrow')}<strong id="breadcrumb">My library</strong></div>${localeSwitcher()}<span class="local-badge"><i></i> <span data-i18n="localFirst">Local-first reading</span></span></header>
+<section id="library" class="library"><div class="library-heading"><div><div class="eyebrow" data-i18n="libraryEyebrow">A LITTLE CLOSER TO UNDERSTANDING</div><h1 data-i18n="libraryTitle">Your reading room.</h1><p data-i18n="libraryLead">Keep the original. Find the meaning beside it.</p></div><button class="primary" data-open>${icon('plus')} <span data-i18n="importDocument">Import document</span></button></div><div class="library-section-heading"><h2><span data-i18n="allDocuments" style="color:inherit;font-size:inherit;margin-left:0">All documents</span> <span id="document-count">0</span></h2><span data-i18n="recentlyOpened">Recently opened</span></div><div id="documents" class="documents"></div><button class="drop-zone" data-open>${icon('upload')}<strong data-i18n="dropTitle">Your next good read belongs here</strong><span data-i18n="dropHint">Drop a PDF, or browse your files</span><small data-i18n="dropMeta">PDF documents · read locally · no account needed</small></button><div class="library-footnote"><span data-i18n="stepOpen">01 — OPEN</span><span data-i18n="stepRead">02 — READ SIDE BY SIDE</span><span data-i18n="stepUnderstand">03 — UNDERSTAND MORE</span></div></section>
+<section id="reader" hidden><div class="reader-toolbar"><div class="document-heading"><div class="document-title" id="document-title"></div><span id="detected-language" class="detected-language" aria-live="polite" hidden></span></div><div class="toolbar-group reader-nav"><button id="prev-page" type="button" data-i18n-aria-label="previousPage" aria-label="${t('previousPage')}" disabled>‹</button><input id="page-input" class="page-input" type="number" min="1" value="1" inputmode="numeric" data-i18n-aria-label="pageInputAria" aria-label="${t('pageInputAria')}"><span class="page-total">/ <b id="page-total">0</b></span><button id="next-page" type="button" data-i18n-aria-label="nextPage" aria-label="${t('nextPage')}" disabled>›</button></div><div class="toolbar-group view-actions"><button id="fit-width" type="button" data-i18n="fitWidth">Fit width</button><button id="fit-page" type="button" data-i18n="fitPage">Fit page</button><button id="rotate" type="button" data-i18n="rotatePage">Rotate page</button><button id="outline-toggle" type="button" data-i18n="outlineToggle" aria-controls="reader-panel" aria-expanded="false">Outline</button><button id="search-toggle" type="button" data-i18n="searchToggle" aria-controls="reader-panel" aria-expanded="false">Search</button><button id="thumbnails-toggle" type="button" data-i18n="thumbnailsToggle" aria-controls="thumbnails" aria-expanded="false">Thumbnails</button></div><div class="toolbar-group reading-modes" id="reading-mode-switch" role="group" data-i18n-aria-label="readingMode" aria-label="Reading mode"><button type="button" id="reading-mode-side-by-side" data-reading-mode="side-by-side" data-i18n="readingModeSideBySide" aria-pressed="false">Side by side</button><button type="button" id="reading-mode-overlay" data-reading-mode="overlay" data-i18n="readingModeOverlay" aria-pressed="false">Overlay</button><button type="button" id="reading-mode-interleaved" data-reading-mode="interleaved" data-i18n="readingModeInterleaved" aria-pressed="false">Interleaved</button><button type="button" id="reading-mode-reflow" data-reading-mode="reflow" data-i18n="readingModeReflow" aria-pressed="false">Reflow</button></div><div class="toolbar-actions"><label class="language-label"><span data-i18n="targetLanguageLabel">To</span> <select id="target-language" data-i18n-aria-label="targetLanguageAria" aria-label="${t('targetLanguageAria')}">${targetOptions(settings.targetLanguage)}</select></label><button id="zoom-out" data-i18n-aria-label="zoomOut" aria-label="${t('zoomOut')}">−</button><output id="zoom-label">100%</output><button id="zoom-in" data-i18n-aria-label="zoomIn" aria-label="${t('zoomIn')}">+</button><button id="pause">Pause</button><button id="full">Translate all</button><button id="retry" data-i18n="retry">Retry</button><button id="export-bilingual" data-i18n="exportBilingual">Export bilingual text</button><button id="export-print" data-i18n="exportPrint">Print / Save as PDF</button><button id="export-pdf" data-i18n="exportPdf">Download real PDF</button><a id="original-link" target="_blank" rel="noopener" hidden><span data-i18n="openOriginal">Open original ↗</span></a></div></div><div class="pane-headings"><span><span data-i18n="originalHeading">ORIGINAL</span> <small data-i18n="originalNote">Unchanged source</small></span><span><span data-i18n="translatedHeading">TRANSLATED MIRROR</span> <small id="provider-label" data-i18n="providerInitial">Local · Vietnamese</small></span></div><div class="reader-body"><aside id="reader-panel" class="reader-panel reader-panel--overlay" data-i18n-aria-label="readerPanelAria" aria-label="${t('readerPanelAria')}" hidden></aside><div id="reading-scroll" class="reading-scroll"><div id="pages"></div></div><div id="thumbnails" class="reader-thumbstrip reader-thumbstrip--overlay" data-i18n-aria-label="thumbnailsToggle" aria-label="${t('thumbnailsToggle')}" hidden></div></div><div class="reader-bottom"><span id="page-status" data-i18n="pageInitial">Page 1</span><span><span data-i18n="linkedPages">Linked pages</span> <span class="linked-symbol">↔</span> <span data-i18n="selectRegionHint">Select any text region to compare</span></span><button id="reset-split" data-i18n="resetSplit">Reset split</button></div></section>
+<div class="status-bar" id="status" role="status" aria-live="polite" aria-atomic="true" data-i18n="ready">Ready when you are.</div></main>
+<input type="file" id="file-input" accept="application/pdf,.pdf" hidden multiple>
+<dialog id="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1"><form id="settings-form"><div class="dialog-heading"><div><span class="eyebrow" data-i18n="settingsEyebrow">MAKE IT YOURS</span><h2 id="settings-title" data-i18n="translationSettings">Translation settings</h2></div><button type="button" id="settings-close" data-i18n-aria-label="closeSettings" aria-label="Close settings">${icon('close')}</button></div>${localeSwitcher()}<p class="dialog-description" data-i18n="settingsDescription">Only extracted text is sent to your chosen provider. Your PDF stays here. Credentials are kept in memory, not saved.</p><label><span data-i18n="providerLabel">Provider</span><select name="provider"><option value="local" data-i18n="providerLocal">Local / Ollama (OpenAI-compatible)</option><option value="google" data-i18n="providerGoogle">Google Cloud Translation</option><option value="deepl" data-i18n="providerDeepl">DeepL</option><option value="openai" data-i18n="providerOpenai">OpenAI-compatible API</option></select></label><label><span data-i18n="apiEndpoint">API endpoint</span><input name="endpoint" type="url" placeholder="http://127.0.0.1:11434/v1" required></label><label><span data-i18n="model">Model</span><input name="model" autocomplete="off"></label><div class="form-row"><label><span data-i18n="sourceLanguage">Source language</span><select name="sourceLanguage"><option value="auto" data-i18n="sourceAuto">Detect automatically</option>${targetOptions()}</select></label><label><span data-i18n="targetLanguage">Target language</span><select name="targetLanguage">${targetOptions()}</select></label></div><label><span data-i18n="apiKey">API key</span><input name="apiKey" type="password" autocomplete="off" data-i18n-placeholder="apiKeyPlaceholder" placeholder="Not needed for a local server"></label><label class="glossary-field"><span data-i18n="glossaryLabel">Glossary</span><textarea name="glossary" rows="5" spellcheck="false" data-i18n-placeholder="glossaryPlaceholder" placeholder="transformer = bộ biến đổi"></textarea></label><p class="settings-help" data-i18n="glossaryHelp">One term per line as "source = translation". Up to 200 terms.</p><p class="settings-help" data-i18n="glossaryProviderHint">Google and DeepL do not accept a custom glossary.</p><p id="glossary-status" class="glossary-status" role="status" aria-live="polite"></p><label class="consent"><input name="allowCloud" type="checkbox"><span data-i18n="cloudConsent">I allow extracted document text to be sent to the selected cloud provider. Provider charges may apply.</span></label><p class="settings-help" data-i18n="settingsHelp">Local endpoints must use localhost. If the provider is unavailable, the original stays readable; no substitute translation is invented.</p><button class="primary" type="submit" data-i18n="applySettings">Apply & translate visible pages</button></form></dialog>
+<dialog id="selection-dialog" role="dialog" aria-modal="true" aria-labelledby="selection-title" tabindex="-1"><div class="dialog-heading"><h2 id="selection-title" data-i18n="pairedReading">Paired reading view</h2><button id="selection-close" data-i18n-aria-label="closePaired" aria-label="Close paired view">${icon('close')}</button></div><div class="selection-columns"><section><h3 data-i18n="original">Original</h3><p id="selected-source"></p></section><section><h3 data-i18n="translation">Translation</h3><p id="selected-translation"></p></section></div><button id="selection-translate" class="primary" data-i18n="translateRegion">Translate this region</button><p class="settings-help" data-i18n="pairedHelp">Region-level correspondence. Word alignment is not inferred.</p></dialog>`;
+root.insertAdjacentHTML('beforeend', `<dialog id="command-palette" class="command-palette" role="dialog" aria-modal="true" aria-labelledby="command-palette-title" tabindex="-1"><div class="dialog-heading"><h2 id="command-palette-title" data-i18n="shortcuts">Keyboard shortcuts</h2><button type="button" id="command-palette-close" data-i18n-aria-label="closePanel" aria-label="Close panel">${icon('close')}</button></div><input id="command-palette-input" type="search" autocomplete="off" data-i18n-placeholder="searchPlaceholder" placeholder="Search this document" aria-label="Search this document"><div id="command-palette-list" role="listbox" aria-label="Keyboard shortcuts"></div><p id="command-palette-empty" class="reader-panel__empty" hidden></p></dialog>`);
+apply(document);
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+const researchSection = document.createElement('section');
+researchSection.id = 'research';
+researchSection.hidden = true;
+researchSection.innerHTML = '<div id="research-workspace-mount"></div>';
+$('reader').before(researchSection);
+const researchNav = document.createElement('button');
+researchNav.type = 'button';
+researchNav.id = 'research-nav';
+researchNav.className = 'nav-item';
+researchNav.setAttribute('aria-controls', 'research');
+researchNav.innerHTML = `${icon('file')} <span>Research desk</span>`;
+$('library-nav').after(researchNav);
+mountResearchWorkspace($('research-workspace-mount'));
+const intelligenceTrigger = document.createElement('button');
+intelligenceTrigger.id = 'intelligence-toggle';
+intelligenceTrigger.type = 'button';
+intelligenceTrigger.dataset.i18n = 'intelligenceToggle';
+intelligenceTrigger.textContent = t('intelligenceToggle');
+intelligenceTrigger.setAttribute('aria-controls', 'reader-panel');
+intelligenceTrigger.setAttribute('aria-expanded', 'false');
+const selectionResult = document.createElement('p');
+selectionResult.id = 'selected-result';
+selectionResult.className = 'selection-result';
+selectionResult.setAttribute('role', 'status');
+selectionResult.setAttribute('aria-live', 'polite');
+$('selected-translation').after(selectionResult);
+$('outline-toggle').after(intelligenceTrigger);
+const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]):not([type="hidden"]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+const dialogOpeners = new WeakMap<HTMLDialogElement,HTMLElement>();
+function dialogFocusables(dialog: HTMLDialogElement): HTMLElement[] { return [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(element=>element.getClientRects().length>0); }
+function showDialog(dialog: HTMLDialogElement,opener?: HTMLElement | null) {
+  const previous=opener??(document.activeElement instanceof HTMLElement?document.activeElement:null);
+  if(previous&&previous!==document.body&&!dialog.contains(previous)) dialogOpeners.set(dialog,previous);
+  dialog.showModal();
+  if(!dialog.contains(document.activeElement)) (dialogFocusables(dialog)[0]??dialog).focus();
+}
+function trapDialogFocus(dialog: HTMLDialogElement,event: KeyboardEvent) {
+  if(event.key!=='Tab') return;
+  const items=dialogFocusables(dialog);
+  if(!items.length) { event.preventDefault(); dialog.focus(); return; }
+  const first=items[0]!, last=items[items.length-1]!, active=document.activeElement;
+  if(!event.shiftKey&&(active===last||!dialog.contains(active))) { event.preventDefault(); first.focus(); }
+  else if(event.shiftKey&&(active===first||!dialog.contains(active))) { event.preventDefault(); last.focus(); }
+}
+for(const id of ['settings-dialog','selection-dialog','command-palette']) {
+  const element=$<HTMLDialogElement>(id);
+  element.addEventListener('keydown',event=>trapDialogFocus(element,event));
+  element.addEventListener('close',()=>{
+    const opener=dialogOpeners.get(element);
+    if(opener?.isConnected) opener.focus();
+    dialogOpeners.delete(element);
+  });
+}
+const storage = (): Storage | null => { try { return typeof localStorage === 'undefined' ? null : localStorage; } catch { return null; } };
+const service = new TranslationService(browserTransport());
+const translationQueue = new ViewportScheduler<void>(2);
+const renderQueue = new ViewportScheduler<void>(2);
+let pdf: PDFDocumentProxy | null = null;
+let revision = 0, profile = 0, paused = false, full = false, batching = false, zoom = 1, split = 50;
+let batchController: AbortController | null = null;
+let rotation: PageRotation = 0;
+let fit: FitMode = 'width';
+let rotating = false;
+let activeTitle = '', activeSource = '', activeDocKey = '', selected: TextBlock | null = null;
+let requestController = new AbortController();
+let captureReader: CaptureReaderHandle | undefined;
+const translations = new Map<string,string>();
+const errors = new Map<string,string>();
+const rendered = new Map<number,RenderedPage>();
+const pageNodes = new Map<number,HTMLElement>();
+const visible = new Set<number>();
+const imports: { id?:string; name:string; bytes?:Uint8Array; pages:number; opened:Date }[] = [];
+const libraryStore = createLibraryStore();
+let observer: IntersectionObserver | null = null;
+let pageNumber = 1, pageTotal = 0;
+let pageSize = { width:612, height:792 };
+let readingPosition = { page:1, fraction:0 };
+let readingMode: ReadingMode = readReadingMode();
+let statusView: { text: () => string; error: boolean } = { text: () => t('ready'), error: false };
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+let scrollTimer: ReturnType<typeof setTimeout> | undefined;
+let panelKind: 'outline' | 'search' | 'intelligence' | null = null;
+let outlineEntries: OutlineEntry[] = [];
+let outlineReady = false, outlineLoading = false;
+let searchController: AbortController | null = null;
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+let searchInput: HTMLInputElement | null = null;
+let searchStatus: HTMLElement | null = null;
+let searchList: HTMLElement | null = null;
+let lastSearchQuery = '';
+let detectedCode = '';
+let thumbObserver: IntersectionObserver | null = null;
+let glossaryResult: GlossaryParseResult | null = null;
+let intelligenceResult: DocumentIntelligenceResult | null = null;
+let intelligenceSchemaText = BUILT_IN_INTELLIGENCE_SCHEMA_JSON;
+let intelligenceState: 'idle' | 'loading' | 'ready' | 'empty' | 'error' = 'idle';
+let intelligenceError = '';
+let reviewQueue: ReviewQueue | null = null;
+let reviewEditingId: string | null = null;
+let progressStore: UnifiedProgressStore | null = null;
+let progressUnsubscribe: (() => void) | null = null;
+const intelligencePageSources = new Map<number, IntelligencePageSource>();
+const statusModel = createStatusModel();
+const GLOSSARY_ISSUE_KEY: Record<GlossaryIssueCode, TranslationKey> = {
+  'missing-separator':'glossaryIssueMissingSeparator', 'empty-source':'glossaryIssueEmptySource', 'empty-target':'glossaryIssueEmptyTarget',
+  'source-too-long':'glossaryIssueSourceTooLong', 'target-too-long':'glossaryIssueTargetTooLong', duplicate:'glossaryIssueDuplicate', 'entry-limit':'glossaryIssueEntryLimit',
+};
+
+function progressJob() {
+  const progress = progressStore?.snapshot();
+  if (!progress || !canTranslate() || progress.total <= 0) return null;
+  if (progress.stage === 'translate' && !full && !progress.settled && progress.completed >= progress.total) return null;
+  const state = progress.state === 'done'
+    ? 'done'
+    : progress.state === 'failed' || progress.state === 'aborted' || progress.state === 'cancelled'
+      ? 'failed'
+      : progress.state === 'queued' ? 'queued' : 'running';
+  return { state, progress: progress.total > 0 ? (progress.completed / progress.total) * 100 : 0, eta: null } as const;
+}
+
+function updateReaderProgress(): void {
+  if (!progressStore || !canTranslate()) { renderStatus(); return; }
+  const total = [...rendered.values()].reduce((sum, page) => sum + page.model.blocks.length, 0);
+  if (total > 0) {
+    const completed = [...rendered.values()].reduce((sum, page) => sum + page.model.blocks.filter(block => translations.has(block.id) || errors.has(block.id)).length, 0);
+    const snapshot = progressStore.snapshot();
+    if (snapshot.stage === 'import') {
+      progressStore.update({ state: 'running', stage: 'import', completed: pageTotal, total: pageTotal, detail: 'Document pages are available locally.' });
+    }
+    if (!progressStore.snapshot().settled) {
+      progressStore.update({ state: paused ? 'paused' : 'running', stage: 'translate', completed, total, detail: 'Visible document blocks only.' });
+    }
+    if (full && rendered.size >= pageTotal && completed >= total && !progressStore.snapshot().settled) {
+      progressStore.complete('All rendered document blocks translated or recorded as failed.');
+    }
+  }
+  renderStatus();
+}
+
+function renderStatus() {
+  const element=$('status');
+  statusModel.update({
+    mode: !pdf || !canTranslate() ? 'idle' : paused ? 'paused' : full ? 'full' : 'visible',
+    page: pageNumber,
+    pageCount: pageTotal,
+    provider: providerName(),
+    job: progressJob(),
+    message: { kind: statusView.error ? 'error' : 'info', text: statusView.text() },
+  });
+  element.replaceChildren(renderStatusStrip(statusModel, document));
+  element.classList.toggle('is-error',statusView.error);
+}
+function setStatusText(text: () => string, error = false) { statusView={ text, error }; renderStatus(); }
+function status(key: TranslationKey, error = false, vars?: Record<string,string|number>) { setStatusText(() => t(key, vars), error); }
+function statusText(message: string, error = false) { setStatusText(() => message, error); }
+function errorMessage(error: unknown) { return error instanceof Error?error.message:String(error); }
+function userMessage(error: unknown) { return error instanceof TranslationError ? error.userMessage : errorMessage(error); }
+
+const commandPaletteDialog = $<HTMLDialogElement>('command-palette');
+const commandPaletteInput = $<HTMLInputElement>('command-palette-input');
+const commandPaletteList = $('command-palette-list');
+const commandPaletteEmpty = $('command-palette-empty');
+let commandPaletteModel: CommandPaletteModel;
+
+function openSettingsDialog(): void {
+  fillSettingsForm();
+  showDialog(dialog, $('settings-open'));
+}
+
+function renderCommandPalette(): void {
+  const snapshot = commandPaletteModel.snapshot();
+  commandPaletteList.replaceChildren();
+  commandPaletteEmpty.hidden = !snapshot.empty;
+  commandPaletteEmpty.textContent = snapshot.empty ? t('searchEmpty') : '';
+  for (const [index, item] of snapshot.items.entries()) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'command-palette__item';
+    button.role = 'option';
+    button.dataset.commandId = item.command.id;
+    button.setAttribute('aria-selected', String(index === snapshot.selectedIndex));
+    button.disabled = !item.availability.enabled;
+    button.textContent = t(item.command.titleKey);
+    if (!item.availability.enabled) button.title = item.availability.reason ?? '';
+    button.addEventListener('click', () => executePaletteCommand(item.command.id));
+    commandPaletteList.append(button);
+  }
+}
+
+function executePaletteCommand(commandId?: string): void {
+  const result = commandId ? commandPaletteModel.execute(commandId) : commandPaletteModel.executeSelected();
+  if (result.executed) { commandPaletteDialog.close(); return; }
+  if (result.reason) statusText(result.reason, true);
+  renderCommandPalette();
+}
+
+commandPaletteModel = new CommandPaletteModel(readerCommands({
+  'reader.open': () => $<HTMLInputElement>('file-input').click(),
+  'reader.exportPdf': () => void exportPdfFile(),
+  'reader.settings': openSettingsDialog,
+  'reader.previousPage': () => scrollToPage(pageNumber - 1),
+  'reader.nextPage': () => scrollToPage(pageNumber + 1),
+  'reader.firstPage': () => scrollToPage(1),
+  'reader.lastPage': () => { if (pdf) scrollToPage(pdf.numPages); },
+  'reader.goToPage': () => { const field = $<HTMLInputElement>('page-input'); field.focus(); field.select(); },
+  'reader.find': () => openPanel('search'),
+  'reader.zoomIn': () => { fit = 'actual'; zoom = Math.min(3, zoom + .1); applyScale(); },
+  'reader.zoomOut': () => { fit = 'actual'; zoom = Math.max(.55, zoom - .1); applyScale(); },
+  'reader.zoomReset': () => { zoom = 1; fit = 'width'; applyFit('width'); },
+  'reader.toggleTranslation': () => setReadingMode(readingMode === 'side-by-side' ? 'overlay' : 'side-by-side'),
+  'reader.shortcuts': () => statusText(`${t('shortcuts')}: Ctrl+K, Ctrl+O, Ctrl+F, J/K, +/-`),
+}), { capabilityMode: 'local' });
+
+commandPaletteInput.addEventListener('input', () => { commandPaletteModel.setQuery(commandPaletteInput.value); renderCommandPalette(); });
+commandPaletteInput.addEventListener('keydown', event => {
+  if (event.key === 'ArrowDown') { event.preventDefault(); commandPaletteModel.move(1); renderCommandPalette(); }
+  else if (event.key === 'ArrowUp') { event.preventDefault(); commandPaletteModel.move(-1); renderCommandPalette(); }
+  else if (event.key === 'Enter') { event.preventDefault(); executePaletteCommand(); }
+});
+$('command-palette-close').addEventListener('click', () => commandPaletteDialog.close());
+commandPaletteDialog.addEventListener('close', () => { commandPaletteModel.close(); commandPaletteInput.value = ''; });
+
+function openCommandPalette(): void {
+  commandPaletteModel.open();
+  commandPaletteInput.value = '';
+  renderCommandPalette();
+  showDialog(commandPaletteDialog, document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  commandPaletteInput.focus();
+}
+function canTranslate() { return settings.provider==='local' || settings.allowCloud; }
+function providerName() { return settings.provider==='local'?t('providerLocalShort'):settings.provider==='deepl'?'DeepL':settings.provider==='google'?'Google':'OpenAI'; }
+function updateProvider() { $('provider-label').textContent=`${providerName()} · ${languageNativeName(settings.targetLanguage)}`; }
+function refreshTransportLabels() { $('pause').textContent=t(paused?'resume':'pause'); $('full').textContent=t(full?'stopFull':'translateAll'); }
+function refreshBreadcrumb() { $('breadcrumb').textContent=!$('research').hidden?'Research desk':$('library').hidden?activeTitle:t('myLibrary'); }
+function updatePageControls() {
+  const has=Boolean(pdf&&pageTotal);
+  $<HTMLButtonElement>('prev-page').disabled=!has||pageNumber<=1;
+  $<HTMLButtonElement>('next-page').disabled=!has||pageNumber>=pageTotal;
+  const input=$<HTMLInputElement>('page-input'); input.max=String(Math.max(1,pageTotal)); if(document.activeElement!==input) input.value=String(pageNumber);
+  $('page-total').textContent=String(pageTotal);
+  updateCurrentMarkers();
+}
+function refreshPageStatus() { $('page-status').textContent=pageTotal?t('pageStatus',{page:pageNumber,total:pageTotal}):t('pageInitial'); updatePageControls(); }
+function renderSelectedTranslation() {
+  if (!selected) { $('selected-translation').textContent=''; selectionResult.textContent=''; return; }
+  const translated = translations.get(selected.id);
+  const failure = errors.get(selected.id);
+  $('selected-translation').textContent = translated ?? failure ?? t('translationPending');
+  selectionResult.textContent = translated
+    ? `${t('translation')}: ${t('intelligenceEvidence')}`
+    : failure ?? t('translationPending');
+  selectionResult.classList.toggle('is-error', Boolean(failure));
+}
+function refreshPageLoaders() { root.querySelectorAll<HTMLElement>('.page-loading').forEach(element=>{ if(element.dataset.loading==='page') element.textContent=t('pageLoading',{page:Number(element.dataset.page)}); else if(element.dataset.loading==='follow') element.textContent=t('translationFollows'); else if(element.dataset.loading==='scroll') element.textContent=t('scrollToRender'); }); }
+function refreshRegionLabels() { root.querySelectorAll<HTMLElement>('.region').forEach(element=>{ if(element.classList.contains('callout-region')) { element.title=t('calloutTitle'); element.setAttribute('aria-label',t('calloutAria')); } else element.setAttribute('aria-label',t('compareRegion',{text:(element.dataset.text??'').slice(0,90)})); }); }
+function refreshLibraryLabels() { root.querySelectorAll<HTMLElement>('[data-pages]').forEach(element=>{ element.textContent=t('pagesOpened',{pages:Number(element.dataset.pages)}); }); }
+
+function saveReadingNow() {
+  if(!activeDocKey||!pdf) return;
+  const store=storage(); if(store) saveReadingState(store, {page:pageNumber,fraction:readingPosition.fraction,zoom,fit}, activeDocKey);
+}
+function scheduleSave() {
+  if(!activeDocKey) return;
+  clearTimeout(saveTimer);
+  saveTimer=setTimeout(saveReadingNow,300);
+}
+function updateRowRatios() {
+  const size=rotatePageSize(pageSize,rotation);
+  const ratio=size.width/Math.max(1,size.height);
+  for(const row of pageNodes.values()) row.style.setProperty('--page-ratio',String(ratio));
+}
+function updateCurrentMarkers() {
+  root.querySelectorAll<HTMLElement>('.reader-thumb').forEach(element=>{ if(Number(element.dataset.page)===pageNumber) element.setAttribute('aria-current','page'); else element.removeAttribute('aria-current'); });
+  root.querySelectorAll<HTMLElement>('.reader-outline__item[data-page]').forEach(element=>{ if(Number(element.dataset.page)===pageNumber) element.setAttribute('aria-current','page'); else element.removeAttribute('aria-current'); });
+}
+function resetWork() {
+  revision++; profile++; requestController.abort(); requestController=new AbortController();
+  batchController?.abort(); batchController=null;
+  translationQueue.reset(); renderQueue.reset(); rendered.clear(); translations.clear(); errors.clear(); visible.clear();
+  progressUnsubscribe?.(); progressUnsubscribe=null; progressStore=null; reviewQueue=null; reviewEditingId=null;
+  observer?.disconnect(); observer=null; full=false; batching=false; paused=false; translationQueue.resume(); refreshTransportLabels();
+  rotation=0; fit='width'; zoom=1; rotating=false; pageNumber=1; pageTotal=0; readingPosition={page:1,fraction:0}; activeDocKey='';
+  outlineEntries=[]; outlineReady=false; outlineLoading=false;
+  panelKind=null; intelligenceResult=null; intelligenceState='idle'; intelligenceError=''; intelligencePageSources.clear(); intelligenceTrigger.setAttribute('aria-expanded','false'); $('reader-panel').hidden=true; $('outline-toggle').setAttribute('aria-expanded','false'); $('search-toggle').setAttribute('aria-expanded','false');
+  searchController?.abort(); searchController=null; clearTimeout(searchTimer); lastSearchQuery=''; searchInput=null; searchStatus=null; searchList=null;
+  toggleThumbnails(false);
+  const hint=$('detected-language'); hint.hidden=true; hint.textContent=''; detectedCode='';
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string | null> {
+  try {
+    if (!globalThis.crypto?.subtle) return null;
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', copy.buffer);
+    return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
+  } catch { return null; }
+}
+
+async function load(bytes: Uint8Array,name: string,source = '',id?: string) {
+  resetWork(); const generation=revision;
+  status('statusOpening');
+  try {
+    const previous=pdf; pdf=null; if (previous) void previous.destroy();
+    const loaded = await openPdf(bytes.slice());
+    if (generation!==revision) { void loaded.destroy(); return; }
+    pdf=loaded; activeTitle=name; activeSource=source; activeDocKey=documentReadingKey(name,bytes.length,READING_STATE_KEY);
+    const existing=id?imports.find(item=>item.id===id):imports.find(item=>item.name===name && item.bytes?.length===bytes.length);
+    const recordId=existing?.id??crypto.randomUUID();
+    if(existing){existing.id=recordId;existing.bytes=bytes.slice();existing.pages=loaded.numPages;existing.opened=new Date();}
+    else imports.unshift({id:recordId,name,bytes:bytes.slice(),pages:loaded.numPages,opened:new Date()});
+    const recordBytes=bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer;
+    void libraryStore.open().then(()=>libraryStore.put({id:recordId,name,bytes:recordBytes,size:bytes.length,addedAt:Date.now(),lastOpenedAt:Date.now(),pageCount:loaded.numPages})).catch(()=>undefined);
+    updateLibrary(); $('library').hidden=true; $('reader').hidden=false;
+    pageNumber=1; pageTotal=loaded.numPages; refreshBreadcrumb(); refreshPageStatus(); $('document-title').textContent=name;
+    const sourceSha256 = await sha256Hex(bytes);
+    if (sourceSha256) {
+      progressStore = new UnifiedProgressStore(createUnifiedProgress({
+        jobId: crypto.randomUUID(), documentId: recordId, sourceSha256, generation,
+        initialStage: 'import', total: loaded.numPages,
+        stages: [{ stage: 'import', total: loaded.numPages }, { stage: 'translate', total: 0 }],
+      }));
+      progressUnsubscribe = progressStore.subscribe(() => renderStatus());
+    }
+    const link=$<HTMLAnchorElement>('original-link'); link.hidden=!source; if(source) link.href=source;
+    const first=await loaded.getPage(1); const view=first.getViewport({scale:1});
+    pageSize={width:view.width,height:view.height};
+    $('pages').replaceChildren(); pageNodes.clear();
+    observer=new IntersectionObserver(entries=>{
+      for (const entry of entries) {
+        const number=Number((entry.target as HTMLElement).dataset.page);
+        if(entry.isIntersecting) { visible.add(number); void ensurePage(number,0); if(number<loaded.numPages) void ensurePage(number+1,2); }
+        else visible.delete(number);
+      }
+    },{root:$('reading-scroll'),rootMargin:'500px 0px'});
+    for(let number=1;number<=loaded.numPages;number++) {
+      const row=document.createElement('article'); row.className='page-pair'; row.dataset.page=String(number); row.style.setProperty('--page-ratio',String(view.width/view.height));
+      row.innerHTML=`<div class="page-slot original-slot"><span class="page-loading" data-loading="page" data-page="${number}">${t('pageLoading',{page:number})}</span></div><div class="splitter" role="separator" tabindex="0" data-i18n-aria-label="resizePanes" aria-label="${t('resizePanes')}" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="75" aria-valuenow="50"></div><div class="page-slot translated-slot"><span class="page-loading" data-loading="follow">${t('translationFollows')}</span></div><span class="page-number">${number}</span>`;
+      apply(row);
+      $('pages').append(row); pageNodes.set(number,row); observer.observe(row);
+    }
+    const saved=loadReadingState(storage(),activeDocKey);
+    if(saved) { zoom=saved.zoom; fit=saved.fit; pageNumber=clampPageNumber(saved.page,loaded.numPages); readingPosition={page:pageNumber,fraction:saved.fraction}; }
+    updateProvider(); applyScale(); updatePageControls(); await ensurePage(1,0);
+    if(saved) scrollToPage(saved.page,saved.fraction);
+    void showDetectedLanguage(loaded,generation);
+    if(!canTranslate()) status('statusOriginalCloud');
+    else status('statusOriginalTranslating');
+  } catch(error) { if(generation===revision) status('statusOpenError',true,{message:errorMessage(error)}); }
+}
+
+async function showDetectedLanguage(document: PDFDocumentProxy,generation: number) {
+  try {
+    const text=(await getPageText(document,1)).map(item=>item.str).join(' ');
+    if(generation!==revision) return;
+    const detection=detectLanguage(text);
+    detectedCode=detection.code==='unknown'||detection.confidence<=0?'':detection.code;
+    renderDetectedLanguage();
+  } catch { return; }
+}
+function renderDetectedLanguage() {
+  const hint=$('detected-language');
+  if(!detectedCode) { hint.hidden=true; hint.textContent=''; return; }
+  hint.textContent=t('detectedLanguageHint',{language:languageNativeName(detectedCode)});
+  hint.hidden=false;
+}
+
+async function ensurePage(number: number,priority: number): Promise<void> {
+  if(!pdf || rotating || number<1 || number>pdf.numPages) return;
+  const generation=revision, current=pdf;
+  if(rendered.has(number)) { schedulePage(number,priority); return; }
+  try { await renderQueue.enqueue(String(number),priority,async()=>{
+    let result=await renderPage(current,number,{rotation});
+    if(generation!==revision) return;
+    let pageSource: IntelligencePageSource = result.model.blocks.length
+      ? { page:number, sourceKind:'embedded-text', confidence:1, provenance:'PDF text layer; decoded locally from the current document.' }
+      : { page:number, sourceKind:'unknown', confidence:0, provenance:'No document blocks are available for this page.' };
+    if(!result.model.blocks.length && result.rotation===0) {
+      try {
+        status('statusOcrScan',false,{page:number});
+        const { recognizeScan }=await import('./ocr/scan');
+        const scan=await recognizeScan(result.original,number,result.model.width,result.model.height,settings.sourceLanguage);
+        if(generation!==revision) return;
+        if(scan.blocks.length) {
+          result={...result,model:{...result.model,blocks:scan.blocks},warning:''};
+          pageSource={ page:number, sourceKind:'local-ocr', confidence:Math.max(0,Math.min(1,scan.confidence/100)), provenance:`Local OCR fallback; Tesseract mean confidence ${scan.confidence}%.` };
+          status('statusOcrDone',false,{count:scan.blocks.length});
+        }
+      } catch { /* OCR is optional; the original page stays readable */ }
+    }
+    intelligencePageSources.set(number,pageSource);
+    rendered.set(number,result); mountPage(result); schedulePage(number,priority);
+    if(result.warning) statusText(result.warning);
+    evictPages(number);
+  }); } catch(error) { if(generation===revision) status('statusPageError',true,{page:number,message:errorMessage(error)}); }
+}
+function evictPages(keep: number) {
+  if(rendered.size<=10) return;
+  const candidates=[...rendered.keys()].filter(number=>!visible.has(number)&&number!==keep).sort((a,b)=>Math.abs(b-keep)-Math.abs(a-keep));
+  while(rendered.size>8 && candidates.length) {
+    const number=candidates.shift()!; rendered.delete(number);
+    const row=pageNodes.get(number)!;
+    row.querySelector('.original-slot')!.innerHTML=`<span class="page-loading" data-loading="scroll">${t('scrollToRender')}</span>`;
+    row.querySelector('.translated-slot')!.replaceChildren();
+  }
+}
+function mountPage(result: RenderedPage) {
+  const row=pageNodes.get(result.model.number)!;
+  row.style.setProperty('--page-ratio',String(result.model.width/result.model.height));
+  const original=row.querySelector<HTMLElement>('.original-slot')!;
+  original.replaceChildren(result.original); result.original.className='page-canvas';
+  addRegions(original,result,false); paintMirror(result); updateReaderProgress();
+}
+function addRegions(slot: HTMLElement,result: RenderedPage,translated: boolean) {
+  for(const block of result.model.blocks) {
+    const element=document.createElement('div'); element.className=`region ${translated?'mirror-region':'source-region'}`; element.dataset.region=block.id;
+    element.style.left=`${block.rect.x/result.model.width*100}%`; element.style.top=`${block.rect.y/result.model.height*100}%`; element.style.width=`${block.rect.width/result.model.width*100}%`; element.style.height=`${block.rect.height/result.model.height*100}%`;
+    element.tabIndex=0; element.role='button'; element.dataset.text=block.text; element.setAttribute('aria-label',t('compareRegion',{text:block.text.slice(0,90)})); element.textContent=translated?'':block.text;
+    element.addEventListener('pointerenter',()=>highlight(block.id)); element.addEventListener('pointerleave',()=>highlight(selected?.id??''));
+    element.addEventListener('focus',()=>highlight(block.id)); element.addEventListener('click',()=>selectBlock(block,element));
+    element.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' ') {event.preventDefault();selectBlock(block,element);}});
+    slot.append(element);
+  }
+}
+function paintMirror(result: RenderedPage) {
+  const slot=pageNodes.get(result.model.number)!.querySelector<HTMLElement>('.translated-slot')!;
+  const canvas=document.createElement('canvas'); canvas.width=result.original.width; canvas.height=result.original.height; canvas.className='page-canvas';
+  const context=canvas.getContext('2d')!; context.drawImage(result.original,0,0);
+  const scale=canvas.width/result.model.width;
+  if(result.rotation!==0) { paintRotatedMirror(result,slot,canvas,context,scale); return; }
+  const overlays: {block:TextBlock;text:string;size:number;lineHeight:number}[]=[];
+  for(const block of result.model.blocks) {
+    const text=translations.get(block.id); if(!text || block.id.startsWith('ocr-')) continue;
+    const fit=fitText(text,block.rect.width,block.rect.height,block.fontSize,(line,size)=>{context.font=`${size}px sans-serif`;return context.measureText(line).width;});
+    const overlaps=result.model.blocks.some(other=>other.id!==block.id && other.rect.x<block.rect.x+block.rect.width && other.rect.x+other.rect.width>block.rect.x && other.rect.y<block.rect.y+block.rect.height && other.rect.y+other.rect.height>block.rect.y);
+    if(!result.background || fit.overflow || overlaps) continue;
+    const {x,y,width,height}=block.rect;
+    context.drawImage(result.background,x*scale,y*scale,width*scale,height*scale,x*scale,y*scale,width*scale,height*scale);
+    overlays.push({block,text:fit.lines.join('\n'),size:fit.fontSize,lineHeight:fit.lineHeight});
+  }
+  slot.replaceChildren(canvas); addRegions(slot,result,true);
+  for(const block of result.model.blocks) {
+    const element=slot.querySelector<HTMLElement>(`[data-region="${block.id}"]`)!;
+    const overlay=overlays.find(item=>item.block.id===block.id);
+    const text=translations.get(block.id);
+    if(overlay) {
+      element.classList.add('painted-region'); element.textContent=overlay.text;
+      element.style.fontSize=`${overlay.size/result.model.width*100}cqw`; element.style.lineHeight=String(overlay.lineHeight/overlay.size); element.dir=isRtlLanguage(settings.targetLanguage)?'rtl':resolveBlockDirection(undefined,text??'');
+    } else if(text) { element.classList.add('callout-region'); element.title=t('calloutTitle'); element.setAttribute('aria-label',t('calloutAria')); }
+    else if(errors.has(block.id)) {element.classList.add('failed-region');element.title=errors.get(block.id)!;}
+  }
+  highlight(selected?.id??'');
+}
+function paintRotatedMirror(result: RenderedPage,slot: HTMLElement,canvas: HTMLCanvasElement,context: CanvasRenderingContext2D,scale: number) {
+  const overlays: {block:TextBlock;text:string}[]=[];
+  for(const block of result.model.blocks) {
+    const text=translations.get(block.id); if(!text) continue;
+    const base=block.baseRect??block.rect;
+    const fit=fitText(text,base.width,base.height,block.fontSize,(line,size)=>{context.font=`${size}px sans-serif`;return context.measureText(line).width;});
+    if(!result.background||fit.overflow) continue;
+    const {x,y,width,height}=block.rect;
+    context.drawImage(result.background,x*scale,y*scale,width*scale,height*scale,x*scale,y*scale,width*scale,height*scale);
+    context.save();
+    if(result.rotation===90) { context.translate(result.model.width*scale,0); context.rotate(Math.PI/2); }
+    else if(result.rotation===180) { context.translate(result.model.width*scale,result.model.height*scale); context.rotate(Math.PI); }
+    else { context.translate(0,result.model.height*scale); context.rotate(-Math.PI/2); }
+    context.scale(scale,scale);
+    context.fillStyle='#202724'; context.textBaseline='top'; context.font=`${fit.fontSize}px sans-serif`;
+    fit.lines.forEach((line,index)=>context.fillText(line,base.x,base.y+index*fit.lineHeight));
+    context.restore();
+    overlays.push({block,text:fit.lines.join('\n')});
+  }
+  slot.replaceChildren(canvas); addRegions(slot,result,true);
+  for(const block of result.model.blocks) {
+    const element=slot.querySelector<HTMLElement>(`[data-region="${block.id}"]`)!;
+    const overlay=overlays.find(item=>item.block.id===block.id);
+    const text=translations.get(block.id);
+    if(overlay) { element.classList.add('painted-region'); element.textContent=overlay.text; element.style.color='transparent'; element.style.background='transparent'; element.dir=isRtlLanguage(settings.targetLanguage)?'rtl':resolveBlockDirection(undefined,overlay.text); }
+    else if(text) { element.classList.add('callout-region'); element.title=t('calloutTitle'); element.setAttribute('aria-label',t('calloutAria')); }
+    else if(errors.has(block.id)) { element.classList.add('failed-region'); element.title=errors.get(block.id)!; }
+  }
+  highlight(selected?.id??'');
+}
+function schedulePage(number: number,priority: number) {
+  const result=rendered.get(number); if(!result || !canTranslate()) return;
+  for(const block of result.model.blocks) scheduleBlock(block,priority);
+}
+function renderTranslationStatus() {
+  setStatusText(() => {
+    const base=t('statusTranslated', {count:translations.size, chars:service.characterCount, mode:t(paused?'modePaused':full?'modeFull':'modeVisible'), provider:providerName()});
+    const cost=estimateCost({characters:service.characterCount,model:settings.model,direction:'both'});
+    return `${base} · ${t('costEstimate')} ${cost?formatUsd(cost.usd):t('costUnknownModel')}`;
+  });
+}
+function scheduleBlock(block: TextBlock,priority: number) {
+  if(translations.has(block.id)||errors.has(block.id)||!canTranslate()) return;
+  // Translate-all sends whole pages at once; a per-block request would duplicate it.
+  // Selection (priority < 0) always keeps the fast single-block path.
+  if(batching && priority >= 0) return;
+  const generation=revision, currentProfile=profile, snapshot={...settings}, signal=requestController.signal;
+  void translationQueue.enqueue(`${profile}:${block.id}`,priority,async()=>{
+    try {
+      const result=await service.translate({text:block.text,settings:snapshot,signal});
+      if(generation!==revision||currentProfile!==profile) return;
+      translations.set(block.id,result.text); errors.delete(block.id);
+      const page=rendered.get(block.page); if(page) paintMirror(page);
+      if(selected?.id===block.id) renderSelectedTranslation();
+      renderTranslationStatus(); updateReaderProgress();
+    } catch(error) {
+      if(generation!==revision||currentProfile!==profile||signal.aborted) return;
+      const message=userMessage(error); errors.set(block.id,message); statusText(message,true);
+      const page=rendered.get(block.page);if(page) paintMirror(page);
+      if(selected?.id===block.id) renderSelectedTranslation(); updateReaderProgress();
+    }
+  }).catch(()=>undefined);
+}
+/**
+ * Translates every untranslated block of one rendered page in a single provider
+ * round trip when the provider can batch. Returns false when the page has too
+ * little to gain, so the caller can fall back to the per-block queue.
+ */
+async function translatePageInBatch(number: number): Promise<boolean> {
+  const result=rendered.get(number);
+  if(!result||!canTranslate()) return false;
+  const pending=result.model.blocks.filter(block=>!translations.has(block.id)&&!errors.has(block.id));
+  if(pending.length<2) return false;
+  const generation=revision, currentProfile=profile, snapshot={...settings}, signal=batchController?.signal??requestController.signal;
+  try {
+    const batch=await service.translateBatch(pending,snapshot,signal);
+    if(generation!==revision||currentProfile!==profile) return true;
+    for(const entry of batch.translations) { translations.set(entry.id,entry.text); errors.delete(entry.id); }
+    const page=rendered.get(number); if(page) paintMirror(page);
+    if(selected&&translations.has(selected.id)) renderSelectedTranslation();
+    renderTranslationStatus(); updateReaderProgress();
+    return true;
+  } catch(error) {
+    if(generation!==revision||currentProfile!==profile||signal.aborted) return true;
+    for(const block of pending) scheduleBlock(block,5);
+    statusText(userMessage(error),true);
+    return false;
+  }
+}
+function highlight(id: string) { document.querySelectorAll<HTMLElement>('[data-region]').forEach(element=>element.classList.toggle('paired-highlight',element.dataset.region===id)); }
+function selectBlock(block: TextBlock,opener?: HTMLElement) {
+  selected=block; highlight(block.id); $('selected-source').textContent=block.text;
+  renderSelectedTranslation();
+  showDialog($<HTMLDialogElement>('selection-dialog'),opener);
+  scheduleBlock(block,-10);
+}
+function applyScale() {
+  $('pages').style.setProperty('--zoom',String(zoom)); $('pages').style.setProperty('--split',`${split}%`); $('zoom-label').textContent=`${Math.round(zoom*100)}%`;
+  $('fit-width').setAttribute('aria-pressed',String(fit==='width')); $('fit-page').setAttribute('aria-pressed',String(fit==='page'));
+  scheduleSave();
+}
+function applyFit(mode: 'width'|'page') {
+  fit=mode;
+  const scroll=$('reading-scroll');
+  // The mode decides how wide the pane carrying the page is, so fit follows the same planner.
+  const paneWidth=readingPaneWidth();
+  const paneHeight=Math.max(160,scroll.clientHeight-80);
+  const rotated=rotatePageSize(pageSize,rotation);
+  const naturalHeight=paneWidth*rotated.height/Math.max(1,rotated.width);
+  zoom=Math.max(.55,Math.min(3,fitScale(mode,{width:paneWidth,height:naturalHeight},{width:paneWidth,height:paneHeight})));
+  applyScale();
+}
+function scrollToPage(number: number,fraction = 0) {
+  if(!pdf) return;
+  const target=clampPageNumber(number,pdf.numPages);
+  const row=pageNodes.get(target); if(!row) return;
+  const scroll=$('reading-scroll');
+  scroll.scrollTop=row.offsetTop+Math.max(0,row.offsetHeight*Math.max(0,Math.min(1,fraction)));
+  pageNumber=target; readingPosition={page:target,fraction:Math.max(0,Math.min(1,fraction))};
+  refreshPageStatus(); scheduleSave(); void ensurePage(target,0);
+  if(viewRelay.canRelay()) relayView(target,readingPosition.fraction,zoom);
+}
+function flashPage(number: number) {
+  const row=pageNodes.get(number); if(!row) return;
+  row.classList.add('is-search-hit'); setTimeout(()=>row.classList.remove('is-search-hit'),1600);
+}
+
+// --- Reading modes (backlog item L06) -----------------------------------------
+//
+// The four modes come from src/core/reading-modes.ts. The planner decides the pane widths the
+// reader fits a page into and converts a reading position between modes; this file owns the DOM
+// class that gives each page pair its geometry and the toolbar control that picks the mode.
+
+/** Restores the saved reading mode; an unknown or unreadable value falls back to the default. */
+function readReadingMode(): ReadingMode {
+  const store=storage(); if(!store) return DEFAULT_READING_MODE;
+  try { const saved=store.getItem(READING_MODE_KEY); return isReadingMode(saved)?saved:DEFAULT_READING_MODE; } catch { return DEFAULT_READING_MODE; }
+}
+/** Persists the reading mode next to the other `mirror.` settings. */
+function saveReadingMode(mode: ReadingMode): void {
+  const store=storage(); if(!store) return;
+  try { store.setItem(READING_MODE_KEY,mode); } catch { /* blocked storage keeps the choice for this session */ }
+}
+/** The page's width divided by its height after rotation, which calibrates one page in the planner. */
+function currentPageAspect(): number {
+  const size=rotatePageSize(pageSize,rotation);
+  return size.width>0&&size.height>0?size.width/size.height:612/792;
+}
+/** Width #pages gives its children inside the reading view, matching its 22 px side padding. */
+function readingContentWidth(): number { return Math.max(240,$('reading-scroll').clientWidth-44); }
+/** The planner layout for the current mode at a viewport, in reading-view pixels. */
+function readingLayout(width: number,height: number): ReadingLayout {
+  return layoutFor(readingMode,{ width:Math.max(1,width), height:Math.max(1,height) },currentPageAspect());
+}
+/**
+ * Width of the pane that carries the page, in reading-view pixels. Side-by-side keeps the
+ * reader's splitter position; the other modes ask the planner for the pane they give the page.
+ */
+function readingPaneWidth(): number {
+  const contentWidth=readingContentWidth();
+  if(readingMode==='side-by-side') return Math.max(120,contentWidth*split/100-9);
+  try {
+    const layout=readingLayout(contentWidth,Math.max(1,$('reading-scroll').clientHeight));
+    const pane=layout.panes.find(candidate=>candidate.role==='translation')??layout.panes[0];
+    if(pane&&pane.width>0) return Math.max(120,pane.width);
+  } catch { /* a hidden reading view has no geometry; the full content width stands in */ }
+  return Math.max(120,contentWidth);
+}
+function readingModeButtons(): HTMLButtonElement[] {
+  return [...$('reading-mode-switch').querySelectorAll<HTMLButtonElement>('[data-reading-mode]')];
+}
+/** Applies the current mode to the reading surface: geometry class, planner sizes and toolbar state. */
+function refreshReadingModeUi(): void {
+  const pages=$('pages'), scroll=$('reading-scroll');
+  pages.dataset.readingMode=readingMode; scroll.dataset.readingMode=readingMode;
+  for(const mode of ['side-by-side','overlay','interleaved','reflow'] as const) pages.classList.toggle(`reading-mode--${mode}`,readingMode===mode);
+  for(const button of readingModeButtons()) button.setAttribute('aria-pressed',String(button.dataset.readingMode===readingMode));
+  if(!(scroll.clientWidth>0)) return;
+  try {
+    // Publish the planner's own rail width and overlay opacity, so CSS and the planner agree.
+    const layout=readingLayout(readingContentWidth(),scroll.clientHeight);
+    const rail=layout.panes.find(pane=>pane.role==='source')?.width;
+    if(readingMode==='reflow'&&rail!==undefined) pages.style.setProperty('--reading-rail',`${rail}px`);
+    const opacity=layout.overlays[0]?.opacity;
+    if(layout.mode==='overlay'&&opacity!==undefined) pages.style.setProperty('--reading-overlay-opacity',String(opacity));
+  } catch { /* a transient layout publishes no sizes; CSS keeps its defaults */ }
+}
+/** The live reading position, taken from the real scroll offset instead of the debounced state. */
+function readingPositionNow(): { page:number; fraction:number } {
+  const rows=[...pageNodes.entries()].map(([page,element])=>({ page,top:element.offsetTop,height:element.offsetHeight }));
+  const scroll=$('reading-scroll');
+  if(!rows.length) return readingPosition;
+  return { page:pageForScroll(rows,scroll.scrollTop), fraction:readingFraction(rows,scroll.scrollTop) };
+}
+/**
+ * Switches how the original and the translation share the reading view.
+ *
+ * The page and the progress inside it are the invariant: positionAfterModeChange maps them into
+ * the mode being entered, and scrollToPage restores that place on the real rows. The choice is
+ * persisted with the other `mirror.` settings, so a reload puts the reader back in it.
+ */
+function setReadingMode(mode: ReadingMode,options: { restoreScroll?: boolean } = {}): void {
+  if(!isReadingMode(mode)) return;
+  const previous=readingMode;
+  const scroll=$('reading-scroll');
+  const position=readingPositionNow();
+  let change: ModeChange | null = null;
+  if(mode!==previous&&pdf&&scroll.clientWidth>0&&scroll.clientHeight>0) {
+    try {
+      change=positionAfterModeChange(previous,mode,{ page:position.page, progress:position.fraction },{
+        viewport: { width:readingContentWidth(), height:scroll.clientHeight },
+        pageAspect: currentPageAspect(),
+      });
+    } catch { change=null; /* a transient layout must not strand the reader */ }
+  }
+  readingMode=mode; saveReadingMode(mode); refreshReadingModeUi();
+  // The fit follows the pane the mode gives the page; a manual zoom stays where the reader left it.
+  if(fit==='width'||fit==='page') applyFit(fit); else applyScale();
+  if(change&&options.restoreScroll!==false) scrollToPage(change.page,change.progress);
+}
+
+function updateLibrary() {
+  $('library-count').textContent=String(imports.length); $('document-count').textContent=String(imports.length); $('documents').replaceChildren();
+  for(const item of imports) {
+    const card=document.createElement('button'); card.className='document-card';
+    card.innerHTML=`<div class="document-preview">${icon('file')}<div class="preview-lines"><i></i><i></i><i></i><i></i><i></i></div><span>PDF</span></div><div class="document-card-content"><strong></strong><span data-pages="${item.pages}">${t('pagesOpened',{pages:item.pages})}</span></div>`;
+    card.querySelector('strong')!.textContent=item.name;
+    card.addEventListener('click',()=>{ if(item.bytes) void load(item.bytes,item.name,'',item.id); else if(item.id) void libraryStore.get(item.id).then(record=>{ if(record) void load(new Uint8Array(record.bytes),record.name,'',record.id); }).catch(()=>undefined); });
+    $('documents').append(card);
+  }
+}
+async function hydrateLibrary() {
+  try {
+    await libraryStore.open();
+    const list=await libraryStore.list();
+    const known=new Set(imports.map(item=>item.id).filter(Boolean));
+    for(const record of list.sort((a,b)=>(b.lastOpenedAt??b.addedAt)-(a.lastOpenedAt??a.addedAt))) {
+      if(known.has(record.id)) continue;
+      imports.push({id:record.id,name:record.name,pages:record.pageCount??0,opened:new Date(record.lastOpenedAt??record.addedAt)});
+    }
+    updateLibrary();
+  } catch { /* IndexedDB unavailable: the session-only library still works */ }
+}
+void hydrateLibrary();
+const input=$<HTMLInputElement>('file-input');
+document.querySelectorAll('[data-open]').forEach(button=>button.addEventListener('click',()=>input.click()));
+input.addEventListener('change',async()=>{
+  const files=[...(input.files??[])];
+  input.value='';
+  // Import every selected file, then leave the first one open: loading in reverse
+  // order means the last load() call is the first file, instead of the last.
+  for(const file of [...files].reverse()) await load(new Uint8Array(await file.arrayBuffer()),file.name);
+});
+$('library-nav').addEventListener('click',()=>{ $('reader').hidden=true;$('research').hidden=true;$('library').hidden=false;researchNav.classList.remove('active');$('library-nav').classList.add('active');refreshBreadcrumb(); });
+researchNav.addEventListener('click',()=>{ $('reader').hidden=true;$('library').hidden=true;$('research').hidden=false;researchNav.classList.add('active');$('library-nav').classList.remove('active');refreshBreadcrumb(); });
+root.querySelector('.brand')!.addEventListener('click',event=>{event.preventDefault();$('library-nav').click();});
+window.addEventListener('dragover',event=>{event.preventDefault();root.classList.add('dragging');});
+window.addEventListener('dragleave',event=>{if(!event.relatedTarget)root.classList.remove('dragging');});
+window.addEventListener('drop',async event=>{
+  event.preventDefault(); root.classList.remove('dragging');
+  const files=[...(event.dataTransfer?.files??[])];
+  // Same rule as the file picker: import them all, keep the first one open.
+  for(const file of [...files].reverse()) await load(new Uint8Array(await file.arrayBuffer()),file.name);
+});
+$('prev-page').addEventListener('click',()=>scrollToPage(pageNumber-1));
+$('next-page').addEventListener('click',()=>scrollToPage(pageNumber+1));
+$<HTMLInputElement>('page-input').addEventListener('change',()=>{ if(!pdf) return; scrollToPage(clampPageNumber(Number($<HTMLInputElement>('page-input').value),pdf.numPages)); });
+$<HTMLInputElement>('page-input').addEventListener('keydown',event=>{ if(event.key==='Enter'){ event.preventDefault(); $<HTMLInputElement>('page-input').blur(); } });
+$('fit-width').addEventListener('click',()=>applyFit('width'));
+$('fit-page').addEventListener('click',()=>applyFit('page'));
+$('outline-toggle').addEventListener('click',()=>{ panelKind==='outline'?closePanel():openPanel('outline'); });
+$('search-toggle').addEventListener('click',()=>{ panelKind==='search'?(searchInput?.focus()):openPanel('search'); });
+intelligenceTrigger.addEventListener('click',()=>{ panelKind==='intelligence'?closePanel():openPanel('intelligence'); });
+$('thumbnails-toggle').addEventListener('click',()=>toggleThumbnails());
+$('rotate').addEventListener('click',()=>void rotateView());
+// The segmented reading-mode control: real buttons, so Enter and Space activate them and Tab
+// walks them in order. Arrow keys only move focus inside the group, as in a toolbar.
+$('reading-mode-switch').addEventListener('click',event=>{
+  const button=(event.target as HTMLElement|null)?.closest<HTMLButtonElement>('[data-reading-mode]');
+  const mode=button?.dataset.readingMode;
+  if(isReadingMode(mode)) setReadingMode(mode);
+});
+$('reading-mode-switch').addEventListener('keydown',event=>{
+  if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+  const buttons=readingModeButtons();
+  const index=buttons.indexOf(document.activeElement as HTMLButtonElement);
+  if(index<0) return;
+  event.preventDefault();
+  const last=buttons[buttons.length-1];
+  const next=event.key==='Home'?buttons[0]:event.key==='End'?last:buttons[(index+(event.key==='ArrowLeft'?-1:1)+buttons.length)%buttons.length];
+  next?.focus();
+});
+$('zoom-in').addEventListener('click',()=>{fit='actual';zoom=Math.min(3,zoom+.1);applyScale();});
+$('zoom-out').addEventListener('click',()=>{fit='actual';zoom=Math.max(.55,zoom-.1);applyScale();});
+$('pause').addEventListener('click',()=>{paused=!paused;if(paused){translationQueue.pause();progressStore?.pause('Paused by the reader.');}else{translationQueue.resume();progressStore?.resume('Resumed by the reader.');}refreshTransportLabels();status(paused?'statusPaused':'statusResumed');});
+$('retry').addEventListener('click',()=>{
+  // Retry must reach every failed block, not only the ones currently on screen:
+  // a failure the reader scrolled past used to stay dead forever.
+  errors.clear();
+  for(const page of rendered.values()) { paintMirror(page); schedulePage(page.model.number,0); }
+  for(const number of visible) schedulePage(number,0);
+  status('statusRetrying');
+});
+function exportedPages(): ExportedPage[] {
+  return [...rendered.values()].sort((a,b)=>a.model.number-b.model.number).map(page=>({
+    pageNumber:page.model.number,
+    blocks:page.model.blocks.map(block=>({source:block.text,target:translations.get(block.id)??'',direction:block.direction})),
+  })).filter(page=>page.blocks.some(block=>block.target));
+}
+function pageLabel(page: number) { return t('pageStatus',{page,total:pageTotal}); }
+async function printBilingual(): Promise<void> {
+  const pages=exportedPages();
+  if(!pages.length){status('exportEmpty',true);return;}
+  const title=documentTitle(activeTitle);
+  document.title=title;
+  status('exportPrintOpened');
+  await new Promise<void>(resolve=>setTimeout(resolve,0));
+  try {
+    await printHtml(toBilingualHtml(pages,{title,lang:settings.targetLanguage,pageLabel}));
+  } catch(error) {
+    status(error instanceof PrintTimeoutError?'exportPrintTimeout':error instanceof PrintUnavailableError?'exportPrintUnavailable':'exportPrintBlocked',true);
+  }
+}
+$('export-print').addEventListener('click',()=>{void printBilingual();});
+// A real PDF file, not a print sheet: each exported page keeps its own source size and the original
+// page image, and every translated block is drawn over the same rect the reader covers. Only pages
+// that already carry a translation are written, which matches the other export actions.
+async function exportPdfFile(): Promise<void> {
+  const pages=[...rendered.values()]
+    .filter(page=>page.model.blocks.some(block=>translations.has(block.id)))
+    .sort((left,right)=>left.model.number-right.model.number);
+  if(!pages.length){status('exportEmpty',true);return;}
+  const sources: PdfPageSource[]=[];
+  const scannedPagesWithTranslations=translatedOcrPageNumbers(pages.map(page=>({number:page.model.number,blocks:page.model.blocks.map(block=>({id:block.id,translated:translations.has(block.id)}))})));
+  for(const page of pages) {
+    let image=null;
+    try { image=await canvasToPng(page.original); } catch { image=null; }
+    sources.push({
+      number:page.model.number, width:page.model.width, height:page.model.height, image,
+      blocks:page.model.blocks.flatMap(block=>{
+        // The reader paints text over embedded text blocks only; OCR blocks stay callouts because
+        // their rects come from word boxes, so the export leaves those source pixels uncovered too.
+        if(block.id.startsWith('ocr-')) return [];
+        const text=translations.get(block.id);
+        return text?[{id:block.id,text,rect:block.rect,fontSize:block.fontSize,direction:block.direction,rotation:block.rotation}]:[];
+      }),
+    });
+  }
+  try {
+    const result=await buildPdf(sources,{title:documentTitle(activeTitle)});
+    // A fresh Uint8Array gives the Blob a plain ArrayBuffer and keeps the build result untouched.
+    const file=new Blob([new Uint8Array(result.bytes)],{type:'application/pdf'});
+    saveBlob(`${activeTitle.replace(/\.pdf$/i,'')}.translated.pdf`,file,{extension:'pdf'});
+    const size=Math.max(1,Math.round(result.bytes.length/1024));
+    const warnings=[...result.limitations];
+    if(scannedPagesWithTranslations.length) warnings.push(`Page(s) ${scannedPagesWithTranslations.join(', ')} have translated OCR text in this session, but the original scanned image remains and its translation was not written into the PDF.`);
+    if(warnings.length) statusText(`PDF saved (${size} KB, ${result.pageCount} pages), with limitations: ${warnings.join(' ')}`);
+    else status('exportPdfReady',false,{size,pages:result.pageCount});
+  } catch(error) { status('exportPdfFailed',true,{message:errorMessage(error)}); }
+}
+$('export-pdf').addEventListener('click',()=>{void exportPdfFile();});
+$('export-bilingual').addEventListener('click',()=>{
+  const pages=exportedPages();
+  if(!pages.length){status('exportEmpty',true);return;}
+  const text=toBilingualText(pages,{header:activeTitle,pageLabel,includeSourceOnly:true});
+  const blob=new Blob([text],{type:'text/plain;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const link=document.createElement('a'); link.href=url; link.download=`${activeTitle.replace(/\.pdf$/i,'')}.bilingual.txt`;
+  document.body.append(link); link.click(); link.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+  status('exportReady',false,{count:pages.length});
+});
+// Ctrl/Cmd+P prints the bilingual copy (source above, translation below) instead of
+// the app chrome. It only takes over when the reader is open with at least one
+// translated region; otherwise the browser's own print dialog is left alone.
+document.addEventListener('keydown',event=>{
+  if(!(event.ctrlKey||event.metaKey)||event.shiftKey||event.altKey) return;
+  if(event.key.toLowerCase()!=='p'||!pdf||$('reader').hidden) return;
+  if(!exportedPages().length) return;
+  event.preventDefault();
+  void printBilingual();
+});
+$('full').addEventListener('click',async()=>{
+  full=!full; refreshTransportLabels(); updateReaderProgress();
+  if(!full){
+    // Stop means stop: abort the batch in flight as well as the per-block queue.
+    batching=false; batchController?.abort(); batchController=null;
+    translationQueue.reset();
+    for(const number of visible) schedulePage(number,0);
+    return;
+  }
+  const generation=revision;
+  batching=true;
+  batchController=new AbortController();
+  try {
+    for(let number=1; pdf&&number<=pdf.numPages&&full&&generation===revision; number++) {
+      await ensurePage(number,5);
+      // The page is rendered now, so one batched request can cover its blocks; a
+      // provider that cannot batch falls back to the per-block queue inside the loop.
+      await translatePageInBatch(number);
+    }
+  } finally { batching=false; batchController=null; updateReaderProgress(); }
+});
+$<HTMLSelectElement>('target-language').addEventListener('change',()=>{const value=normalizeLanguageCode($<HTMLSelectElement>('target-language').value);if(value&&value!=='auto'){settings.targetLanguage=value;changeProfile();}});
+function changeProfile() {
+  profile++; requestController.abort(); requestController=new AbortController(); translationQueue.reset(); translations.clear(); errors.clear();
+  if (progressStore?.snapshot().settled) progressStore.retry('translate');
+  for (const page of rendered.values()) paintMirror(page);
+  for (const number of visible) schedulePage(number,0);
+  updateProvider(); updateReaderProgress(); status(canTranslate() ? 'statusSettingsApplied' : 'statusCloudNeeded');
+}
+
+function intelligenceSourceLabel(source: IntelligenceSourceKind): string {
+  return source === 'embedded-text' ? t('intelligenceEmbeddedText') : source === 'local-ocr' ? t('intelligenceLocalOcr') : t('intelligenceUnknownSource');
+}
+
+function intelligenceStateLabel(state: IntelligenceEvidenceState): string {
+  return state === 'evidence' ? t('intelligenceEvidence') : state === 'low-confidence' ? t('intelligenceLowConfidence') : t('intelligenceInvalid');
+}
+
+function intelligenceBlocks(): TextBlock[] {
+  return [...rendered.values()]
+    .sort((left, right) => left.model.number - right.model.number)
+    .flatMap(page => page.model.blocks);
+}
+
+function renderReviewQueue(container: HTMLElement, result: DocumentIntelligenceResult): void {
+  const section = document.createElement('section');
+  section.className = 'reader-review';
+  const heading = document.createElement('div');
+  heading.className = 'reader-review__heading';
+  const title = document.createElement('h3');
+  title.textContent = t('reviewQueue');
+  const items = reviewQueue?.list() ?? [];
+  const pending = items.filter(item => item.status === 'pending').length;
+  const count = document.createElement('span');
+  count.textContent = t('reviewPending', { count: pending });
+  heading.append(title, count);
+  section.append(heading);
+  if (!items.length) {
+    const empty = document.createElement('p');
+    empty.className = 'reader-review__empty';
+    empty.textContent = t('intelligenceEvidence');
+    section.append(empty);
+    container.append(section);
+    return;
+  }
+  const list = document.createElement('ul');
+  list.className = 'reader-review__list';
+  for (const item of items) {
+    const evidence = result.evidence.find(entry => entry.id === item.id);
+    const row = document.createElement('li');
+    row.className = `reader-review__item reader-review__item--${item.status}`;
+    row.dataset.reviewId = item.id;
+    const label = document.createElement('strong');
+    label.textContent = result.schema.find(field => field.id === item.id)?.label ?? item.id;
+    const value = document.createElement('p');
+    value.className = 'reader-review__value';
+    value.textContent = item.decision?.value ?? item.value;
+    const meta = document.createElement('p');
+    meta.className = 'reader-review__meta';
+    meta.textContent = `${t('intelligencePage', { page: item.page })} · ${evidence ? intelligenceSourceLabel(evidence.sourceKind) : t('intelligenceUnknownSource')}`;
+    const state = document.createElement('span');
+    state.className = 'reader-review__state';
+    state.textContent = item.status === 'pending'
+      ? evidence ? intelligenceStateLabel(evidence.state) : t('intelligenceLowConfidence')
+      : t('reviewDecision', { decision: item.status });
+    row.append(label, state, value, meta);
+    row.addEventListener('click', event => {
+      if ((event.target as HTMLElement).closest('button,input')) return;
+      scrollToPage(item.page);
+      highlight(item.blockId);
+    });
+    if (item.status === 'pending') {
+      const actions = document.createElement('div');
+      actions.className = 'reader-review__actions';
+      if (reviewEditingId === item.id) {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = item.value;
+        input.className = 'reader-review__edit';
+        input.setAttribute('aria-label', t('reviewEdit'));
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.textContent = t('reviewSave');
+        save.addEventListener('click', event => {
+          event.stopPropagation();
+          const outcome = reviewQueue?.edit(item.id, input.value);
+          if (outcome?.ok) { reviewEditingId = null; statusText(t('reviewDecision', { decision: 'edited' })); }
+          else statusText(t('intelligenceInvalid'), true);
+          renderPanel();
+        });
+        actions.append(input, save);
+      } else {
+        const accept = document.createElement('button');
+        accept.type = 'button'; accept.textContent = t('reviewAccept');
+        accept.addEventListener('click', event => { event.stopPropagation(); reviewQueue?.accept(item.id); statusText(t('reviewDecision', { decision: 'accepted' })); renderPanel(); });
+        const reject = document.createElement('button');
+        reject.type = 'button'; reject.textContent = t('reviewReject');
+        reject.addEventListener('click', event => { event.stopPropagation(); reviewQueue?.reject(item.id); statusText(t('reviewDecision', { decision: 'rejected' })); renderPanel(); });
+        const edit = document.createElement('button');
+        edit.type = 'button'; edit.textContent = t('reviewEdit');
+        edit.addEventListener('click', event => { event.stopPropagation(); reviewEditingId = item.id; renderPanel(); });
+        actions.append(accept, reject, edit);
+      }
+      row.append(actions);
+    }
+    list.append(row);
+  }
+  section.append(list);
+  container.append(section);
+}
+
+function renderIntelligenceResult(container: HTMLElement): void {
+  const result = intelligenceResult;
+  if (!result) return;
+  const summary = document.createElement('p');
+  summary.className = 'reader-intelligence__summary';
+  summary.textContent = t('intelligenceBlocks', { count: intelligenceBlocks().length });
+  container.append(summary);
+
+  if (result.evidence.length) {
+    const list = document.createElement('ul');
+    list.className = 'reader-intelligence__results';
+    for (const evidence of result.evidence) {
+      const item = document.createElement('li');
+      item.className = `reader-intelligence__result reader-intelligence__result--${evidence.state}`;
+      item.dataset.state = evidence.state;
+      const heading = document.createElement('div');
+      heading.className = 'reader-intelligence__result-heading';
+      const label = document.createElement('strong');
+      label.textContent = result.schema.find(field => field.id === evidence.id)?.label ?? evidence.id;
+      const state = document.createElement('span');
+      state.className = 'reader-intelligence__state';
+      state.textContent = intelligenceStateLabel(evidence.state);
+      heading.append(label, state);
+      const value = document.createElement('p');
+      value.className = 'reader-intelligence__value';
+      value.textContent = evidence.value;
+      const meta = document.createElement('p');
+      meta.className = 'reader-intelligence__meta';
+      meta.textContent = `${t('intelligencePage', { page: evidence.page })} · ${intelligenceSourceLabel(evidence.sourceKind)} · ${t('intelligencePageConfidence')}: ${Math.round(evidence.pageConfidence * 100)}%`;
+      const provenance = document.createElement('p');
+      provenance.className = 'reader-intelligence__provenance';
+      provenance.textContent = `${t('intelligenceProvenance')}: ${evidence.provenance}`;
+      item.append(heading, value, meta, provenance);
+      item.tabIndex = 0;
+      item.addEventListener('click', () => {
+        scrollToPage(evidence.page);
+        highlight(evidence.blockId);
+      });
+      item.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); item.click(); }
+      });
+      list.append(item);
+    }
+    container.append(list);
+  }
+
+  if (result.missing.length) {
+    const missing = document.createElement('div');
+    missing.className = 'reader-intelligence__missing';
+    const title = document.createElement('strong');
+    title.textContent = t('intelligenceMissing');
+    const list = document.createElement('ul');
+    for (const field of result.missing) {
+      const item = document.createElement('li');
+      item.textContent = field.label;
+      list.append(item);
+    }
+    missing.append(title, list);
+    container.append(missing);
+  }
+  renderReviewQueue(container, result);
+}
+
+function renderIntelligence(panel: HTMLElement): void {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'reader-intelligence';
+  const description = document.createElement('p');
+  description.className = 'reader-intelligence__description';
+  description.textContent = t('intelligenceDescription');
+  const form = document.createElement('form');
+  form.className = 'reader-intelligence__form';
+  const label = document.createElement('label');
+  label.textContent = t('intelligenceSchemaLabel');
+  const textarea = document.createElement('textarea');
+  textarea.rows = 8;
+  textarea.spellcheck = false;
+  textarea.value = intelligenceSchemaText;
+  textarea.placeholder = t('intelligenceSchemaPlaceholder');
+  textarea.setAttribute('aria-label', t('intelligenceSchemaLabel'));
+  textarea.addEventListener('input', () => { intelligenceSchemaText = textarea.value; });
+  label.append(textarea);
+  const actions = document.createElement('div');
+  actions.className = 'reader-intelligence__actions';
+  const sample = document.createElement('button');
+  sample.type = 'button';
+  sample.textContent = t('intelligenceSample');
+  sample.addEventListener('click', () => { intelligenceSchemaText = BUILT_IN_INTELLIGENCE_SCHEMA_JSON; renderPanel(); });
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.className = 'primary';
+  submit.textContent = t('intelligenceRun');
+  actions.append(sample, submit);
+  form.append(label, actions);
+  form.addEventListener('submit', event => { event.preventDefault(); intelligenceSchemaText = textarea.value; void runIntelligence(); });
+  wrapper.append(description, form);
+
+  const statusLine = document.createElement('p');
+  statusLine.className = 'reader-intelligence__status';
+  statusLine.setAttribute('role', 'status');
+  statusLine.setAttribute('aria-live', 'polite');
+  if (intelligenceState === 'loading') statusLine.textContent = t('intelligenceLoading');
+  else if (intelligenceState === 'error') statusLine.textContent = t('intelligenceError', { message: intelligenceError });
+  else if (intelligenceState === 'empty') statusLine.textContent = t('intelligenceEmpty');
+  if (statusLine.textContent) wrapper.append(statusLine);
+  if (intelligenceState === 'ready' || intelligenceState === 'empty') renderIntelligenceResult(wrapper);
+  panel.append(wrapper);
+}
+
+async function runIntelligence(): Promise<void> {
+  if (!pdf) {
+    intelligenceResult = null;
+    intelligenceState = 'empty';
+    intelligenceError = '';
+    renderPanel();
+    return;
+  }
+  intelligenceState = 'loading';
+  intelligenceError = '';
+  renderPanel();
+  try {
+    await ensurePage(pageNumber, -10);
+    const result = extractDocumentIntelligence(intelligenceBlocks(), [...intelligencePageSources.values()], JSON.parse(intelligenceSchemaText));
+    intelligenceResult = result;
+    reviewQueue = new ReviewQueue({ schema: result.schema });
+    reviewQueue.fromExtraction(result.evidence, 0.75);
+    reviewEditingId = null;
+    intelligenceState = result.evidence.length ? 'ready' : 'empty';
+  } catch (error) {
+    intelligenceResult = null;
+    intelligenceState = 'error';
+    intelligenceError = errorMessage(error);
+  }
+  renderPanel();
+}
+
+function renderPanel() {
+  const panel=$('reader-panel'); panel.replaceChildren();
+  if(!panelKind) { panel.hidden=true; intelligenceTrigger.setAttribute('aria-expanded','false'); $('outline-toggle').setAttribute('aria-expanded','false'); $('search-toggle').setAttribute('aria-expanded','false'); return; }
+  panel.hidden=false;
+  const header=document.createElement('div'); header.className='reader-panel__header';
+  const title=document.createElement('h2'); title.className='reader-panel__title'; title.textContent=t(panelKind==='outline'?'outlineToggle':panelKind==='search'?'searchToggle':'intelligenceTitle');
+  const close=document.createElement('button'); close.type='button'; close.className='reader-panel__close'; close.textContent='×'; close.setAttribute('aria-label',t('closePanel')); close.addEventListener('click',()=>closePanel());
+  header.append(title,close); panel.append(header);
+  if(panelKind==='outline') renderOutline(panel); else if(panelKind==='search') renderSearch(panel); else renderIntelligence(panel);
+  intelligenceTrigger.setAttribute('aria-expanded',String(panelKind==='intelligence'));
+  $('outline-toggle').setAttribute('aria-expanded',String(panelKind==='outline'));
+  $('search-toggle').setAttribute('aria-expanded',String(panelKind==='search'));
+}
+function openPanel(kind: 'outline'|'search'|'intelligence') {
+  panelKind=kind; renderPanel();
+  if(kind==='search') { searchInput?.focus(); if(lastSearchQuery.trim()) void runSearch(lastSearchQuery); }
+  else if(kind==='intelligence') { void runIntelligence(); }
+  else if(outlineReady) { const first=panelButtons()[0]; if(first) first.focus(); else $('outline-toggle').focus(); }
+  else $('outline-toggle').focus();
+  if(kind==='outline'&&!outlineReady&&!outlineLoading) void prepareOutline();
+}
+function closePanel() {
+  if(!panelKind) { toggleThumbnails(false); return; }
+  const trigger=panelKind==='search'?$('search-toggle'):panelKind==='intelligence'?intelligenceTrigger:$('outline-toggle');
+  panelKind=null; searchController?.abort(); searchController=null; clearTimeout(searchTimer); renderPanel(); trigger.focus();
+}
+function panelButtons() { return [...$('reader-panel').querySelectorAll<HTMLButtonElement>('.reader-outline__item:not([disabled])')]; }
+async function prepareOutline() {
+  if(!pdf||outlineLoading) return;
+  const doc=pdf, generation=revision; outlineLoading=true;
+  try { const entries=await getOutline(doc); if(generation!==revision||pdf!==doc) return; outlineEntries=entries; outlineReady=true; if(panelKind==='outline') focusOutline(); }
+  catch { if(generation===revision){ outlineEntries=[]; outlineReady=true; if(panelKind==='outline') focusOutline(); } }
+  finally { if(generation===revision) outlineLoading=false; }
+}
+function focusOutline() {
+  renderPanel(); const first=panelButtons()[0]; if(first) first.focus();
+}
+function renderOutline(panel: HTMLElement) {
+  if(!outlineReady) { const loading=document.createElement('p'); loading.className='reader-panel__empty'; loading.textContent=t('outlineLoading'); panel.append(loading); return; }
+  if(!outlineEntries.length) { const empty=document.createElement('p'); empty.className='reader-panel__empty'; empty.textContent=t('outlineEmpty'); panel.append(empty); return; }
+  const list=document.createElement('ul'); list.className='reader-outline';
+  for(const entry of outlineEntries) {
+    const item=document.createElement('li');
+    if(entry.page>0) {
+      const button=document.createElement('button'); button.type='button'; button.className='reader-outline__item'; button.dataset.page=String(entry.page); button.style.setProperty('--outline-depth',String(entry.depth));
+      const label=document.createElement('span'); label.className='reader-outline__label'; label.textContent=entry.title;
+      const page=document.createElement('span'); page.className='reader-outline__page'; page.textContent=String(entry.page);
+      button.append(label,page); button.addEventListener('click',()=>{ scrollToPage(entry.page); flashPage(entry.page); });
+      if(entry.page===pageNumber) button.setAttribute('aria-current','page');
+      item.append(button);
+    } else {
+      const label=document.createElement('div'); label.className='reader-outline__item'; label.style.setProperty('--outline-depth',String(entry.depth));
+      const text=document.createElement('span'); text.className='reader-outline__label'; text.textContent=entry.title; label.append(text); item.append(label);
+    }
+    list.append(item);
+  }
+  panel.append(list);
+}
+function renderSearch(panel: HTMLElement) {
+  const wrapper=document.createElement('div'); wrapper.className='reader-search';
+  const field=document.createElement('div'); field.className='reader-search__field';
+  const fieldInput=document.createElement('input'); fieldInput.type='search'; fieldInput.value=lastSearchQuery;
+  fieldInput.placeholder=t('searchPlaceholder'); fieldInput.setAttribute('aria-label',t('searchPlaceholder'));
+  fieldInput.addEventListener('input',scheduleSearch); field.append(fieldInput);
+  const hint=document.createElement('p'); hint.className='reader-search__hint'; hint.textContent=t('searchHint');
+  const statusLine=document.createElement('p'); statusLine.className='reader-search__status'; statusLine.setAttribute('role','status'); statusLine.setAttribute('aria-live','polite');
+  const list=document.createElement('ul'); list.className='reader-search__results';
+  wrapper.append(field,hint,statusLine,list); panel.append(wrapper);
+  searchInput=fieldInput; searchStatus=statusLine; searchList=list;
+  if(!lastSearchQuery.trim()) statusLine.textContent=t('searchHint');
+}
+function scheduleSearch() {
+  lastSearchQuery=searchInput?.value??''; clearTimeout(searchTimer);
+  if(searchStatus) searchStatus.textContent=lastSearchQuery.trim()?t('searchLoading'):t('searchHint');
+  if(searchList) searchList.replaceChildren();
+  if(!lastSearchQuery.trim()) { searchController?.abort(); searchController=null; return; }
+  searchTimer=setTimeout(()=>void runSearch(lastSearchQuery),250);
+}
+async function runSearch(query: string) {
+  const doc=pdf; if(!doc||!query.trim()) return;
+  searchController?.abort(); const controller=new AbortController(); searchController=controller;
+  const generation=revision;
+  try {
+    const matches=await searchAllPages(doc,query,{limit:50,signal:controller.signal});
+    if(generation!==revision||pdf!==doc||controller.signal.aborted||query!==lastSearchQuery) return;
+    if(searchStatus) searchStatus.textContent=matches.length?t('searchResults',{count:matches.length}):t('searchEmpty');
+    renderSearchResults(matches);
+  } catch(error) {
+    if(isAbortError(error)||controller.signal.aborted) return;
+    if(searchStatus) searchStatus.textContent=t('searchEmpty');
+    statusText(userMessage(error),true);
+  }
+}
+function renderSearchResults(matches: readonly SearchMatch[]) {
+  if(!searchList) return;
+  searchList.replaceChildren();
+  for(const match of matches) {
+    const item=document.createElement('li');
+    const button=document.createElement('button'); button.type='button'; button.className='reader-search__result';
+    const meta=document.createElement('span'); meta.className='reader-search__meta'; meta.textContent=t('searchResultPage',{page:match.page});
+    const snippet=document.createElement('span'); snippet.textContent=match.snippet;
+    button.append(meta,snippet); button.addEventListener('click',()=>{ scrollToPage(match.page); flashPage(match.page); });
+    item.append(button); searchList.append(item);
+  }
+}
+function buildThumbnails() {
+  const strip=$('thumbnails'); strip.replaceChildren(); thumbObserver?.disconnect(); thumbObserver=null;
+  if(!pdf) return;
+  const doc=pdf;
+  thumbObserver=new IntersectionObserver(entries=>{
+    for(const entry of entries) {
+      if(!entry.isIntersecting) continue;
+      const button=entry.target as HTMLElement; thumbObserver?.unobserve(button); void loadThumbnail(doc,Number(button.dataset.page),button);
+    }
+  },{root:strip,rootMargin:'240px'});
+  for(let number=1;number<=doc.numPages;number++) {
+    const button=document.createElement('button'); button.type='button'; button.className='reader-thumb'; button.dataset.page=String(number); button.setAttribute('aria-label',t('searchResultPage',{page:number}));
+    const skeleton=document.createElement('div'); skeleton.className='reader-thumb__skeleton';
+    const label=document.createElement('span'); label.textContent=String(number);
+    button.append(skeleton,label);
+    button.addEventListener('click',()=>{ scrollToPage(number); flashPage(number); });
+    strip.append(button); thumbObserver.observe(button);
+  }
+  updateCurrentMarkers();
+}
+async function loadThumbnail(doc: PDFDocumentProxy,number: number,button: HTMLElement) {
+  try {
+    const thumb=await renderThumbnail(doc,number,160);
+    if(pdf!==doc||!button.isConnected) return;
+    thumb.canvas.className='reader-thumb__canvas'; button.querySelector('.reader-thumb__skeleton')?.remove(); button.prepend(thumb.canvas);
+  } catch { return; }
+}
+function toggleThumbnails(force?: boolean) {
+  const strip=$('thumbnails'); const show=force??strip.hidden;
+  strip.hidden=!show; $('thumbnails-toggle').setAttribute('aria-expanded',String(show));
+  if(show) { buildThumbnails(); }
+  else if(force===false) { thumbObserver?.disconnect(); thumbObserver=null; strip.replaceChildren(); }
+  else { thumbObserver?.disconnect(); thumbObserver=null; }
+}
+async function rotateView() {
+  if(!pdf||rotating) return;
+  const current=pdf; revision++; const generation=revision;
+  rotating=true; profile++; requestController.abort(); requestController=new AbortController(); translationQueue.reset(); renderQueue.reset();
+  rotation=nextRotation(rotation,90); const previous=new Map(rendered); rendered.clear(); updateRowRatios();
+  try {
+    for(const [number,result] of previous) {
+      if(generation!==revision||pdf!==current) return;
+      const texts=new Map<string,string>(), failures=new Map<string,string>();
+      for(const block of result.model.blocks) { const text=translations.get(block.id); if(text) texts.set(block.text,text); const failure=errors.get(block.id); if(failure) failures.set(block.text,failure); }
+      for(const id of [...translations.keys()]) if(id.startsWith(`p${number}-r`)) translations.delete(id);
+      for(const id of [...errors.keys()]) if(id.startsWith(`p${number}-r`)) errors.delete(id);
+      let fresh: RenderedPage;
+      try { fresh=await renderPage(current,number,{rotation}); } catch { continue; }
+      for(const block of fresh.model.blocks) { const text=texts.get(block.text); if(text) translations.set(block.id,text); const failure=failures.get(block.text); if(failure) errors.set(block.id,failure); }
+      rendered.set(number,fresh); mountPage(fresh);
+    }
+  } finally {
+    rotating=false;
+    if(generation===revision&&pdf===current) {
+      if(fit==='width'||fit==='page') applyFit(fit); else applyScale();
+      for(const number of visible) void ensurePage(number,0);
+      status('statusRotated',false,{degrees:rotation});
+      scheduleSave();
+      if(!$('thumbnails').hidden) buildThumbnails();
+    }
+  }
+}
+
+const dialog=$<HTMLDialogElement>('settings-dialog');const form=$<HTMLFormElement>('settings-form');
+function setFormValue(name: string,value: string) { const field=form.elements.namedItem(name); if(field instanceof HTMLInputElement||field instanceof HTMLSelectElement||field instanceof HTMLTextAreaElement) field.value=value; }
+function syncToolbarTarget() { const select=$<HTMLSelectElement>('target-language'); if([...select.options].some(option=>option.value===settings.targetLanguage)) select.value=settings.targetLanguage; }
+function renderGlossaryStatus() {
+  const element=$('glossary-status');
+  if(!glossaryResult) { element.textContent=''; return; }
+  const first=glossaryResult.issues[0];
+  element.textContent=first
+    ? t('glossaryAcceptedIssue',{count:glossaryResult.entries.length,line:first.line,message:t(GLOSSARY_ISSUE_KEY[first.code])})
+    : t('glossaryAccepted',{count:glossaryResult.entries.length});
+}
+function fillSettingsForm() {
+  setFormValue('provider',settings.provider); setFormValue('endpoint',settings.endpoint); setFormValue('model',settings.model);
+  setFormValue('apiKey',settings.apiKey); setFormValue('sourceLanguage',normalizeLanguageCode(settings.sourceLanguage)); setFormValue('targetLanguage',settings.targetLanguage);
+  setFormValue('glossary',Object.entries(settings.glossary).map(([source,target])=>`${source} = ${target}`).join('\n'));
+  const cloud=form.elements.namedItem('allowCloud'); if(cloud instanceof HTMLInputElement) cloud.checked=settings.allowCloud;
+  glossaryResult={entries:Object.entries(settings.glossary).map(([source,target])=>({source,target})),issues:[]}; renderGlossaryStatus();
+}
+$('settings-open').addEventListener('click',()=>{fillSettingsForm();showDialog(dialog,$('settings-open'));});
+$('settings-close').addEventListener('click',()=>dialog.close());
+form.addEventListener('submit',event=>{
+  event.preventDefault(); const data=new FormData(form);
+  const parsed=parseGlossary(String(data.get('glossary')??'')); glossaryResult=parsed; renderGlossaryStatus();
+  const issues=parsed.issues.length;
+  // A broken glossary line must never swallow the other settings: persist provider,
+  // endpoint, model and languages, keep the previous glossary, and say what failed.
+  const glossary=issues?settings.glossary:Object.fromEntries(parsed.entries.map(entry=>[entry.source,entry.target]));
+  settings={...settings,provider:data.get('provider') as TranslationSettings['provider'],endpoint:String(data.get('endpoint')),model:String(data.get('model')),apiKey:String(data.get('apiKey')),sourceLanguage:normalizeLanguageCode(String(data.get('sourceLanguage')??'auto')),targetLanguage:normalizeLanguageCode(String(data.get('targetLanguage')??'vi')),glossary,allowCloud:data.has('allowCloud')};
+  syncToolbarTarget(); updateProvider(); changeProfile();
+  if(issues){ status('settingsSavedGlossarySkipped',true,{count:issues}); return; }
+  dialog.close();
+  if(parsed.entries.length&&canTranslate()) status('statusGlossaryApplied',false,{count:parsed.entries.length});});
+syncToolbarTarget();
+// The extension popup can choose the target language before this reader opens; honour it
+// only when it is a supported code. Outside the extension host chrome.storage is absent
+// and this block is a no-op.
+void (async () => {
+  try {
+    const storage = (globalThis as { chrome?: { storage?: { local?: { get(key: string): Promise<Record<string, unknown>> } } } }).chrome?.storage?.local;
+    if (!storage) return;
+    const stored = (await storage.get('mirror:targetLanguage'))['mirror:targetLanguage'];
+    const target = SUPPORTED_TARGETS.find(option => option.code === stored);
+    if (!target || target.code === settings.targetLanguage) return;
+    settings.targetLanguage = target.code;
+    syncToolbarTarget(); updateProvider();
+  } catch { /* not running inside the extension host */ }
+})();
+$('selection-close').addEventListener('click',()=>{$<HTMLDialogElement>('selection-dialog').close();selected=null;highlight('');});
+$('selection-translate').addEventListener('click',()=>{if(selected){errors.delete(selected.id);if(!canTranslate()){status('statusCloudFirst',true);return;}scheduleBlock(selected,-100);}});
+$('reset-split').addEventListener('click',()=>{split=50;applyScale();});
+let drag=false;
+$('pages').addEventListener('pointerdown',event=>{if((event.target as HTMLElement).classList.contains('splitter')){drag=true;(event.target as HTMLElement).setPointerCapture(event.pointerId);event.preventDefault();}});
+$('pages').addEventListener('pointermove',event=>{if(drag){const rect=$('pages').getBoundingClientRect();split=Math.max(25,Math.min(75,(event.clientX-rect.left)/rect.width*100));applyScale();}});
+$('pages').addEventListener('pointerup',()=>{if(drag&&(fit==='width'||fit==='page'))applyFit(fit);drag=false;});
+$('pages').addEventListener('keydown',event=>{if((event.target as HTMLElement).classList.contains('splitter')&&['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();split=Math.max(25,Math.min(75,split+(event.key==='ArrowLeft'?-2:2)));applyScale();(event.target as HTMLElement).setAttribute('aria-valuenow',String(split));}});
+const viewRelay = new ViewRelayGuard();
+for (const event of ['wheel', 'pointerdown', 'touchstart']) $('reading-scroll').addEventListener(event, () => viewRelay.userInput(), { capture: true, passive: true });
+window.addEventListener('keydown', event => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key) && !['INPUT', 'TEXTAREA'].includes((event.target as HTMLElement)?.tagName)) viewRelay.userInput(); });
+$('reading-scroll').addEventListener('scroll',()=>{
+  clearTimeout(scrollTimer);
+  scrollTimer=setTimeout(()=>{
+    if(!pdf) return;
+    const scroll=$('reading-scroll');
+    const rows=[...pageNodes.entries()].map(([page,element])=>({page,top:element.offsetTop,height:element.offsetHeight}));
+    pageNumber=pageForScroll(rows,scroll.scrollTop);
+    const fraction=readingFraction(rows,scroll.scrollTop);
+    readingPosition={page:pageNumber,fraction}; refreshPageStatus(); scheduleSave();
+    if(viewRelay.canRelay()) relayView(pageNumber,fraction,zoom);
+  },120);
+});
+listenForLinkedView(state => {
+  const row = pageNodes.get(state.page);
+  if (!row) return;
+  viewRelay.applyExternal();
+  zoom = Math.max(.55, Math.min(3, state.zoom)); applyScale();
+  $('reading-scroll').scrollTop = row.offsetTop + row.offsetHeight * state.fraction;
+});
+function handleIntent(event: KeyboardEvent) {
+  if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'k') {
+    event.preventDefault();
+    if (!commandPaletteDialog.open) openCommandPalette();
+    return;
+  }
+  if(document.querySelector('dialog[open]')) return;
+  if((event.ctrlKey||event.metaKey)&&!event.altKey&&event.key.toLowerCase()==='o') { event.preventDefault(); input.click(); return; }
+  if($('reader').hidden) return;
+  if(event.key==='Escape'&&panelKind) { event.preventDefault(); closePanel(); return; }
+  const intent=keyboardIntent(event);
+  if(intent==='none') return;
+  event.preventDefault();
+  switch(intent) {
+    case 'next-page': scrollToPage(pageNumber+1); break;
+    case 'prev-page': scrollToPage(pageNumber-1); break;
+    case 'first-page': scrollToPage(1); break;
+    case 'last-page': if(pdf) scrollToPage(pdf.numPages); break;
+    case 'zoom-in': fit='actual'; zoom=Math.min(3,zoom+.1); applyScale(); break;
+    case 'zoom-out': fit='actual'; zoom=Math.max(.55,zoom-.1); applyScale(); break;
+    case 'fit-width': applyFit('width'); break;
+    case 'fit-page': applyFit('page'); break;
+    case 'search': if(panelKind==='search') searchInput?.focus(); else openPanel('search'); break;
+    case 'outline': if(panelKind==='outline') panelButtons()[0]?.focus(); else openPanel('outline'); break;
+    case 'escape': if(panelKind) closePanel(); else toggleThumbnails(false); break;
+    default: break;
+  }
+}
+window.addEventListener('keydown',handleIntent);
+window.addEventListener('beforeunload',()=>{captureReader?.destroy();saveReadingNow();requestController.abort();translationQueue.reset();renderQueue.reset();});
+refreshReadingModeUi();
+applyScale();
+refreshBreadcrumb(); refreshPageStatus(); refreshTransportLabels(); updateProvider();
+subscribe(() => {
+  apply(root);
+  refreshTransportLabels();
+  refreshBreadcrumb();
+  refreshPageStatus();
+  refreshLibraryLabels();
+  refreshPageLoaders();
+  refreshRegionLabels();
+  renderSelectedTranslation();
+  renderGlossaryStatus();
+  renderDetectedLanguage();
+  renderStatus();
+  updateProvider();
+  if(panelKind) renderPanel();
+  if(panelKind==='search'&&lastSearchQuery.trim()) void runSearch(lastSearchQuery);
+  if(!$('thumbnails').hidden) updateCurrentMarkers();
+});
+document.addEventListener('click', event => {
+  const button=(event.target as HTMLElement).closest<HTMLButtonElement>('[data-locale]');
+  if(button?.dataset.locale) setLocale(button.dataset.locale as Locale);
+});
+if (isCaptureRequest(location.search)) {
+  const host=document.createElement('div'); host.id='capture-root'; document.body.append(host);
+  root.setAttribute('hidden','');
+  void mountCaptureReader({
+    root: host,
+    signal: requestController.signal,
+    translate: async text => (await service.translate({ text, settings: { ...settings }, signal: requestController.signal })).text,
+    onBack: () => window.location.assign(window.location.pathname),
+  }).then(handle => { captureReader = handle; });
+}
+
+const fileUrl=new URLSearchParams(location.search).get('file');
+if(fileUrl) {
+  status('statusAcquiring');
+  void fetchPdf(fileUrl).then(bytes=>{let name='Source document.pdf';try{name=decodeURIComponent(new URL(fileUrl).pathname.split('/').pop()||name);}catch{}return load(bytes,name,fileUrl);}).catch(error=>status('statusSourceError',true,{message:errorMessage(error)}));
+}

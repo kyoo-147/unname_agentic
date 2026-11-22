@@ -1,6 +1,8 @@
 # Chức năng và trạng thái xác minh
 
-Cập nhật: **2026-11-22**, tích hợp tại HEAD `df70a41` (`df70a41831d775cee1a1a4cf30d6104e86d976ff`) trên nền `f5ccdd1`. Các mục cũ bên dưới là inventory lịch sử; checkpoint hiện tại chỉ ghi bằng chứng đã chạy lại hoặc được truy nguyên từ commit/worker report, không suy diễn thành kiểm thử native hay E2E hệ điều hành.
+Cập nhật: **2026-11-22**, tích hợp tại HEAD `df70a41` (`df70a41831d775cee1a1a4cf30d6104e86d976ff`) trên nền `f5ccdd1`. `native-shell` là bề mặt sản phẩm; `dist/extension` là artifact của Chrome extension. Extension build output không chứng minh native package/release, và tài liệu này không tuyên bố native/browser E2E hoặc release readiness.
+
+Các mục cũ bên dưới là inventory lịch sử; checkpoint hiện tại chỉ ghi bằng chứng đã chạy lại hoặc được truy nguyên từ commit/worker report, không suy diễn thành kiểm thử native hay E2E hệ điều hành.
 
 Ký hiệu: ✅ có mã **và** có bằng chứng chạy · 🟡 có mã nhưng thiếu test/UX hoặc còn giới hạn đáng kể · ⬜ chưa có.
 
@@ -60,7 +62,9 @@ The table below records the older release checkpoint and does not replace the fi
 
 ---
 
-## 1. Web reader — đọc và dịch PDF trong trình duyệt (30)
+## 1. Web reader lịch sử — đọc và dịch PDF trong trình duyệt (30)
+
+Inventory này mô tả web reader cũ, không phải bề mặt sản phẩm hiện tại.
 
 | | Chức năng | | Ghi chú |
 |---|---|---|---|
@@ -158,7 +162,7 @@ The table below records the older release checkpoint and does not replace the fi
 | D09 | e2e Chromium | ✅ | 49 test / 15 file |
 | D10 | Test native | ✅ | 63 pass / 1 ignored |
 | D11 | CI GitHub Actions | 🟡 | đã kiểm lại **trên repo public**: workflow tạo run, cả 2 job bị GitHub từ chối "account is locked due to a billing issue" — không sửa được bằng code, chỉ cần mở billing |
-| D12 | LICENSE + third-party notice | ✅ | `public/third-party/` (NOTICE + LICENSE-pdfjs 9.9 KB + LICENSE-lucide) được copy vào cả `dist/web` và `dist/extension` |
+| D12 | LICENSE + third-party notice | ✅ | Lịch sử: notices từ `extension/viewer/public/third-party/` được copy vào `dist/extension`; artifact extension không phải bằng chứng package/release native. |
 | D13 | Tài liệu kiến trúc/quyết định | ✅ | 25 quyết định có ngày + docs/ |
 | D14 | Feature flag / telemetry / crash report | ✅ | **crash report cục bộ, không gửi mạng**: panic hook ghi `<data>/logs/crash-<unix>.txt` (version, os, location, message, 40 dòng log cuối), giữ 10 file; 3 test + 1 lần panic thật |
 | D15 | Repo, remote, push | ✅ | `unname_agentic` public, HEAD trùng origin |
@@ -179,11 +183,16 @@ The table below records the older release checkpoint and does not replace the fi
 ## Lệnh xác minh
 
 ```powershell
-pnpm test ; pnpm typecheck ; pnpm build ; pnpm exec playwright test
+pnpm test:extension
+pnpm typecheck
+pnpm build                 # typecheck + extension artifact at dist/extension
 powershell -NoProfile -File scripts/build-shell.ps1 -Test
 node scripts/check-committed-imports.mjs
 powershell -NoProfile -File scripts/verify-release.ps1
 ```
+
+`dist/extension` is only the Chrome extension artifact. It does not establish native package or
+release readiness; native-shell tests/package verification are separate.
 
 ## Đã làm xong trong đợt này (2026-11-20)
 
