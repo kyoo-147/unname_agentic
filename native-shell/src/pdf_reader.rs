@@ -1,6 +1,7 @@
 mod document;
 mod export;
 mod geometry;
+pub mod ocr_markup;
 mod rotate;
 mod scrollbar;
 mod state;
