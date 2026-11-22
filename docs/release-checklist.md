@@ -100,7 +100,8 @@ The runner checks that a positive count was provided but cannot independently au
 
 ## Current known gaps
 
-The current Chrome/native E2E, native build/package, trusted signing, Chrome registry/native-host installation, CI and independent PDF-reader checks are unverified.
-Do not infer native integration from extension module tests or from a previous branch's receipt.
-Translated-PDF writing remains dependency-gated until an end-to-end output is verified in independent readers.
+The native release build, native messaging host build, commit-bound package and checksum/archive verification were rerun at HEAD `c3a5de5` and pass locally. This establishes build and package integrity only.
+The current Chrome/native E2E, trusted signing, Chrome registry/native-host installation, CI and independent PDF-reader checks remain unverified.
+Do not infer runtime acceptance from extension module tests, package integrity, or a previous branch's receipt.
+Translated-PDF writing is mounted in the desktop Save As flow, but remains quality-gated until an end-to-end output is verified in independent readers.
 K10 shared workspace/per-document RBAC remains deferred until deployment and identity scope are approved.

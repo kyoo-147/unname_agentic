@@ -1,34 +1,28 @@
 # Chức năng và trạng thái xác minh
 
-Cập nhật: **2026-11-22**, tích hợp tại HEAD `df70a41` (`df70a41831d775cee1a1a4cf30d6104e86d976ff`) trên nền `f5ccdd1`. `native-shell` là bề mặt sản phẩm; `dist/extension` là artifact của Chrome extension. Extension build output không chứng minh native package/release, và tài liệu này không tuyên bố native/browser E2E hoặc release readiness.
-
-Các mục cũ bên dưới là inventory lịch sử; checkpoint hiện tại chỉ ghi bằng chứng đã chạy lại hoặc được truy nguyên từ commit/worker report, không suy diễn thành kiểm thử native hay E2E hệ điều hành.
-
-Ký hiệu: ✅ có mã **và** có bằng chứng chạy · 🟡 có mã nhưng thiếu test/UX hoặc còn giới hạn đáng kể · ⬜ chưa có.
-
-Số đo **lịch sử** của checkpoint trước là **3.023 unit test web** và **51 E2E được khai báo**; đây không phải bằng chứng tại final HEAD. Bằng chứng final HEAD của Wave 3 nằm ở mục dưới; không suy diễn từ số đo lịch sử sang full suite hoặc E2E hiện tại.
-
-## Wave 3 final evidence (2026-11-22, HEAD `df70a41`)
-
-| Nhóm / cổng | Bằng chứng tại final HEAD | Trạng thái |
-|---|---|---|
-| OCR | 22 focused tests pass | ✅ local |
-| RAG | 105 focused tests pass | ✅ local |
-| Quality gate | 11 focused tests pass | ✅ local |
-| Automation / CLI | 69 focused tests pass | ✅ local |
-| Research | 176 focused tests pass | ✅ worker evidence |
-| Bridge | 48 focused tests pass | ✅ worker evidence |
-| Typecheck | final `pnpm typecheck` pass | ✅ local |
-| Committed imports | 401 checks pass | ✅ local |
-| Artifact gate | current `ArtifactsOnly` 3/3 pass | ✅ local |
-
-Final HEAD limits and blockers:
-
-- No full suite, build, or Playwright rerun was performed at final HEAD.
-- Native package dry-run is blocked by a missing GPUI executable and native messaging host, with about 690 MB free on `D:`.
-- No Chrome native registry key or host is available for the real Chrome↔native path.
-- PR 34 latest CI run `44982321053` has the web job failing with zero steps; the native job was skipped.
-- Release acceptance remains open and is not claimed.
+-Cập nhật: **2026-11-22**, tích hợp tại HEAD `c3a5de5` (`c3a5de51093f5276f0fdcff28d95fc709d6accd3`). `native-shell` là bề mặt sản phẩm; `dist/extension` là artifact duy nhất của Chrome extension. `dist/web` không phải artifact được chấp nhận.
+-
+-## Bằng chứng hiện tại tại HEAD `c3a5de5`
+-
+-| Nhóm / cổng | Bằng chứng chạy lại | Trạng thái |
+-|---|---|---|
+-| Native unit tests | `cargo test`: 180 pass, 2 ignored | ✅ local |
+-| Native release build | `cargo build --release -j 1` với Windows SDK `rc.exe` | ✅ local |
+-| Native messaging host | `cargo build --release --manifest-path desktop/Cargo.toml --bin pdf-workspace-host -j 1` | ✅ local build |
+-| Extension | 170 files, 3,092 tests pass; typecheck/build pass | ✅ local |
+-| UI string gate | 37 native files, 0 literals cần sửa | ✅ local |
+-| Committed imports | 391 files resolve | ✅ local |
+-| Native package | `scripts/package-native.ps1` + `verify-release.ps1 -ArtifactsOnly -RequireNativePackage`; 1,013 package files | ✅ integrity/provenance |
+-| Desktop PDF runtime | `desktop/tests/pdf_runtime.rs`: 1 pass; fixture path points to extension fixture | ✅ local |
+-| Native desktop E2E | `--list`/`--mock-contract` pass; `--acceptance` fails closed | 🟡 blocked |
+-
+-Native document-intelligence wiring is now mounted in the visible desktop surface: local lexical RAG/citation chat navigation, persisted local research cards and RIS import/export, local OCR/markup derivation with explicit partial status, and translated-PDF Save As with source-hash/page-geometry checks. The translated PDF remains a new text-only artifact and does not preserve source artwork or embed Helvetica.
+-
+-Remaining release blockers are explicit: real Chrome/native-host E2E and OS desktop assertions lack `CHROME_PATH`, authored FDL assertions, registered host/origin and independent PDF-reader review; PR #35 CI is blocked/unstable; signing and registry verification remain unconfigured; K10/RBAC remains deferred. These facts are not inferred from unit tests or package integrity.
+-
+-Các mục cũ bên dưới là inventory lịch sử; checkpoint hiện tại chỉ ghi bằng chứng đã chạy lại, không suy diễn thành kiểm thử native/browser E2E hoặc release acceptance.
+-
+-Ký hiệu: ✅ có mã **và** có bằng chứng chạy · 🟡 có mã nhưng thiếu test/UX hoặc còn giới hạn đáng kể · ⬜ chưa có.
 
 
 ## Wave 3 historical integration checkpoint (2026-11-21)
@@ -171,14 +165,14 @@ Inventory này mô tả web reader cũ, không phải bề mặt sản phẩm hi
 
 ## Giới hạn phải nói rõ (không giấu)
 
-- **Xuất PDF là bộ in của trình duyệt**, không có PDF writer: không giữ bố cục gốc, phụ thuộc thiết lập in của người dùng.
+- **Lưu PDF gốc** giữ nguyên source bytes; **Translated PDF** là writer native mới, text-only, không giữ artwork/annotation và không embed Helvetica.
 - **Google/DeepL không nhận glossary** (giới hạn API); UI đã ghi rõ thay vì giả vờ.
 - **OCR** chỉ có model vi/en/zh/ja/ko; `auto` dùng eng+vie. Chưa có benchmark cho ảnh nghiêng, mờ, nền phức tạp.
 - **RTL/CJK** mới chứng minh vùng dịch; chưa có PDF nguồn chữ Ả Rập/Hán có font nhúng.
 - **CI chưa từng chạy**: mọi run đều `startup_failure` do tài khoản bị khoá billing. Cổng chạy được hiện chỉ là local.
 - **Cầu Chrome ↔ desktop** (B07/B08) mới chứng minh từng nửa, chưa có demo thật hai đầu.
-- **Trash 30 ngày**: UI hứa tự xoá, mã không có.
-- **Màn hình Shortcuts** không mở được; code render còn đó nhưng không có đường vào.
+- **Trash 30 ngày**: đã có purge khi khởi động và test boundary; runtime UI/E2E vẫn chưa được claim.
+- **Màn hình Shortcuts**: đã có đường vào từ Settings và Ctrl+/; screenshot/E2E hiện tại vẫn chưa được claim.
 
 ## Lệnh xác minh
 
