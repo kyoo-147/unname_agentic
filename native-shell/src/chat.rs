@@ -390,7 +390,7 @@ impl Chat {
     fn send(&mut self, cx: &mut Context<Self>) {
         let question = self.input.read(cx).text.trim().to_string();
         if question.is_empty() || self.busy { return; }
-        self.messages.push(ChatMessage { user: true, text: question, citations: Vec::new() });
+        self.messages.push(ChatMessage { user: true, text: question.clone(), citations: Vec::new() });
         self.persist();
         self.input.update(cx, |field, cx| field.set_text("", cx));
         self.error = None;
@@ -516,7 +516,7 @@ impl Chat {
                         .on_click(cx.listener(move |chat, _, _, cx| {
                             let Some((_, pages)) = &chat.context else { return; };
                             let sources = rag::source_blocks(pages);
-                            if let Some(target) = rag::navigation(citation, &sources) { cx.emit(ChatEvent::Navigate(target)); }
+                            if let Some(target) = rag::navigation(&citation, &sources) { cx.emit(ChatEvent::Navigate(target)); }
                         }))
                 }).collect::<Vec<_>>())
             ))
